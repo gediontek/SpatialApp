@@ -1,0 +1,124 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "osm-auto-label"
+version = "1.0.0"
+description = "Automated landcover classification from OpenStreetMap data using word embeddings"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "OSM Auto Label Contributors"}
+]
+keywords = [
+    "osm",
+    "openstreetmap",
+    "landcover",
+    "classification",
+    "gis",
+    "geospatial",
+    "word-embeddings",
+    "glove",
+    "machine-learning",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: GIS",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "geopandas>=1.0.0",
+    "shapely>=2.0.0",
+    "pyproj>=3.5.0",
+    "osmnx>=2.0.0",
+    "gensim>=4.0.0",
+    "scikit-learn>=1.0.0",
+    "numpy>=1.22.0",
+    "pandas>=1.4.0",
+    "folium>=0.14.0",
+    "flask>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "mypy>=1.0.0",
+    "ruff>=0.1.0",
+]
+fast = [
+    "pyogrio>=0.7.0",
+]
+
+[project.scripts]
+osm-auto-label = "OSM_auto_label.main:main"
+
+[project.urls]
+Homepage = "https://github.com/username/osm-auto-label"
+Documentation = "https://github.com/username/osm-auto-label#readme"
+Repository = "https://github.com/username/osm-auto-label"
+Issues = "https://github.com/username/osm-auto-label/issues"
+
+[tool.setuptools]
+packages = ["OSM_auto_label"]
+package-dir = {"OSM_auto_label" = "."}
+
+[tool.setuptools.package-data]
+OSM_auto_label = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "B008",  # do not perform function calls in argument defaults
+]
+
+[tool.ruff.isort]
+known-first-party = ["OSM_auto_label"]
+
+[tool.coverage.run]
+source = ["OSM_auto_label"]
+omit = ["tests/*", "*/__pycache__/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]

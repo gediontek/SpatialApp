@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Saved Annotations</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <!-- Leaflet.draw CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-draw/dist/leaflet.draw.css" />
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    <style>
+        #map {
+            height: 90vh;
+            width: 100%;
+        }
+    </style>
+</head>
+<body>
+    <h2>Saved Annotations</h2>
+    <div id="map"></div>
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <!-- Leaflet.draw JS -->
+    <script src="https://unpkg.com/leaflet-draw/dist/leaflet.draw.js"></script>
+    <!-- jQuery -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <!-- Custom JS -->
+    <script>
+        $(document).ready(function() {
+            var map = L.map('map').setView([0, 0], 2);
+
+            var osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; OpenStreetMap contributors'
+            }).addTo(map);
+
+            // Fetch saved annotations
+            $.getJSON('/get_annotations', function(data) {
+                if (data.features && data.features.length > 0) {
+                    var geoJsonLayer = L.geoJson(data, {
+                        style: function (feature) {
+                            return {
+                                color: feature.properties.color || '#3388ff',
+                                weight: 2
+                            };
+                        },
+                        onEachFeature: function (feature, layer) {
+                            if (feature.properties && feature.properties.category_name) {
+                                layer.bindPopup(`<strong>Category:</strong> ${feature.properties.category_name}`);
+                            }
+                        }
+                    }).addTo(map);
+                    map.fitBounds(geoJsonLayer.getBounds());
+                } else {
+                    alert("No saved annotations found.");
+                }
+            }).fail(function() {
+                alert("Failed to load saved annotations.");
+            });
+        });
+    </script>
+</body>
+</html>

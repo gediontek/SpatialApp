@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Spatial Labeler</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <!-- Leaflet.draw CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-draw/dist/leaflet.draw.css" />
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+    <!-- Toast notification container -->
+    <div id="toast-container"></div>
+
+    <!-- Loading overlay -->
+    <div id="loading-overlay" class="hidden">
+        <div class="spinner"></div>
+        <p id="loading-text">Loading...</p>
+    </div>
+
+    <div id="map-container">
+        <div id="sidebar">
+            <h2>Spatial Labeler</h2>
+
+            <!-- Tab Navigation -->
+            <div class="tab-nav">
+                <button class="tab-btn active" data-tab="manual">Manual Label</button>
+                <button class="tab-btn" data-tab="auto">Auto Classify</button>
+            </div>
+
+            <!-- Tab 1: Manual Labeling -->
+            <div id="tab-manual" class="tab-content active">
+                <div class="info-section">
+                    <p><strong>Transparency:</strong></p>
+                    <input type="range" id="transparency-slider" min="0" max="1" step="0.01" value="0.4">
+                </div>
+                <div class="info-section">
+                    <h3>Upload Raster</h3>
+                    <form id="uploadForm" enctype="multipart/form-data">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <label for="file">Choose raster file:</label><br>
+                        <input type="file" id="file" name="file" accept=".tif,.tiff"><br><br>
+                        <button type="submit" id="uploadBtn">Upload</button>
+                    </form>
+                </div>
+                <div class="info-section">
+                    <h3>Label Settings</h3>
+                    <form id="drawForm">
+                        <label for="category_name">Category Name:</label><br>
+                        <input type="text" id="category_name" name="category_name" placeholder="e.g., building, forest, road"><br>
+                        <small class="hint">Required for both OSM fetch and manual drawing</small>
+                        <label for="color">Color:</label><br>
+                        <input type="color" id="color" name="color" value="#ff7800"><br>
+                    </form>
+                </div>
+                <div class="info-section">
+                    <h3>Fetch from OSM</h3>
+                    <form id="osmQueryForm">
+                        <label for="osm_feature">Feature Type:</label><br>
+                        <select id="osm_feature" name="osm_feature">
+                            <option value="building">Building</option>
+                            <option value="forest">Forest</option>
+                            <option value="water">Water</option>
+                            <option value="park">Park</option>
+                            <option value="grass">Grass</option>
+                            <option value="farmland">Farmland</option>
+                            <option value="residential">Residential</option>
+                            <option value="commercial">Commercial</option>
+                            <option value="industrial">Industrial</option>
+                            <option value="road">Road</option>
+                            <option value="river">River</option>
+                            <option value="lake">Lake</option>
+                        </select><br>
+                        <small class="hint">Fetches features in current map view</small><br>
+                        <button type="button" id="fetchOsmBtn">Fetch OSM Data</button>
+                    </form>
+                </div>
+                <div class="info-section">
+                    <h3>Draw Annotations</h3>
+                    <small class="hint">Use toolbar on map to draw polygons, rectangles, circles</small>
+                </div>
+                <div class="info-section">
+                    <h3>Export Label</h3>
+                    <div class="export-buttons">
+                        <button id="exportGeoJsonBtn" class="export-btn">GeoJSON</button>
+                        <button id="exportShapefileBtn" class="export-btn">Shapefile</button>
+                        <button id="exportGeoPackageBtn" class="export-btn">GeoPackage</button>
+                    </div>
+                </div>
+                <div class="info-section actions">
+                    <button id="clearAnnotationsBtn" class="danger-btn">Clear Annotations</button>
+                    <button id="openSavedAnnotationsBtn">Open Saved</button>
+                    <button id="finalizeAnnotationsBtn" class="primary-btn">Finalize</button>
+                </div>
+            </div>
+
+            <!-- Tab 2: Auto Classification -->
+            <div id="tab-auto" class="tab-content">
+                <div class="info-section">
+                    <h3>Search Location</h3>
+                    <input type="text" id="auto-location" placeholder="Enter city name (e.g., Berlin, Germany)">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="use-current-extent"> Use current map extent
+                    </label>
+                    <div class="btn-row">
+                        <button type="button" id="panToLocationBtn">Pan</button>
+                        <button type="button" id="autoClassifyBtn" class="primary-btn">Classify</button>
+                    </div>
+                    <small class="hint">Downloads OSM data and classifies landcover automatically</small>
+                </div>
+                <div class="info-section">
+                    <h3>Landcover Classes</h3>
+                    <div class="class-checkboxes">
+                        <label class="checkbox-label"><input type="checkbox" class="class-filter" value="builtup_area" checked> Built-up Area</label>
+                        <label class="checkbox-label"><input type="checkbox" class="class-filter" value="water" checked> Water</label>
+                        <label class="checkbox-label"><input type="checkbox" class="class-filter" value="forest" checked> Forest</label>
+                        <label class="checkbox-label"><input type="checkbox" class="class-filter" value="grassland" checked> Grassland/Parks</label>
+                        <label class="checkbox-label"><input type="checkbox" class="class-filter" value="farmland" checked> Farmland</label>
+                        <label class="checkbox-label"><input type="checkbox" class="class-filter" value="bare_earth" checked> Bare Earth</label>
+                        <label class="checkbox-label"><input type="checkbox" class="class-filter" value="aquaculture"> Aquaculture</label>
+                    </div>
+                    <div class="select-all-row">
+                        <button type="button" id="selectAllClasses" class="small-btn">Select All</button>
+                        <button type="button" id="deselectAllClasses" class="small-btn">Deselect All</button>
+                    </div>
+                </div>
+                <div class="info-section">
+                    <h3>Status</h3>
+                    <p id="auto-status">Ready</p>
+                </div>
+                <div class="info-section" id="legend-section" style="display: none;">
+                    <h3>Legend</h3>
+                    <div id="classification-legend"></div>
+                </div>
+                <div class="info-section">
+                    <h3>Export Classified</h3>
+                    <button id="exportClassifiedBtn" class="export-btn" disabled>Export GeoJSON</button>
+                    <p id="classified-file-info" class="hint"></p>
+                </div>
+                <div class="info-section">
+                    <button id="clearClassifiedBtn" class="danger-btn">Clear Classified Data</button>
+                </div>
+            </div>
+        </div>
+        <div id="map"></div>
+    </div>
+    <div id="table-container">
+        <h3>Annotations Table</h3>
+        <div id="attributeTable"></div>
+    </div>
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <!-- Leaflet.draw JS -->
+    <script src="https://unpkg.com/leaflet-draw/dist/leaflet.draw.js"></script>
+    <!-- jQuery -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <!-- Custom JS -->
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>

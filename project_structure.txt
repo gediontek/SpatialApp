@@ -1,0 +1,15 @@
+spatial-labeler/
+├── app.py
+├── requirements.txt
+├── README.md
+├── labels/
+│   └── annotations.geojson
+├── static/
+│   ├── css/
+│   │   └── styles.css
+│   ├── js/
+│   │   └── main.js
+│   └── uploads/
+├── templates/
+│   ├── index.html
+│   └── saved_annotations.html

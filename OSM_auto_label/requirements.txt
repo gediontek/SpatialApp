@@ -1,0 +1,27 @@
+# OSM Auto Label - Requirements
+# Install with: pip install -r requirements.txt
+
+# Core geospatial
+geopandas>=1.0.0
+shapely>=2.0.0
+pyproj>=3.5.0
+
+# Data download
+osmnx>=2.0.0
+
+# Word embeddings
+gensim>=4.0.0
+
+# Machine learning
+scikit-learn>=1.0.0
+numpy>=1.22.0
+pandas>=1.4.0
+
+# Visualization
+folium>=0.14.0
+
+# Web app
+flask>=2.0.0
+
+# Optional: for faster file I/O
+pyogrio>=0.7.0
