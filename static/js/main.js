@@ -53,6 +53,9 @@ $(document).ready(function() {
         "Google Satellite": googleLayer
     };
 
+    // Expose baseMaps globally for chat basemap switching
+    window.baseMaps = baseMaps;
+
     L.control.layers(baseMaps).addTo(map);
 
     var imageOverlay;
@@ -684,4 +687,16 @@ $(document).ready(function() {
         setAutoStatus('Ready', '');
         showToast('Classified data cleared.', 'info');
     });
+
+    // ============================================================
+    // Initialize Layer Manager and Chat Panel
+    // ============================================================
+
+    if (typeof LayerManager !== 'undefined') {
+        LayerManager.init(map);
+    }
+
+    if (typeof ChatPanel !== 'undefined') {
+        ChatPanel.init(map, LayerManager);
+    }
 });

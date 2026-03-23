@@ -739,5 +739,94 @@ def internal_error(e):
     return jsonify(message='An internal error occurred.'), 500
 
 
+# ============================================================
+# NL-to-GIS Chat API
+# ============================================================
+
+# Server-side layer store for cross-tool references
+layer_store = {}
+
+# In-memory chat sessions (keyed by session_id)
+chat_sessions = {}
+
+
+def _get_chat_session(session_id: str = "default"):
+    """Get or create a chat session."""
+    from nl_gis.chat import ChatSession
+    if session_id not in chat_sessions:
+        chat_sessions[session_id] = ChatSession(layer_store=layer_store)
+    return chat_sessions[session_id]
+
+
+@app.route('/api/chat', methods=['POST'])
+@csrf.exempt
+def api_chat():
+    """Process a natural language message and return SSE event stream."""
+    # Optional bearer token auth
+    if Config.CHAT_API_TOKEN:
+        auth = request.headers.get('Authorization', '')
+        if not auth.startswith('Bearer ') or auth[7:] != Config.CHAT_API_TOKEN:
+            return jsonify(error='Unauthorized'), 401
+
+    data = request.get_json(silent=True)
+    if not data or 'message' not in data:
+        return jsonify(error='No message provided'), 400
+
+    message = data['message'].strip()
+    if not message:
+        return jsonify(error='Empty message'), 400
+
+    session_id = data.get('session_id', 'default')
+    map_context = data.get('context', {})
+
+    session = _get_chat_session(session_id)
+
+    def generate():
+        for event in session.process_message(message, map_context):
+            event_type = event.get('type', 'message')
+
+            # Store layer in server-side store
+            if event_type == 'layer_add':
+                layer_name = event.get('name')
+                geojson = event.get('geojson')
+                if layer_name and geojson:
+                    layer_store[layer_name] = geojson
+
+            yield f"event: {event_type}\ndata: {json.dumps(event)}\n\n"
+
+    return app.response_class(
+        generate(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
+        }
+    )
+
+
+@app.route('/api/layers')
+def api_get_layers():
+    """Get list of named layers."""
+    layers = []
+    for name, geojson in layer_store.items():
+        feature_count = len(geojson.get('features', [])) if isinstance(geojson, dict) else 0
+        layers.append({
+            'name': name,
+            'feature_count': feature_count,
+        })
+    return jsonify(layers=layers)
+
+
+@app.route('/api/layers/<layer_name>', methods=['DELETE'])
+@csrf.exempt
+def api_delete_layer(layer_name):
+    """Delete a named layer."""
+    if layer_name in layer_store:
+        del layer_store[layer_name]
+        return jsonify(success=True)
+    return jsonify(error='Layer not found'), 404
+
+
 if __name__ == '__main__':
     app.run(debug=Config.DEBUG, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))

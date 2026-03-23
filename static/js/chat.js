@@ -1,0 +1,284 @@
+/**
+ * Chat panel for NL-to-GIS interaction.
+ * Connects to /api/chat via SSE and renders results on the Leaflet map.
+ */
+var ChatPanel = (function() {
+    var eventSource = null;
+    var sessionId = 'session_' + Date.now();
+
+    function init(map, layerManager) {
+        bindEvents(map, layerManager);
+    }
+
+    function bindEvents(map, layerManager) {
+        $('#chatSendBtn').on('click', function() {
+            sendMessage(map, layerManager);
+        });
+
+        $('#chatInput').on('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage(map, layerManager);
+            }
+        });
+    }
+
+    function sendMessage(map, layerManager) {
+        var input = $('#chatInput');
+        var message = input.val().trim();
+        if (!message) return;
+
+        // Display user message
+        appendMessage('user', message);
+        input.val('');
+        input.focus();
+
+        // Disable input while processing
+        input.prop('disabled', true);
+        $('#chatSendBtn').prop('disabled', true);
+
+        // Build map context
+        var bounds = map.getBounds();
+        var context = {
+            bounds: {
+                south: bounds.getSouth(),
+                west: bounds.getWest(),
+                north: bounds.getNorth(),
+                east: bounds.getEast()
+            },
+            zoom: map.getZoom(),
+            active_layers: layerManager ? layerManager.getLayerNames() : []
+        };
+
+        // Show typing indicator
+        var typingId = showTyping();
+
+        // Send via fetch + SSE
+        fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                message: message,
+                session_id: sessionId,
+                context: context
+            })
+        }).then(function(response) {
+            if (!response.ok) {
+                throw new Error('Chat request failed: ' + response.status);
+            }
+            return response.body.getReader();
+        }).then(function(reader) {
+            var decoder = new TextDecoder();
+            var buffer = '';
+
+            function processStream() {
+                return reader.read().then(function(result) {
+                    if (result.done) {
+                        removeTyping(typingId);
+                        enableInput();
+                        return;
+                    }
+
+                    buffer += decoder.decode(result.value, { stream: true });
+
+                    // Parse SSE events from buffer
+                    var lines = buffer.split('\n');
+                    buffer = '';
+
+                    var currentEvent = null;
+                    for (var i = 0; i < lines.length; i++) {
+                        var line = lines[i];
+
+                        if (line.startsWith('event: ')) {
+                            currentEvent = line.substring(7).trim();
+                        } else if (line.startsWith('data: ')) {
+                            var dataStr = line.substring(6);
+                            try {
+                                var data = JSON.parse(dataStr);
+                                handleEvent(currentEvent || data.type, data, map, layerManager);
+                            } catch (e) {
+                                // Incomplete JSON, put back in buffer
+                                buffer = lines.slice(i).join('\n');
+                                break;
+                            }
+                            currentEvent = null;
+                        } else if (line === '') {
+                            // Empty line = event boundary
+                            currentEvent = null;
+                        } else {
+                            // Incomplete line, put back
+                            buffer = lines.slice(i).join('\n');
+                            break;
+                        }
+                    }
+
+                    return processStream();
+                });
+            }
+
+            return processStream();
+        }).catch(function(err) {
+            removeTyping(typingId);
+            enableInput();
+            appendMessage('error', 'Connection error: ' + err.message);
+        });
+    }
+
+    function handleEvent(type, data, map, layerManager) {
+        switch (type) {
+            case 'tool_start':
+                appendToolStep(data.tool, 'Running ' + data.tool + '...', 'loading');
+                break;
+
+            case 'tool_result':
+                updateToolStep(data.tool, formatToolResult(data.tool, data.result), 'done');
+                break;
+
+            case 'layer_add':
+                if (layerManager && data.geojson) {
+                    layerManager.addLayer(data.name, data.geojson, data.style || {});
+                }
+                break;
+
+            case 'map_command':
+                executeMapCommand(data, map);
+                break;
+
+            case 'message':
+                removeTyping();
+                appendMessage('assistant', data.text);
+                if (data.done) {
+                    enableInput();
+                }
+                break;
+
+            case 'error':
+                removeTyping();
+                appendMessage('error', data.text);
+                enableInput();
+                break;
+        }
+    }
+
+    function executeMapCommand(cmd, map) {
+        var action = cmd.action;
+
+        if (action === 'pan' || action === 'pan_and_zoom') {
+            var zoom = cmd.zoom || map.getZoom();
+            map.setView([cmd.lat, cmd.lon], zoom);
+        } else if (action === 'zoom') {
+            map.setZoom(cmd.zoom);
+        } else if (action === 'fit_bounds') {
+            if (cmd.bbox && cmd.bbox.length === 4) {
+                map.fitBounds([
+                    [cmd.bbox[0], cmd.bbox[1]],
+                    [cmd.bbox[2], cmd.bbox[3]]
+                ]);
+            }
+        } else if (action === 'change_basemap') {
+            // Trigger basemap change — needs reference to base layers
+            if (window.baseMaps) {
+                if (cmd.basemap === 'satellite' && window.baseMaps['Google Satellite']) {
+                    map.removeLayer(window.baseMaps['OpenStreetMap']);
+                    map.addLayer(window.baseMaps['Google Satellite']);
+                } else if (cmd.basemap === 'osm' && window.baseMaps['OpenStreetMap']) {
+                    map.removeLayer(window.baseMaps['Google Satellite']);
+                    map.addLayer(window.baseMaps['OpenStreetMap']);
+                }
+            }
+        }
+    }
+
+    function formatToolResult(tool, result) {
+        if (result.error) return 'Error: ' + result.error;
+
+        switch (tool) {
+            case 'geocode':
+                return result.display_name + ' (' + result.lat.toFixed(4) + ', ' + result.lon.toFixed(4) + ')';
+            case 'fetch_osm':
+                var msg = result.feature_count + ' features';
+                if (result.capped) msg += ' (limit reached)';
+                return msg;
+            case 'map_command':
+                return result.description || 'Done';
+            case 'calculate_area':
+                return result.total_area_sq_km.toFixed(2) + ' sq km (' + result.feature_count + ' features)';
+            case 'measure_distance':
+                return result.distance_km.toFixed(1) + ' km (' + result.distance_mi.toFixed(1) + ' mi)';
+            default:
+                return JSON.stringify(result).substring(0, 100);
+        }
+    }
+
+    function appendMessage(role, text) {
+        var msgClass = role === 'user' ? 'chat-msg-user' :
+                       role === 'error' ? 'chat-msg-error' : 'chat-msg-assistant';
+        var html = '<div class="chat-msg ' + msgClass + '">' +
+                   '<div class="chat-msg-content">' + escapeHtml(text) + '</div>' +
+                   '</div>';
+        $('#chatMessages').append(html);
+        scrollToBottom();
+    }
+
+    function appendToolStep(toolName, text, status) {
+        var id = 'tool-' + toolName.replace(/[^a-z0-9]/g, '');
+        var statusClass = status === 'loading' ? 'tool-loading' : 'tool-done';
+        var html = '<div class="chat-tool-step ' + statusClass + '" id="' + id + '">' +
+                   '<span class="tool-icon">' + (status === 'loading' ? '⟳' : '✓') + '</span> ' +
+                   '<span class="tool-text">' + escapeHtml(text) + '</span>' +
+                   '</div>';
+        $('#chatMessages').append(html);
+        scrollToBottom();
+    }
+
+    function updateToolStep(toolName, text, status) {
+        var id = '#tool-' + toolName.replace(/[^a-z0-9]/g, '');
+        var el = $(id);
+        if (el.length) {
+            el.removeClass('tool-loading').addClass('tool-done');
+            el.find('.tool-icon').text('✓');
+            el.find('.tool-text').text(text);
+        }
+    }
+
+    function showTyping() {
+        var id = 'typing-' + Date.now();
+        var html = '<div class="chat-typing" id="' + id + '">' +
+                   '<span class="typing-dot"></span>' +
+                   '<span class="typing-dot"></span>' +
+                   '<span class="typing-dot"></span>' +
+                   '</div>';
+        $('#chatMessages').append(html);
+        scrollToBottom();
+        return id;
+    }
+
+    function removeTyping(id) {
+        if (id) {
+            $('#' + id).remove();
+        } else {
+            $('.chat-typing').remove();
+        }
+    }
+
+    function enableInput() {
+        $('#chatInput').prop('disabled', false);
+        $('#chatSendBtn').prop('disabled', false);
+        $('#chatInput').focus();
+    }
+
+    function scrollToBottom() {
+        var container = document.getElementById('chatMessages');
+        if (container) {
+            container.scrollTop = container.scrollHeight;
+        }
+    }
+
+    function escapeHtml(text) {
+        var div = document.createElement('div');
+        div.appendChild(document.createTextNode(text));
+        return div.innerHTML;
+    }
+
+    return { init: init };
+})();

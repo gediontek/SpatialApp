@@ -28,8 +28,9 @@
 
             <!-- Tab Navigation -->
             <div class="tab-nav">
-                <button class="tab-btn active" data-tab="manual">Manual Label</button>
-                <button class="tab-btn" data-tab="auto">Auto Classify</button>
+                <button class="tab-btn active" data-tab="manual">Manual</button>
+                <button class="tab-btn" data-tab="auto">Classify</button>
+                <button class="tab-btn" data-tab="chat">Chat</button>
             </div>
 
             <!-- Tab 1: Manual Labeling -->
@@ -145,6 +146,21 @@
                     <button id="clearClassifiedBtn" class="danger-btn">Clear Classified Data</button>
                 </div>
             </div>
+
+            <!-- Tab 3: Chat -->
+            <div id="tab-chat" class="tab-content">
+                <div id="chatMessages" class="chat-messages"></div>
+                <div class="chat-input-area">
+                    <textarea id="chatInput" placeholder="Ask about the map... (e.g., 'Show me buildings in Chicago')" rows="2"></textarea>
+                    <button id="chatSendBtn" class="primary-btn">Send</button>
+                </div>
+            </div>
+
+            <!-- Layer Manager (always visible below tabs) -->
+            <div id="layerPanel">
+                <h3>Layers <span id="layerCount"></span></h3>
+                <div id="layerList"></div>
+            </div>
         </div>
         <div id="map"></div>
     </div>
@@ -159,6 +175,8 @@
     <!-- jQuery -->
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <!-- Custom JS -->
+    <script src="{{ url_for('static', filename='js/layers.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/chat.js') }}"></script>
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>
 </html>
