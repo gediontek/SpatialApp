@@ -32,8 +32,24 @@ COORDINATE CONVENTION:
 - GeoJSON uses [lng, lat]
 - The tools handle conversion automatically.
 
-AVAILABLE FEATURE TYPES for fetch_osm:
-building, forest, water, park, grass, farmland, residential, commercial, industrial, road, river, lake"""
+AVAILABLE FEATURE TYPES for fetch_osm and search_nearby:
+building, forest, water, park, grass, farmland, residential, commercial, industrial, road, river, lake
+
+TOOLS OVERVIEW:
+- geocode: Look up coordinates for a place name
+- fetch_osm: Fetch OSM features in an area
+- search_nearby: Find OSM features near a point
+- map_command: Pan, zoom, fit bounds, change basemap
+- calculate_area: Geodesic area of polygons
+- measure_distance: Distance between two points
+- buffer: Create buffer polygon around features
+- spatial_query: Find features matching spatial predicates (intersects, within, contains, within_distance)
+- aggregate: Count features, total area, group by attribute
+- show_layer/hide_layer/remove_layer: Layer visibility control
+- add_annotation: Save features as labeled annotations
+- classify_landcover: Auto-classify land use from OSM data
+- export_annotations: Export annotations as GeoJSON/Shapefile/GeoPackage
+- get_annotations: List all current annotations"""
 
 
 class ChatSession:
@@ -148,18 +164,36 @@ class ChatSession:
                             yield {"type": "tool_result", "tool": tool_name, "result": result}
 
                             # Handle special tool results
-                            if tool_name == "fetch_osm" and "geojson" in result:
+                            # Tools that produce layers
+                            layer_tools = {"fetch_osm", "buffer", "spatial_query", "search_nearby", "classify_landcover"}
+                            if tool_name in layer_tools and "geojson" in result:
                                 layer_name = result.get("layer_name", f"layer_{tool_call_count}")
                                 self.layer_store[layer_name] = result["geojson"]
+
+                                # Pick style based on tool
+                                style = {"color": "#3388ff", "weight": 2}
+                                if tool_name == "buffer":
+                                    style = {"color": "#ff7800", "weight": 2, "fillOpacity": 0.15}
+                                elif tool_name == "spatial_query":
+                                    style = {"color": "#e31a1c", "weight": 2}
+                                elif tool_name == "classify_landcover":
+                                    style = {"color": "#33a02c", "weight": 1, "fillOpacity": 0.6}
+
                                 yield {
                                     "type": "layer_add",
                                     "name": layer_name,
                                     "geojson": result["geojson"],
-                                    "style": {"color": "#3388ff", "weight": 2},
+                                    "style": style,
+                                    "colors": result.get("colors"),  # For classification legend
                                 }
 
+                            # Map navigation commands
                             if tool_name == "map_command" and result.get("success"):
                                 yield {"type": "map_command", **result}
+
+                            # Layer visibility commands
+                            if tool_name in ("show_layer", "hide_layer", "remove_layer") and result.get("success"):
+                                yield {"type": "layer_command", **result}
 
                             # Add tool result to messages for Claude
                             tool_results.append({

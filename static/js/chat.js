@@ -136,7 +136,30 @@ var ChatPanel = (function() {
 
             case 'layer_add':
                 if (layerManager && data.geojson) {
-                    layerManager.addLayer(data.name, data.geojson, data.style || {});
+                    // For classified data with per-category colors
+                    if (data.colors) {
+                        layerManager.addLayer(data.name, data.geojson, {
+                            styleFunction: function(feature) {
+                                var cat = feature.properties.classname || 'unknown';
+                                return {
+                                    fillColor: data.colors[cat] || '#808080',
+                                    color: '#333',
+                                    weight: 1,
+                                    fillOpacity: 0.7
+                                };
+                            }
+                        });
+                    } else {
+                        layerManager.addLayer(data.name, data.geojson, data.style || {});
+                    }
+                }
+                break;
+
+            case 'layer_command':
+                if (layerManager && data.layer_name) {
+                    if (data.action === 'show') layerManager.toggleLayer(data.layer_name);
+                    else if (data.action === 'hide') layerManager.toggleLayer(data.layer_name);
+                    else if (data.action === 'remove') layerManager.removeLayer(data.layer_name);
                 }
                 break;
 
@@ -196,6 +219,7 @@ var ChatPanel = (function() {
             case 'geocode':
                 return result.display_name + ' (' + result.lat.toFixed(4) + ', ' + result.lon.toFixed(4) + ')';
             case 'fetch_osm':
+            case 'search_nearby':
                 var msg = result.feature_count + ' features';
                 if (result.capped) msg += ' (limit reached)';
                 return msg;
@@ -205,6 +229,26 @@ var ChatPanel = (function() {
                 return result.total_area_sq_km.toFixed(2) + ' sq km (' + result.feature_count + ' features)';
             case 'measure_distance':
                 return result.distance_km.toFixed(1) + ' km (' + result.distance_mi.toFixed(1) + ' mi)';
+            case 'buffer':
+                return 'Buffer ' + result.buffer_distance_m + 'm (' + result.area_sq_km + ' sq km)';
+            case 'spatial_query':
+                return result.feature_count + '/' + result.source_total + ' features match (' + result.match_percentage + '%)';
+            case 'aggregate':
+                if (result.total !== undefined) return 'Total: ' + result.total;
+                if (result.total_area_sq_km) return result.total_area_sq_km + ' sq km';
+                return JSON.stringify(result).substring(0, 80);
+            case 'classify_landcover':
+                return result.feature_count + ' features classified';
+            case 'add_annotation':
+                return result.added + ' annotation(s) saved';
+            case 'get_annotations':
+                return result.total + ' annotations';
+            case 'export_annotations':
+                return result.count + ' annotations → ' + result.format;
+            case 'show_layer':
+            case 'hide_layer':
+            case 'remove_layer':
+                return result.description || 'Done';
             default:
                 return JSON.stringify(result).substring(0, 100);
         }

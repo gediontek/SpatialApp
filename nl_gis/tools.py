@@ -139,5 +139,235 @@ def get_tool_definitions() -> list:
                     }
                 }
             }
+        },
+        # ---- Phase 2: Spatial Analysis Tools ----
+        {
+            "name": "buffer",
+            "description": "Create a buffer polygon around a geometry or all features in a named layer. The buffer distance is in meters. Returns a GeoJSON polygon that is added as a new layer on the map.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name of an existing layer to buffer"
+                    },
+                    "geometry": {
+                        "type": "object",
+                        "description": "GeoJSON geometry to buffer (alternative to layer_name)"
+                    },
+                    "distance_m": {
+                        "type": "number",
+                        "description": "Buffer distance in meters"
+                    }
+                },
+                "required": ["distance_m"]
+            }
+        },
+        {
+            "name": "spatial_query",
+            "description": "Find features in one layer that match a spatial relationship with another layer or geometry. Predicates: intersects (overlapping), contains (fully inside), within (source within target), within_distance (within N meters).",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "source_layer": {
+                        "type": "string",
+                        "description": "Layer to query features FROM"
+                    },
+                    "predicate": {
+                        "type": "string",
+                        "description": "Spatial relationship to test",
+                        "enum": ["intersects", "contains", "within", "within_distance"]
+                    },
+                    "target_layer": {
+                        "type": "string",
+                        "description": "Layer to compare AGAINST"
+                    },
+                    "target_geometry": {
+                        "type": "object",
+                        "description": "GeoJSON geometry to compare against (alternative to target_layer)"
+                    },
+                    "distance_m": {
+                        "type": "number",
+                        "description": "Distance in meters (required for within_distance predicate)"
+                    }
+                },
+                "required": ["source_layer", "predicate"]
+            }
+        },
+        {
+            "name": "aggregate",
+            "description": "Summarize features in a layer: count features, calculate total area, or group by an attribute. Useful for questions like 'how many buildings?' or 'what's the total area of farmland?'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name of the layer to aggregate"
+                    },
+                    "operation": {
+                        "type": "string",
+                        "description": "Aggregation operation",
+                        "enum": ["count", "area", "group_by"]
+                    },
+                    "group_by": {
+                        "type": "string",
+                        "description": "Property name to group by (for group_by operation)"
+                    }
+                },
+                "required": ["layer_name", "operation"]
+            }
+        },
+        {
+            "name": "search_nearby",
+            "description": "Search for OSM features near a point within a given radius. Uses Overpass API 'around' filter. Returns a GeoJSON FeatureCollection added as a map layer.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "lat": {
+                        "type": "number",
+                        "description": "Center latitude"
+                    },
+                    "lon": {
+                        "type": "number",
+                        "description": "Center longitude"
+                    },
+                    "location": {
+                        "type": "string",
+                        "description": "Place name (geocoded to get lat/lon if not provided)"
+                    },
+                    "radius_m": {
+                        "type": "number",
+                        "description": "Search radius in meters",
+                        "default": 500
+                    },
+                    "feature_type": {
+                        "type": "string",
+                        "description": "OSM feature type to search for",
+                        "enum": ["building", "forest", "water", "park", "grass", "farmland", "residential", "commercial", "industrial", "road", "river", "lake"]
+                    }
+                },
+                "required": ["feature_type"]
+            }
+        },
+        {
+            "name": "show_layer",
+            "description": "Make a hidden layer visible on the map.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name of the layer to show"
+                    }
+                },
+                "required": ["layer_name"]
+            }
+        },
+        {
+            "name": "hide_layer",
+            "description": "Hide a layer from the map without deleting it.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name of the layer to hide"
+                    }
+                },
+                "required": ["layer_name"]
+            }
+        },
+        {
+            "name": "remove_layer",
+            "description": "Remove a layer from the map permanently.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name of the layer to remove"
+                    }
+                },
+                "required": ["layer_name"]
+            }
+        },
+        # ---- Phase 3: Annotation & Classification Tools ----
+        {
+            "name": "add_annotation",
+            "description": "Save a geometry as an annotation with a category name and color. Use this to label features on the map.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "geometry": {
+                        "type": "object",
+                        "description": "GeoJSON geometry to annotate"
+                    },
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name of an existing layer whose features to annotate (alternative to geometry)"
+                    },
+                    "category_name": {
+                        "type": "string",
+                        "description": "Category label for the annotation (e.g., 'farmland', 'residential')"
+                    },
+                    "color": {
+                        "type": "string",
+                        "description": "Hex color for the annotation (e.g., '#ff0000')",
+                        "default": "#3388ff"
+                    }
+                },
+                "required": ["category_name"]
+            }
+        },
+        {
+            "name": "classify_landcover",
+            "description": "Automatically classify landcover for an area using OSM data and word embeddings. Returns classified features with categories: builtup_area, water, forest, grassland, farmland, bare_earth, aquaculture.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "Place name to classify (e.g., 'Portland, Oregon')"
+                    },
+                    "bbox": {
+                        "type": "object",
+                        "description": "Bounding box {north, south, east, west}",
+                        "properties": {
+                            "north": {"type": "number"},
+                            "south": {"type": "number"},
+                            "east": {"type": "number"},
+                            "west": {"type": "number"}
+                        }
+                    },
+                    "classes": {
+                        "type": "array",
+                        "description": "Filter to specific classes (default: all)",
+                        "items": {"type": "string"}
+                    }
+                }
+            }
+        },
+        {
+            "name": "export_annotations",
+            "description": "Export all current annotations to a file. Supported formats: geojson, shapefile, geopackage. Returns a download link.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "format": {
+                        "type": "string",
+                        "description": "Export format",
+                        "enum": ["geojson", "shapefile", "geopackage"]
+                    }
+                },
+                "required": ["format"]
+            }
+        },
+        {
+            "name": "get_annotations",
+            "description": "Get all current annotations. Returns a GeoJSON FeatureCollection with count and category breakdown.",
+            "input_schema": {
+                "type": "object",
+                "properties": {}
+            }
         }
     ]

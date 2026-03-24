@@ -24,10 +24,12 @@ var LayerManager = (function() {
             fillOpacity: style.fillOpacity || 0.3
         };
 
+        var styleFunc = style.styleFunction || function(feature) {
+            return defaultStyle;
+        };
+
         var leafletLayer = L.geoJSON(geojson, {
-            style: function(feature) {
-                return defaultStyle;
-            },
+            style: styleFunc,
             onEachFeature: function(feature, layer) {
                 var props = feature.properties || {};
                 var popup = '<b>' + (props.category_name || props.classname || 'Feature') + '</b>';

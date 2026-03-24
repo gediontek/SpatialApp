@@ -6,7 +6,8 @@ import urllib.request
 import urllib.parse
 
 import requests
-from shapely.geometry import shape
+from shapely.geometry import shape, mapping
+from shapely.ops import unary_union
 
 from config import Config
 from nl_gis.geo_utils import (
@@ -14,6 +15,10 @@ from nl_gis.geo_utils import (
     geodesic_area,
     geodesic_distance,
     geojson_to_shapely,
+    shapely_to_geojson,
+    buffer_geometry,
+    project_to_utm,
+    project_to_wgs84,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,11 +55,25 @@ def dispatch_tool(tool_name: str, params: dict, layer_store: dict = None) -> dic
         ValueError: If tool_name is unknown.
     """
     handlers = {
+        # Phase 1
         "geocode": handle_geocode,
         "fetch_osm": handle_fetch_osm,
         "map_command": handle_map_command,
         "calculate_area": lambda p: handle_calculate_area(p, layer_store),
         "measure_distance": handle_measure_distance,
+        # Phase 2
+        "buffer": lambda p: handle_buffer(p, layer_store),
+        "spatial_query": lambda p: handle_spatial_query(p, layer_store),
+        "aggregate": lambda p: handle_aggregate(p, layer_store),
+        "search_nearby": handle_search_nearby,
+        "show_layer": lambda p: handle_layer_visibility(p, "show"),
+        "hide_layer": lambda p: handle_layer_visibility(p, "hide"),
+        "remove_layer": lambda p: handle_layer_visibility(p, "remove"),
+        # Phase 3
+        "add_annotation": lambda p: handle_add_annotation(p, layer_store),
+        "classify_landcover": handle_classify_landcover,
+        "export_annotations": handle_export_annotations,
+        "get_annotations": handle_get_annotations,
     }
 
     if tool_name not in handlers:
@@ -367,4 +386,470 @@ def handle_measure_distance(params: dict) -> dict:
         "distance_mi": round(distance / 1609.344, 2),
         "from_name": from_name,
         "to_name": to_name,
+    }
+
+
+# ============================================================
+# Phase 2: Spatial Analysis Handlers
+# ============================================================
+
+def _get_layer_geometries(layer_store, layer_name):
+    """Extract Shapely geometries from a named layer."""
+    if not layer_store or layer_name not in layer_store:
+        return None, f"Layer '{layer_name}' not found"
+    geojson = layer_store[layer_name]
+    features = geojson.get("features", [])
+    geometries = []
+    for f in features:
+        geom = f.get("geometry")
+        if geom:
+            geometries.append(geojson_to_shapely(geom))
+    return geometries, None
+
+
+def handle_buffer(params: dict, layer_store: dict = None) -> dict:
+    """Create a buffer around geometry or layer features."""
+    distance_m = params.get("distance_m")
+    if not distance_m or distance_m <= 0:
+        return {"error": "distance_m must be a positive number"}
+
+    layer_name = params.get("layer_name")
+    geometry = params.get("geometry")
+
+    source_geoms = []
+
+    if layer_name:
+        geoms, err = _get_layer_geometries(layer_store, layer_name)
+        if err:
+            return {"error": err}
+        source_geoms = geoms
+    elif geometry:
+        source_geoms = [geojson_to_shapely(geometry)]
+    else:
+        return {"error": "Provide either layer_name or geometry"}
+
+    if not source_geoms:
+        return {"error": "No geometries to buffer"}
+
+    # Union all source geometries, then buffer
+    combined = unary_union(source_geoms)
+    buffered = buffer_geometry(combined, distance_m)
+
+    result_geojson = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "geometry": shapely_to_geojson(buffered),
+            "properties": {
+                "buffer_distance_m": distance_m,
+                "source": layer_name or "geometry",
+            }
+        }]
+    }
+
+    result_name = f"buffer_{int(distance_m)}m"
+    if layer_name:
+        result_name = f"buffer_{int(distance_m)}m_{layer_name}"
+
+    return {
+        "geojson": result_geojson,
+        "layer_name": result_name,
+        "feature_count": 1,
+        "buffer_distance_m": distance_m,
+        "area_sq_km": round(geodesic_area(buffered) / 1e6, 4),
+    }
+
+
+def handle_spatial_query(params: dict, layer_store: dict = None) -> dict:
+    """Find features matching a spatial predicate."""
+    source_layer = params.get("source_layer")
+    predicate = params.get("predicate")
+    target_layer = params.get("target_layer")
+    target_geometry = params.get("target_geometry")
+    distance_m = params.get("distance_m", 0)
+
+    valid_predicates = ["intersects", "contains", "within", "within_distance"]
+    if predicate not in valid_predicates:
+        return {"error": f"Unknown predicate: {predicate}. Valid: {', '.join(valid_predicates)}"}
+
+    # Get source features
+    source_geoms, err = _get_layer_geometries(layer_store, source_layer)
+    if err:
+        return {"error": f"Source: {err}"}
+
+    # Get target geometry
+    if target_layer:
+        target_geoms, err = _get_layer_geometries(layer_store, target_layer)
+        if err:
+            return {"error": f"Target: {err}"}
+        target_geom = unary_union(target_geoms) if target_geoms else None
+    elif target_geometry:
+        target_geom = geojson_to_shapely(target_geometry)
+    else:
+        return {"error": "Provide either target_layer or target_geometry"}
+
+    if target_geom is None:
+        return {"error": "No target geometry found"}
+
+    # For within_distance, buffer the target
+    if predicate == "within_distance":
+        if not distance_m or distance_m <= 0:
+            return {"error": "within_distance requires positive distance_m"}
+        target_geom = buffer_geometry(target_geom, distance_m)
+
+    # Get original features from source layer for result
+    source_features = layer_store[source_layer].get("features", [])
+
+    matching_features = []
+    for i, (geom, feature) in enumerate(zip(source_geoms, source_features)):
+        match = False
+        if predicate == "intersects" or predicate == "within_distance":
+            match = geom.intersects(target_geom)
+        elif predicate == "contains":
+            match = target_geom.contains(geom)
+        elif predicate == "within":
+            match = geom.within(target_geom)
+
+        if match:
+            matching_features.append(feature)
+
+    result_geojson = {
+        "type": "FeatureCollection",
+        "features": matching_features[:Config.MAX_FEATURES_PER_LAYER],
+    }
+
+    result_name = f"{predicate}_{source_layer}"
+
+    return {
+        "geojson": result_geojson,
+        "layer_name": result_name,
+        "feature_count": len(matching_features),
+        "source_total": len(source_geoms),
+        "match_percentage": round(len(matching_features) / max(len(source_geoms), 1) * 100, 1),
+    }
+
+
+def handle_aggregate(params: dict, layer_store: dict = None) -> dict:
+    """Summarize features in a layer."""
+    layer_name = params.get("layer_name")
+    operation = params.get("operation")
+    group_by_attr = params.get("group_by")
+
+    if not layer_store or layer_name not in layer_store:
+        return {"error": f"Layer '{layer_name}' not found"}
+
+    features = layer_store[layer_name].get("features", [])
+
+    if operation == "count":
+        if group_by_attr:
+            groups = {}
+            for f in features:
+                val = f.get("properties", {}).get(group_by_attr, "unknown")
+                groups[val] = groups.get(val, 0) + 1
+            return {
+                "total": len(features),
+                "groups": [{"value": k, "count": v} for k, v in sorted(groups.items(), key=lambda x: -x[1])],
+                "group_by": group_by_attr,
+            }
+        return {"total": len(features)}
+
+    elif operation == "area":
+        total_area = 0.0
+        for f in features:
+            geom = f.get("geometry")
+            if geom and geom.get("type") in ("Polygon", "MultiPolygon"):
+                total_area += geodesic_area(geojson_to_shapely(geom))
+        return {
+            "total_area_sq_m": round(total_area, 2),
+            "total_area_sq_km": round(total_area / 1e6, 4),
+            "total_area_acres": round(total_area / 4046.86, 2),
+            "feature_count": len(features),
+        }
+
+    elif operation == "group_by":
+        if not group_by_attr:
+            return {"error": "group_by operation requires group_by attribute name"}
+        groups = {}
+        for f in features:
+            val = f.get("properties", {}).get(group_by_attr, "unknown")
+            groups[val] = groups.get(val, 0) + 1
+        return {
+            "groups": [{"value": k, "count": v} for k, v in sorted(groups.items(), key=lambda x: -x[1])],
+            "total": len(features),
+            "group_by": group_by_attr,
+        }
+
+    return {"error": f"Unknown operation: {operation}"}
+
+
+def handle_search_nearby(params: dict) -> dict:
+    """Search for OSM features near a point."""
+    lat = params.get("lat")
+    lon = params.get("lon")
+    location = params.get("location")
+    radius_m = params.get("radius_m", 500)
+    feature_type = params.get("feature_type", "building")
+
+    # Resolve location to coordinates
+    if lat is None or lon is None:
+        if location:
+            geo = handle_geocode({"query": location})
+            if "error" in geo:
+                return {"error": f"Could not geocode location: {geo['error']}"}
+            lat, lon = geo["lat"], geo["lon"]
+        else:
+            return {"error": "Provide lat/lon or location name"}
+
+    if feature_type not in OSM_FEATURE_MAPPINGS:
+        return {"error": f"Unknown feature type: {feature_type}"}
+
+    mapping = OSM_FEATURE_MAPPINGS[feature_type]
+    key = mapping["key"]
+    value = mapping["value"]
+
+    # Build Overpass around query
+    if value is None:
+        tag_filter = f'["{key}"]'
+    else:
+        tag_filter = f'["{key}"="{value}"]'
+
+    overpass_query = f"""
+    [out:json][timeout:30];
+    (
+      way{tag_filter}(around:{radius_m},{lat},{lon});
+    );
+    out body;
+    >;
+    out skel qt;
+    """
+
+    try:
+        response = requests.get(
+            "https://overpass-api.de/api/interpreter",
+            params={"data": overpass_query},
+            timeout=Config.OSM_REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        osm_data = response.json()
+    except requests.Timeout:
+        return {"error": "Search timed out. Try a smaller radius."}
+    except requests.RequestException as e:
+        return {"error": f"OSM request failed: {str(e)}"}
+
+    # Convert to GeoJSON (same logic as handle_fetch_osm)
+    geojson = {"type": "FeatureCollection", "features": []}
+
+    if "elements" in osm_data:
+        nodes = {
+            n["id"]: (n["lon"], n["lat"])
+            for n in osm_data["elements"] if n["type"] == "node"
+        }
+        count = 0
+        for el in osm_data["elements"]:
+            if count >= Config.MAX_FEATURES_PER_LAYER:
+                break
+            if el["type"] == "way":
+                coords = [nodes[nid] for nid in el.get("nodes", []) if nid in nodes]
+                if len(coords) < 3:
+                    continue
+                if coords[0] != coords[-1]:
+                    coords.append(coords[0])
+                geojson["features"].append({
+                    "type": "Feature",
+                    "geometry": {"type": "Polygon", "coordinates": [coords]},
+                    "properties": {
+                        "category_name": feature_type,
+                        "osm_id": el.get("id"),
+                        "osm_tags": el.get("tags", {}),
+                    },
+                })
+                count += 1
+
+    layer_name = f"nearby_{feature_type}_{int(radius_m)}m"
+
+    return {
+        "geojson": geojson,
+        "layer_name": layer_name,
+        "feature_count": len(geojson["features"]),
+        "center": {"lat": lat, "lon": lon},
+        "radius_m": radius_m,
+    }
+
+
+def handle_layer_visibility(params: dict, action: str) -> dict:
+    """Handle show/hide/remove layer commands. Returns instruction for frontend."""
+    layer_name = params.get("layer_name")
+    if not layer_name:
+        return {"error": "layer_name is required"}
+    return {
+        "success": True,
+        "action": action,
+        "layer_name": layer_name,
+        "description": f"Layer '{layer_name}' {action}",
+    }
+
+
+# ============================================================
+# Phase 3: Annotation & Classification Handlers
+# ============================================================
+
+def handle_add_annotation(params: dict, layer_store: dict = None) -> dict:
+    """Save geometry/layer as annotations."""
+    import datetime
+
+    geometry = params.get("geometry")
+    layer_name = params.get("layer_name")
+    category_name = params.get("category_name", "unknown")
+    color = params.get("color", "#3388ff")
+
+    # Import app-level annotation functions
+    try:
+        from app import geo_coco_annotations, save_annotations_to_file
+    except ImportError:
+        return {"error": "Cannot access annotation store"}
+
+    added = 0
+
+    if layer_name and layer_store and layer_name in layer_store:
+        features = layer_store[layer_name].get("features", [])
+        for f in features:
+            geom = f.get("geometry")
+            if geom:
+                annotation = {
+                    "type": "Feature",
+                    "id": len(geo_coco_annotations) + 1,
+                    "properties": {
+                        "category_name": category_name,
+                        "color": color,
+                        "source": "chat",
+                        "created_at": datetime.datetime.now().isoformat(),
+                    },
+                    "geometry": geom,
+                }
+                geo_coco_annotations.append(annotation)
+                added += 1
+    elif geometry:
+        annotation = {
+            "type": "Feature",
+            "id": len(geo_coco_annotations) + 1,
+            "properties": {
+                "category_name": category_name,
+                "color": color,
+                "source": "chat",
+                "created_at": datetime.datetime.now().isoformat(),
+            },
+            "geometry": geometry,
+        }
+        geo_coco_annotations.append(annotation)
+        added = 1
+    else:
+        return {"error": "Provide either geometry or layer_name"}
+
+    if added > 0:
+        save_annotations_to_file()
+
+    return {"success": True, "added": added, "category": category_name}
+
+
+def handle_classify_landcover(params: dict) -> dict:
+    """Classify landcover using OSM_auto_label module."""
+    try:
+        from OSM_auto_label import download_osm_landcover, OSMLandcoverClassifier
+        from OSM_auto_label.downloader import download_by_bbox
+        from OSM_auto_label.config import CATEGORY_COLORS
+    except ImportError:
+        return {"error": "OSM auto-label module not available"}
+
+    import re
+
+    location = params.get("location")
+    bbox = params.get("bbox")
+    classes = params.get("classes")
+
+    if not location and not bbox:
+        return {"error": "Provide either location or bbox"}
+
+    try:
+        if bbox:
+            n, s, e, w = bbox.get("north"), bbox.get("south"), bbox.get("east"), bbox.get("west")
+            if None in (n, s, e, w):
+                return {"error": "bbox requires north, south, east, west"}
+            gdf = download_by_bbox(north=n, south=s, east=e, west=w, timeout=300)
+            safe_name = f"bbox_{abs(hash((n, s, e, w))) % 10000}"
+        else:
+            gdf = download_osm_landcover(location, timeout=300)
+            safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', location.split(',')[0].strip().lower())
+
+        if gdf is None or len(gdf) == 0:
+            return {"error": "No landcover data found"}
+
+        classifier = OSMLandcoverClassifier()
+        gdf_classified = classifier.process_geodataframe(gdf, name=None)
+
+        if gdf_classified is None or len(gdf_classified) == 0:
+            return {"error": "Classification produced no results"}
+
+        if classes and len(classes) > 0:
+            gdf_classified = gdf_classified[gdf_classified['classname'].isin(classes)]
+
+        if len(gdf_classified) == 0:
+            return {"error": "No features found for selected classes"}
+
+        import json as json_mod
+        geojson_data = json_mod.loads(gdf_classified.to_json())
+        layer_name = f"classified_{safe_name}"
+
+        return {
+            "geojson": geojson_data,
+            "layer_name": layer_name,
+            "feature_count": len(gdf_classified),
+            "colors": CATEGORY_COLORS,
+        }
+    except Exception as e:
+        logger.error(f"Classification error: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
+def handle_export_annotations(params: dict) -> dict:
+    """Export annotations to file."""
+    format_type = params.get("format", "geojson")
+    valid_formats = ["geojson", "shapefile", "geopackage"]
+
+    if format_type not in valid_formats:
+        return {"error": f"Invalid format. Choose from: {', '.join(valid_formats)}"}
+
+    try:
+        from app import geo_coco_annotations
+    except ImportError:
+        return {"error": "Cannot access annotation store"}
+
+    if not geo_coco_annotations:
+        return {"error": "No annotations to export"}
+
+    return {
+        "success": True,
+        "format": format_type,
+        "count": len(geo_coco_annotations),
+        "download_url": f"/export_annotations/{format_type}",
+        "description": f"Export {len(geo_coco_annotations)} annotations as {format_type}",
+    }
+
+
+def handle_get_annotations(params: dict) -> dict:
+    """Get current annotations summary."""
+    try:
+        from app import geo_coco_annotations
+    except ImportError:
+        return {"error": "Cannot access annotation store"}
+
+    features = geo_coco_annotations
+    categories = {}
+    for f in features:
+        cat = f.get("properties", {}).get("category_name", "unknown")
+        categories[cat] = categories.get(cat, 0) + 1
+
+    return {
+        "total": len(features),
+        "categories": [{"name": k, "count": v} for k, v in sorted(categories.items(), key=lambda x: -x[1])],
+        "geojson": {"type": "FeatureCollection", "features": features},
     }
