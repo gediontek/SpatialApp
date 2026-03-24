@@ -101,17 +101,26 @@ def get_route(
         response.raise_for_status()
         data = response.json()
 
-        if data.get("code") != "Ok" or not data.get("routes"):
+        routes = data.get("routes") or []
+        if data.get("code") != "Ok" or len(routes) == 0:
             logger.warning(f"OSRM returned no routes: {data.get('code')}")
             return None
 
-        route = data["routes"][0]
+        route = routes[0]
+        geometry = route.get("geometry")
+        distance = route.get("distance", 0)
+        duration = route.get("duration", 0)
+
+        if not geometry:
+            logger.warning("OSRM route missing geometry")
+            return None
+
         result = {
-            "geometry": route["geometry"],  # GeoJSON LineString
-            "distance_m": route["distance"],
-            "duration_s": route["duration"],
-            "distance_km": round(route["distance"] / 1000, 2),
-            "duration_min": round(route["duration"] / 60, 1),
+            "geometry": geometry,
+            "distance_m": distance,
+            "duration_s": duration,
+            "distance_km": round(distance / 1000, 2),
+            "duration_min": round(duration / 60, 1),
         }
 
         # Add summary if available

@@ -62,6 +62,7 @@ class ChatSession:
             layer_store: Server-side layer store for cross-tool references.
         """
         self.messages = []
+        self.max_history = 50  # Keep last 50 messages to prevent memory leak
         self.layer_store = layer_store or {}
         self.client = None
         self._init_client()
@@ -73,6 +74,30 @@ class ChatSession:
             self.client = anthropic.Anthropic(api_key=api_key)
         else:
             logger.warning("No ANTHROPIC_API_KEY set. Chat will use rule-based fallback only.")
+
+    def _trim_history(self):
+        """Keep message history within bounds to prevent memory leaks."""
+        if len(self.messages) > self.max_history:
+            # Keep first message (context) + last N messages
+            self.messages = self.messages[-self.max_history:]
+
+    @staticmethod
+    def _serialize_content(content):
+        """Serialize Anthropic SDK content blocks to JSON-safe dicts."""
+        serialized = []
+        for block in content:
+            if hasattr(block, "text"):
+                serialized.append({"type": "text", "text": block.text})
+            elif hasattr(block, "name"):
+                serialized.append({
+                    "type": "tool_use",
+                    "id": block.id,
+                    "name": block.name,
+                    "input": block.input,
+                })
+            else:
+                serialized.append({"type": "unknown"})
+        return serialized
 
     def process_message(self, message: str, map_context: dict = None) -> Generator[dict, None, None]:
         """Process a user message and yield events.
@@ -111,8 +136,9 @@ class ChatSession:
             if context_parts:
                 system += "\n\nCURRENT MAP STATE:\n" + "\n".join(context_parts)
 
-        # Add user message to history
+        # Add user message to history (with cap)
         self.messages.append({"role": "user", "content": message})
+        self._trim_history()
 
         tools = get_tool_definitions()
         tool_call_count = 0
@@ -128,9 +154,10 @@ class ChatSession:
                     messages=self.messages,
                 )
 
-                # Process response content blocks
+                # Serialize SDK objects to dicts for JSON safety
                 assistant_content = response.content
-                self.messages.append({"role": "assistant", "content": assistant_content})
+                serialized = self._serialize_content(assistant_content)
+                self.messages.append({"role": "assistant", "content": serialized})
 
                 # Check if we need to handle tool use
                 if response.stop_reason == "tool_use":
@@ -140,7 +167,7 @@ class ChatSession:
                         if block.type == "tool_use":
                             tool_call_count += 1
 
-                            if tool_call_count > max_tool_calls:
+                            if tool_call_count >= max_tool_calls:
                                 yield {"type": "error", "text": f"Tool call limit ({max_tool_calls}) reached. Returning partial results."}
                                 # Force a text response
                                 self.messages.append({

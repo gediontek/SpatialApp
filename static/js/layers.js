@@ -32,9 +32,9 @@ var LayerManager = (function() {
             style: styleFunc,
             onEachFeature: function(feature, layer) {
                 var props = feature.properties || {};
-                var popup = '<b>' + (props.category_name || props.classname || 'Feature') + '</b>';
-                if (props.osm_id) popup += '<br>OSM ID: ' + props.osm_id;
-                if (props.feature_type) popup += '<br>Type: ' + props.feature_type;
+                var popup = '<b>' + escapeHtml(props.category_name || props.classname || 'Feature') + '</b>';
+                if (props.osm_id) popup += '<br>OSM ID: ' + escapeHtml(String(props.osm_id));
+                if (props.feature_type) popup += '<br>Type: ' + escapeHtml(String(props.feature_type));
                 layer.bindPopup(popup);
             }
         });
@@ -117,7 +117,7 @@ var LayerManager = (function() {
             var eyeIcon = layer.visible ? '👁' : '👁‍🗨';
 
             var html = '<div class="layer-item' + visClass + '">' +
-                       '<span class="layer-color" style="background-color:' + layer.style.color + '"></span>' +
+                       '<span class="layer-color" style="background-color:' + (layer.style.color || '#3388ff').replace(/[^#a-fA-F0-9]/g, '') + '"></span>' +
                        '<span class="layer-name" data-name="' + escapeAttr(name) + '">' + escapeHtml(name) + '</span>' +
                        '<span class="layer-count">' + layer.featureCount + '</span>' +
                        '<button class="layer-toggle-btn" data-name="' + escapeAttr(name) + '" title="Toggle visibility">' + eyeIcon + '</button>' +
@@ -127,20 +127,20 @@ var LayerManager = (function() {
             container.append(html);
         });
 
-        // Bind events
-        container.find('.layer-toggle-btn').on('click', function() {
+        // Bind events (use off() to prevent listener accumulation)
+        container.find('.layer-toggle-btn').off('click').on('click', function() {
             toggleLayer($(this).data('name'));
         });
 
-        container.find('.layer-fit-btn').on('click', function() {
+        container.find('.layer-fit-btn').off('click').on('click', function() {
             fitToLayer($(this).data('name'));
         });
 
-        container.find('.layer-delete-btn').on('click', function() {
+        container.find('.layer-delete-btn').off('click').on('click', function() {
             removeLayer($(this).data('name'));
         });
 
-        container.find('.layer-name').on('click', function() {
+        container.find('.layer-name').off('click').on('click', function() {
             fitToLayer($(this).data('name'));
         });
     }

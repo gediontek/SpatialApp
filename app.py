@@ -5,6 +5,7 @@ import datetime
 import shutil
 import re
 import sys
+import threading
 import urllib.request
 import urllib.parse
 
@@ -52,8 +53,9 @@ logging.basicConfig(
     format='%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'
 )
 
-# Store annotations
+# Store annotations (thread-safe access via annotation_lock)
 geo_coco_annotations = []
+annotation_lock = threading.Lock()
 
 # Initialize database (Phase 5)
 try:
@@ -750,11 +752,13 @@ def internal_error(e):
 # NL-to-GIS Chat API
 # ============================================================
 
-# Server-side layer store for cross-tool references
+# Server-side layer store for cross-tool references (thread-safe via layer_lock)
 layer_store = {}
+layer_lock = threading.Lock()
 
 # In-memory chat sessions (keyed by session_id)
 chat_sessions = {}
+session_lock = threading.Lock()
 
 
 def _get_chat_session(session_id: str = "default"):
@@ -789,17 +793,23 @@ def api_chat():
     session = _get_chat_session(session_id)
 
     def generate():
-        for event in session.process_message(message, map_context):
-            event_type = event.get('type', 'message')
+        try:
+            for event in session.process_message(message, map_context):
+                event_type = event.get('type', 'message')
 
-            # Store layer in server-side store
-            if event_type == 'layer_add':
-                layer_name = event.get('name')
-                geojson = event.get('geojson')
-                if layer_name and geojson:
-                    layer_store[layer_name] = geojson
+                # Store layer in server-side store (with lock)
+                if event_type == 'layer_add':
+                    layer_name = event.get('name')
+                    geojson = event.get('geojson')
+                    if layer_name and geojson:
+                        with layer_lock:
+                            layer_store[layer_name] = geojson
 
-            yield f"event: {event_type}\ndata: {json.dumps(event)}\n\n"
+                yield f"event: {event_type}\ndata: {json.dumps(event)}\n\n"
+        except Exception as e:
+            app.logger.error(f"SSE stream error: {e}", exc_info=True)
+            error_event = {"type": "error", "text": f"Stream error: {str(e)}"}
+            yield f"event: error\ndata: {json.dumps(error_event)}\n\n"
 
     return app.response_class(
         generate(),

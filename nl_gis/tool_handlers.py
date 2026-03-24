@@ -406,17 +406,34 @@ def handle_measure_distance(params: dict) -> dict:
 # Phase 2: Spatial Analysis Handlers
 # ============================================================
 
+def _safe_geojson_to_shapely(geojson_geom):
+    """Safely convert GeoJSON to Shapely, returning None on failure."""
+    try:
+        geom = geojson_to_shapely(geojson_geom)
+        if geom.is_empty:
+            return None
+        return geom
+    except Exception:
+        return None
+
+
 def _get_layer_geometries(layer_store, layer_name):
-    """Extract Shapely geometries from a named layer."""
+    """Extract Shapely geometries from a named layer. Thread-safe copy."""
     if not layer_store or layer_name not in layer_store:
         return None, f"Layer '{layer_name}' not found"
-    geojson = layer_store[layer_name]
-    features = geojson.get("features", [])
+    try:
+        # Take a copy of features to avoid race conditions
+        geojson = layer_store[layer_name]
+        features = list(geojson.get("features", []))
+    except (KeyError, TypeError):
+        return None, f"Layer '{layer_name}' not found"
     geometries = []
     for f in features:
         geom = f.get("geometry")
         if geom:
-            geometries.append(geojson_to_shapely(geom))
+            shapely_geom = _safe_geojson_to_shapely(geom)
+            if shapely_geom:
+                geometries.append(shapely_geom)
     return geometries, None
 
 
@@ -603,6 +620,14 @@ def handle_search_nearby(params: dict) -> dict:
     radius_m = params.get("radius_m", 500)
     feature_type = params.get("feature_type", "building")
 
+    # Validate radius
+    try:
+        radius_m = float(radius_m)
+        if radius_m <= 0 or radius_m > 50000:
+            return {"error": "radius_m must be between 0 and 50000 meters"}
+    except (TypeError, ValueError):
+        return {"error": "radius_m must be a number"}
+
     # Resolve location to coordinates
     if lat is None or lon is None:
         if location:
@@ -612,6 +637,13 @@ def handle_search_nearby(params: dict) -> dict:
             lat, lon = geo["lat"], geo["lon"]
         else:
             return {"error": "Provide lat/lon or location name"}
+
+    # Validate coordinates
+    try:
+        vp = ValidatedPoint(lat=float(lat), lon=float(lon))
+        lat, lon = vp.lat, vp.lon
+    except (ValueError, TypeError) as e:
+        return {"error": f"Invalid coordinates: {e}"}
 
     if feature_type not in OSM_FEATURE_MAPPINGS:
         return {"error": f"Unknown feature type: {feature_type}"}
@@ -867,7 +899,11 @@ def handle_find_route(params: dict) -> dict:
 
     # Resolve origin
     if from_point and "lat" in from_point and "lon" in from_point:
-        origin_lat, origin_lon = from_point["lat"], from_point["lon"]
+        try:
+            vp = ValidatedPoint(lat=float(from_point["lat"]), lon=float(from_point["lon"]))
+            origin_lat, origin_lon = vp.lat, vp.lon
+        except (ValueError, TypeError) as e:
+            return {"error": f"Invalid origin coordinates: {e}"}
     elif from_location:
         geo = handle_geocode({"query": from_location})
         if "error" in geo:
@@ -879,7 +915,11 @@ def handle_find_route(params: dict) -> dict:
 
     # Resolve destination
     if to_point and "lat" in to_point and "lon" in to_point:
-        dest_lat, dest_lon = to_point["lat"], to_point["lon"]
+        try:
+            vp = ValidatedPoint(lat=float(to_point["lat"]), lon=float(to_point["lon"]))
+            dest_lat, dest_lon = vp.lat, vp.lon
+        except (ValueError, TypeError) as e:
+            return {"error": f"Invalid destination coordinates: {e}"}
     elif to_location:
         geo = handle_geocode({"query": to_location})
         if "error" in geo:

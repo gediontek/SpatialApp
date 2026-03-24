@@ -94,16 +94,22 @@ def get_all_annotations() -> list:
         rows = conn.execute("SELECT * FROM annotations ORDER BY id").fetchall()
         features = []
         for row in rows:
+            try:
+                geom = json.loads(row["geometry_json"])
+                props = json.loads(row["properties_json"]) if row["properties_json"] else {}
+            except (json.JSONDecodeError, TypeError):
+                logger.warning(f"Skipping corrupt annotation id={row['id']}")
+                continue
             features.append({
                 "type": "Feature",
                 "id": row["id"],
-                "geometry": json.loads(row["geometry_json"]),
+                "geometry": geom,
                 "properties": {
                     "category_name": row["category_name"],
                     "color": row["color"],
                     "source": row["source"],
                     "created_at": row["created_at"],
-                    **json.loads(row["properties_json"]),
+                    **props,
                 },
             })
         return features
@@ -154,7 +160,13 @@ def get_layer(name: str) -> Optional[dict]:
     conn = get_connection()
     try:
         row = conn.execute("SELECT geojson FROM layers WHERE name = ?", (name,)).fetchone()
-        return json.loads(row["geojson"]) if row else None
+        if not row:
+            return None
+        try:
+            return json.loads(row["geojson"])
+        except (json.JSONDecodeError, TypeError):
+            logger.warning(f"Corrupt layer data for '{name}'")
+            return None
     finally:
         conn.close()
 

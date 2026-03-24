@@ -278,9 +278,10 @@ var ChatPanel = (function() {
     }
 
     function appendToolStep(toolName, text, status) {
-        var id = 'tool-' + toolName.replace(/[^a-z0-9]/g, '');
+        var safeName = toolName.replace(/[^a-z0-9_]/gi, '');
+        var id = 'tool-' + safeName;
         var statusClass = status === 'loading' ? 'tool-loading' : 'tool-done';
-        var html = '<div class="chat-tool-step ' + statusClass + '" id="' + id + '">' +
+        var html = '<div class="chat-tool-step ' + statusClass + '" id="' + escapeHtml(id) + '">' +
                    '<span class="tool-icon">' + (status === 'loading' ? '⟳' : '✓') + '</span> ' +
                    '<span class="tool-text">' + escapeHtml(text) + '</span>' +
                    '</div>';
