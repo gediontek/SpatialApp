@@ -80,3 +80,8 @@ coverage.xml
 
 # Sample data
 sample_rasters/
+
+# Database
+data/*.db
+data/*.db-wal
+data/*.db-shm

@@ -20,6 +20,8 @@ from nl_gis.geo_utils import (
     project_to_utm,
     project_to_wgs84,
 )
+from services.cache import geocode_cache, overpass_cache, osrm_cache
+from services.rate_limiter import nominatim_limiter, overpass_limiter
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,44 @@ OSM_FEATURE_MAPPINGS = {
     'river': {'key': 'waterway', 'value': 'river'},
     'lake': {'key': 'natural', 'value': 'water'},
 }
+
+
+def _osm_to_geojson(osm_data: dict, category_name: str, feature_type: str) -> dict:
+    """Convert Overpass API response to GeoJSON FeatureCollection."""
+    geojson = {"type": "FeatureCollection", "features": []}
+    if "elements" not in osm_data:
+        return geojson
+
+    nodes = {
+        n["id"]: (n["lon"], n["lat"])
+        for n in osm_data["elements"] if n["type"] == "node"
+    }
+
+    count = 0
+    max_features = Config.MAX_FEATURES_PER_LAYER
+
+    for el in osm_data["elements"]:
+        if count >= max_features:
+            break
+        if el["type"] == "way":
+            coords = [nodes[nid] for nid in el.get("nodes", []) if nid in nodes]
+            if len(coords) < 3:
+                continue
+            if coords[0] != coords[-1]:
+                coords.append(coords[0])
+            geojson["features"].append({
+                "type": "Feature",
+                "geometry": {"type": "Polygon", "coordinates": [coords]},
+                "properties": {
+                    "category_name": category_name,
+                    "feature_type": feature_type,
+                    "osm_id": el.get("id"),
+                    "osm_tags": el.get("tags", {}),
+                },
+            })
+            count += 1
+
+    return geojson
 
 
 def dispatch_tool(tool_name: str, params: dict, layer_store: dict = None) -> dict:
@@ -74,6 +114,10 @@ def dispatch_tool(tool_name: str, params: dict, layer_store: dict = None) -> dic
         "classify_landcover": handle_classify_landcover,
         "export_annotations": handle_export_annotations,
         "get_annotations": handle_get_annotations,
+        # Phase 4
+        "find_route": handle_find_route,
+        "isochrone": handle_isochrone,
+        "heatmap": lambda p: handle_heatmap(p, layer_store),
     }
 
     if tool_name not in handlers:
@@ -83,7 +127,7 @@ def dispatch_tool(tool_name: str, params: dict, layer_store: dict = None) -> dic
 
 
 def handle_geocode(params: dict) -> dict:
-    """Geocode a place name using Nominatim.
+    """Geocode a place name using Nominatim. Cached for 24h, rate-limited.
 
     Returns:
         Dict with lat, lon, display_name, bbox.
@@ -92,7 +136,14 @@ def handle_geocode(params: dict) -> dict:
     if not query:
         return {"error": "No query provided"}
 
+    # Check cache first
+    cached = geocode_cache.get(query.lower().strip())
+    if cached:
+        logger.debug(f"Geocode cache hit: {query}")
+        return cached
+
     try:
+        nominatim_limiter.wait()
         url = f"https://nominatim.openstreetmap.org/search?q={urllib.parse.quote(query)}&format=json&limit=1"
         req = urllib.request.Request(url, headers={"User-Agent": "SpatialLabeler/1.0"})
 
@@ -105,12 +156,14 @@ def handle_geocode(params: dict) -> dict:
         result = data[0]
         bbox = result.get("boundingbox", [])
 
-        return {
+        geo_result = {
             "lat": float(result["lat"]),
             "lon": float(result["lon"]),
             "display_name": result["display_name"],
             "bbox": [float(b) for b in bbox] if bbox else None,
         }
+        geocode_cache.set(query.lower().strip(), geo_result)
+        return geo_result
     except Exception as e:
         logger.error(f"Geocoding error: {e}")
         return {"error": f"Geocoding failed: {str(e)}"}
@@ -177,6 +230,7 @@ def handle_fetch_osm(params: dict) -> dict:
         """
 
     try:
+        overpass_limiter.wait()
         response = requests.get(
             "https://overpass-api.de/api/interpreter",
             params={"data": overpass_query},
@@ -190,48 +244,7 @@ def handle_fetch_osm(params: dict) -> dict:
         return {"error": f"OSM request failed: {str(e)}"}
 
     # Convert to GeoJSON
-    geojson = {"type": "FeatureCollection", "features": []}
-
-    if "elements" in osm_data:
-        nodes = {
-            node["id"]: (node["lon"], node["lat"])
-            for node in osm_data["elements"]
-            if node["type"] == "node"
-        }
-
-        feature_count = 0
-        max_features = Config.MAX_FEATURES_PER_LAYER
-
-        for element in osm_data["elements"]:
-            if feature_count >= max_features:
-                break
-
-            if element["type"] == "way":
-                coords = [
-                    nodes[nid] for nid in element.get("nodes", []) if nid in nodes
-                ]
-                if len(coords) < 3:
-                    continue
-
-                # Close polygon
-                if coords[0] != coords[-1]:
-                    coords.append(coords[0])
-
-                geojson["features"].append({
-                    "type": "Feature",
-                    "geometry": {
-                        "type": "Polygon",
-                        "coordinates": [coords],
-                    },
-                    "properties": {
-                        "category_name": category_name,
-                        "feature_type": feature_type,
-                        "osm_id": element.get("id"),
-                        "osm_tags": element.get("tags", {}),
-                    },
-                })
-                feature_count += 1
-
+    geojson = _osm_to_geojson(osm_data, category_name, feature_type)
     layer_name = f"{feature_type}_{category_name}".replace(" ", "_").lower()
 
     return {
@@ -624,6 +637,7 @@ def handle_search_nearby(params: dict) -> dict:
     """
 
     try:
+        overpass_limiter.wait()
         response = requests.get(
             "https://overpass-api.de/api/interpreter",
             params={"data": overpass_query},
@@ -636,35 +650,7 @@ def handle_search_nearby(params: dict) -> dict:
     except requests.RequestException as e:
         return {"error": f"OSM request failed: {str(e)}"}
 
-    # Convert to GeoJSON (same logic as handle_fetch_osm)
-    geojson = {"type": "FeatureCollection", "features": []}
-
-    if "elements" in osm_data:
-        nodes = {
-            n["id"]: (n["lon"], n["lat"])
-            for n in osm_data["elements"] if n["type"] == "node"
-        }
-        count = 0
-        for el in osm_data["elements"]:
-            if count >= Config.MAX_FEATURES_PER_LAYER:
-                break
-            if el["type"] == "way":
-                coords = [nodes[nid] for nid in el.get("nodes", []) if nid in nodes]
-                if len(coords) < 3:
-                    continue
-                if coords[0] != coords[-1]:
-                    coords.append(coords[0])
-                geojson["features"].append({
-                    "type": "Feature",
-                    "geometry": {"type": "Polygon", "coordinates": [coords]},
-                    "properties": {
-                        "category_name": feature_type,
-                        "osm_id": el.get("id"),
-                        "osm_tags": el.get("tags", {}),
-                    },
-                })
-                count += 1
-
+    geojson = _osm_to_geojson(osm_data, feature_type, feature_type)
     layer_name = f"nearby_{feature_type}_{int(radius_m)}m"
 
     return {
@@ -852,4 +838,210 @@ def handle_get_annotations(params: dict) -> dict:
         "total": len(features),
         "categories": [{"name": k, "count": v} for k, v in sorted(categories.items(), key=lambda x: -x[1])],
         "geojson": {"type": "FeatureCollection", "features": features},
+    }
+
+
+# ============================================================
+# Phase 4: Routing Handlers
+# ============================================================
+
+# Average speeds (m/s) for isochrone estimation
+PROFILE_SPEEDS = {
+    "driving": 13.9,   # ~50 km/h urban
+    "walking": 1.4,    # ~5 km/h
+    "cycling": 4.2,    # ~15 km/h
+}
+
+
+def handle_find_route(params: dict) -> dict:
+    """Find a route between two points using OSRM."""
+    from services.osrm_client import get_route
+
+    from_point = params.get("from_point")
+    to_point = params.get("to_point")
+    from_location = params.get("from_location")
+    to_location = params.get("to_location")
+    profile = params.get("profile", "driving")
+
+    from_name, to_name = None, None
+
+    # Resolve origin
+    if from_point and "lat" in from_point and "lon" in from_point:
+        origin_lat, origin_lon = from_point["lat"], from_point["lon"]
+    elif from_location:
+        geo = handle_geocode({"query": from_location})
+        if "error" in geo:
+            return {"error": f"Could not geocode origin: {geo['error']}"}
+        origin_lat, origin_lon = geo["lat"], geo["lon"]
+        from_name = geo["display_name"]
+    else:
+        return {"error": "Provide from_point or from_location"}
+
+    # Resolve destination
+    if to_point and "lat" in to_point and "lon" in to_point:
+        dest_lat, dest_lon = to_point["lat"], to_point["lon"]
+    elif to_location:
+        geo = handle_geocode({"query": to_location})
+        if "error" in geo:
+            return {"error": f"Could not geocode destination: {geo['error']}"}
+        dest_lat, dest_lon = geo["lat"], geo["lon"]
+        to_name = geo["display_name"]
+    else:
+        return {"error": "Provide to_point or to_location"}
+
+    route = get_route(origin_lon, origin_lat, dest_lon, dest_lat, profile=profile)
+
+    if route is None:
+        return {"error": "Could not find a route. The routing service may be unavailable."}
+
+    # Build GeoJSON FeatureCollection with route line
+    route_geojson = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "geometry": route["geometry"],
+                "properties": {
+                    "distance_km": route["distance_km"],
+                    "duration_min": route["duration_min"],
+                    "profile": profile,
+                },
+            },
+            # Origin marker
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [origin_lon, origin_lat]},
+                "properties": {"role": "origin", "name": from_name or "Origin"},
+            },
+            # Destination marker
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [dest_lon, dest_lat]},
+                "properties": {"role": "destination", "name": to_name or "Destination"},
+            },
+        ],
+    }
+
+    origin_label = from_name.split(",")[0] if from_name else "origin"
+    dest_label = to_name.split(",")[0] if to_name else "dest"
+    layer_name = f"route_{origin_label}_{dest_label}".replace(" ", "_").lower()[:50]
+
+    return {
+        "geojson": route_geojson,
+        "layer_name": layer_name,
+        "feature_count": 1,
+        "distance_km": route["distance_km"],
+        "duration_min": route["duration_min"],
+        "profile": profile,
+        "from_name": from_name,
+        "to_name": to_name,
+    }
+
+
+def handle_isochrone(params: dict) -> dict:
+    """Calculate reachable area from a point.
+
+    Uses buffer-based estimation: time * avg_speed = radius, then buffers.
+    """
+    lat = params.get("lat")
+    lon = params.get("lon")
+    location = params.get("location")
+    time_minutes = params.get("time_minutes")
+    distance_m = params.get("distance_m")
+    profile = params.get("profile", "driving")
+
+    # Resolve center
+    if lat is None or lon is None:
+        if location:
+            geo = handle_geocode({"query": location})
+            if "error" in geo:
+                return {"error": f"Could not geocode: {geo['error']}"}
+            lat, lon = geo["lat"], geo["lon"]
+        else:
+            return {"error": "Provide lat/lon or location"}
+
+    # Calculate radius
+    if time_minutes:
+        speed = PROFILE_SPEEDS.get(profile, PROFILE_SPEEDS["driving"])
+        radius_m = time_minutes * 60 * speed
+    elif distance_m:
+        radius_m = distance_m
+    else:
+        return {"error": "Provide time_minutes or distance_m"}
+
+    # Create buffer around center point
+    from shapely.geometry import Point
+    center = Point(lon, lat)
+    buffered = buffer_geometry(center, radius_m)
+
+    iso_geojson = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "geometry": shapely_to_geojson(buffered),
+                "properties": {
+                    "radius_m": round(radius_m),
+                    "time_minutes": time_minutes,
+                    "profile": profile,
+                    "method": "buffer_estimate",
+                },
+            },
+            # Center marker
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                "properties": {"role": "center"},
+            },
+        ],
+    }
+
+    desc = f"{time_minutes}min" if time_minutes else f"{int(distance_m)}m"
+    layer_name = f"isochrone_{desc}_{profile}"
+
+    return {
+        "geojson": iso_geojson,
+        "layer_name": layer_name,
+        "feature_count": 1,
+        "radius_m": round(radius_m),
+        "area_sq_km": round(geodesic_area(buffered) / 1e6, 2),
+        "profile": profile,
+        "method": "buffer_estimate",
+    }
+
+
+def handle_heatmap(params: dict, layer_store: dict = None) -> dict:
+    """Generate heatmap data from layer features."""
+    layer_name = params.get("layer_name")
+    radius = params.get("radius", 25)
+    max_zoom = params.get("max_zoom", 15)
+
+    if not layer_store or layer_name not in layer_store:
+        return {"error": f"Layer '{layer_name}' not found"}
+
+    features = layer_store[layer_name].get("features", [])
+    if not features:
+        return {"error": "Layer has no features"}
+
+    # Extract centroids as heatmap points [lat, lng, intensity]
+    points = []
+    for f in features:
+        geom = f.get("geometry")
+        if not geom:
+            continue
+        shapely_geom = geojson_to_shapely(geom)
+        centroid = shapely_geom.centroid
+        points.append([centroid.y, centroid.x, 1.0])  # Leaflet order: lat, lng
+
+    if not points:
+        return {"error": "Could not extract points from features"}
+
+    return {
+        "success": True,
+        "action": "heatmap",
+        "layer_name": f"heatmap_{layer_name}",
+        "points": points,
+        "options": {"radius": radius, "maxZoom": max_zoom},
+        "point_count": len(points),
+        "description": f"Heatmap of {len(points)} points from {layer_name}",
     }

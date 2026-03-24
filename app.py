@@ -55,6 +55,13 @@ logging.basicConfig(
 # Store annotations
 geo_coco_annotations = []
 
+# Initialize database (Phase 5)
+try:
+    from services.database import init_db
+    init_db()
+except Exception as e:
+    logging.warning(f"Database init skipped: {e}")
+
 # Input validation patterns
 VALID_OSM_KEY_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_:]*$')
 VALID_OSM_VALUE_PATTERN = re.compile(r'^[a-zA-Z0-9_\-\s\*]+$')

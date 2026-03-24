@@ -163,6 +163,13 @@ var ChatPanel = (function() {
                 }
                 break;
 
+            case 'heatmap':
+                if (window.L && window.L.heatLayer && data.points) {
+                    var heatLayer = L.heatLayer(data.points, data.options || {});
+                    heatLayer.addTo(map);
+                }
+                break;
+
             case 'map_command':
                 executeMapCommand(data, map);
                 break;
@@ -245,6 +252,12 @@ var ChatPanel = (function() {
                 return result.total + ' annotations';
             case 'export_annotations':
                 return result.count + ' annotations → ' + result.format;
+            case 'find_route':
+                return result.distance_km + ' km, ' + result.duration_min + ' min (' + result.profile + ')';
+            case 'isochrone':
+                return result.area_sq_km + ' sq km reachable (' + result.profile + ')';
+            case 'heatmap':
+                return result.point_count + ' points';
             case 'show_layer':
             case 'hide_layer':
             case 'remove_layer':

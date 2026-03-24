@@ -165,7 +165,7 @@ class ChatSession:
 
                             # Handle special tool results
                             # Tools that produce layers
-                            layer_tools = {"fetch_osm", "buffer", "spatial_query", "search_nearby", "classify_landcover"}
+                            layer_tools = {"fetch_osm", "buffer", "spatial_query", "search_nearby", "classify_landcover", "find_route", "isochrone"}
                             if tool_name in layer_tools and "geojson" in result:
                                 layer_name = result.get("layer_name", f"layer_{tool_call_count}")
                                 self.layer_store[layer_name] = result["geojson"]
@@ -178,6 +178,10 @@ class ChatSession:
                                     style = {"color": "#e31a1c", "weight": 2}
                                 elif tool_name == "classify_landcover":
                                     style = {"color": "#33a02c", "weight": 1, "fillOpacity": 0.6}
+                                elif tool_name == "find_route":
+                                    style = {"color": "#6610f2", "weight": 4, "fillOpacity": 0}
+                                elif tool_name == "isochrone":
+                                    style = {"color": "#20c997", "weight": 2, "fillOpacity": 0.2}
 
                                 yield {
                                     "type": "layer_add",
@@ -194,6 +198,10 @@ class ChatSession:
                             # Layer visibility commands
                             if tool_name in ("show_layer", "hide_layer", "remove_layer") and result.get("success"):
                                 yield {"type": "layer_command", **result}
+
+                            # Heatmap rendering instruction
+                            if tool_name == "heatmap" and result.get("success"):
+                                yield {"type": "heatmap", **result}
 
                             # Add tool result to messages for Claude
                             tool_results.append({

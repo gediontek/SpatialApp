@@ -33,3 +33,7 @@ class Config:
 
     # Chat API auth (simple bearer token)
     CHAT_API_TOKEN = os.environ.get('CHAT_API_TOKEN', '')
+
+    # Database
+    DATABASE_PATH = os.environ.get('DATABASE_PATH',
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'spatialapp.db'))

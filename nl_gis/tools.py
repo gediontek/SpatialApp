@@ -369,5 +369,98 @@ def get_tool_definitions() -> list:
                 "type": "object",
                 "properties": {}
             }
+        },
+        # ---- Phase 4: Routing Tools ----
+        {
+            "name": "find_route",
+            "description": "Find a route between two locations. Returns a GeoJSON LineString with distance and duration. Supports driving, walking, and cycling profiles. Uses OSRM routing engine.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "from_location": {
+                        "type": "string",
+                        "description": "Origin place name (will be geocoded)"
+                    },
+                    "to_location": {
+                        "type": "string",
+                        "description": "Destination place name (will be geocoded)"
+                    },
+                    "from_point": {
+                        "type": "object",
+                        "description": "Origin as {lat, lon}",
+                        "properties": {"lat": {"type": "number"}, "lon": {"type": "number"}}
+                    },
+                    "to_point": {
+                        "type": "object",
+                        "description": "Destination as {lat, lon}",
+                        "properties": {"lat": {"type": "number"}, "lon": {"type": "number"}}
+                    },
+                    "profile": {
+                        "type": "string",
+                        "description": "Routing profile",
+                        "enum": ["driving", "walking", "cycling"],
+                        "default": "driving"
+                    }
+                }
+            }
+        },
+        {
+            "name": "isochrone",
+            "description": "Calculate the area reachable from a point within a given time or distance. Returns a GeoJSON polygon approximation of the reachable area. Uses buffer-based estimation when OSRM isochrone is unavailable.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "Center location name (will be geocoded)"
+                    },
+                    "lat": {
+                        "type": "number",
+                        "description": "Center latitude"
+                    },
+                    "lon": {
+                        "type": "number",
+                        "description": "Center longitude"
+                    },
+                    "time_minutes": {
+                        "type": "number",
+                        "description": "Travel time in minutes"
+                    },
+                    "distance_m": {
+                        "type": "number",
+                        "description": "Travel distance in meters (alternative to time)"
+                    },
+                    "profile": {
+                        "type": "string",
+                        "description": "Travel profile",
+                        "enum": ["driving", "walking", "cycling"],
+                        "default": "driving"
+                    }
+                }
+            }
+        },
+        {
+            "name": "heatmap",
+            "description": "Generate a density heatmap visualization from point features in a layer. Returns an instruction for the frontend to render a Leaflet.heat layer.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Layer containing features to visualize as heatmap"
+                    },
+                    "radius": {
+                        "type": "integer",
+                        "description": "Heatmap point radius in pixels",
+                        "default": 25
+                    },
+                    "max_zoom": {
+                        "type": "integer",
+                        "description": "Zoom level at which heatmap reaches full intensity",
+                        "default": 15
+                    }
+                },
+                "required": ["layer_name"]
+            }
         }
     ]
