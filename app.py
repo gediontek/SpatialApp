@@ -249,21 +249,20 @@ def save_annotation():
         return jsonify(success=False, error='Invalid annotation data'), 400
 
     try:
-        # Create proper GeoJSON Feature
-        annotation = {
-            "type": "Feature",
-            "id": len(geo_coco_annotations) + 1,
-            "properties": {
-                "category_name": data.get('properties', {}).get('category_name', 'unknown'),
-                "color": data.get('properties', {}).get('color', '#3388ff'),
-                "bbox": data.get('properties', {}).get('bbox', []),
-                "created_at": datetime.datetime.now().isoformat()
-            },
-            "geometry": data['geometry']
-        }
-
-        geo_coco_annotations.append(annotation)
-        save_annotations_to_file()
+        with annotation_lock:
+            annotation = {
+                "type": "Feature",
+                "id": len(geo_coco_annotations) + 1,
+                "properties": {
+                    "category_name": data.get('properties', {}).get('category_name', 'unknown'),
+                    "color": data.get('properties', {}).get('color', '#3388ff'),
+                    "bbox": data.get('properties', {}).get('bbox', []),
+                    "created_at": datetime.datetime.now().isoformat()
+                },
+                "geometry": data['geometry']
+            }
+            geo_coco_annotations.append(annotation)
+            save_annotations_to_file()
 
         app.logger.info(f"Annotation saved: {annotation['id']}")
         return jsonify(success=True, id=annotation['id'])
@@ -286,42 +285,44 @@ def add_osm_annotations():
     try:
         added_count = 0
         if 'features' in data:
-            for feature in data['features']:
-                if 'geometry' not in feature or 'coordinates' not in feature['geometry']:
-                    continue
+            with annotation_lock:
+                for feature in data['features']:
+                    if 'geometry' not in feature or 'coordinates' not in feature['geometry']:
+                        continue
 
-                coordinates = feature['geometry']['coordinates'][0]
-                if len(coordinates) < 3:
-                    continue
+                    geom_type = feature['geometry'].get('type', '')
+                    if geom_type != 'Polygon':
+                        continue
 
-                # Calculate bbox
-                lons = [coord[0] for coord in coordinates]
-                lats = [coord[1] for coord in coordinates]
-                bbox = [[min(lons), min(lats)], [max(lons), min(lats)],
-                        [max(lons), max(lats)], [min(lons), max(lats)]]
+                    coordinates = feature['geometry']['coordinates'][0]
+                    if len(coordinates) < 3:
+                        continue
 
-                # Get category from properties or use key_value
-                category = feature.get('properties', {}).get('category_name', 'osm_feature')
+                    lons = [coord[0] for coord in coordinates]
+                    lats = [coord[1] for coord in coordinates]
+                    bbox = [[min(lons), min(lats)], [max(lons), min(lats)],
+                            [max(lons), max(lats)], [min(lons), max(lats)]]
 
-                annotation = {
-                    "type": "Feature",
-                    "id": len(geo_coco_annotations) + 1,
-                    "properties": {
-                        "category_name": category,
-                        "color": "#3388ff",
-                        "bbox": bbox,
-                        "source": "osm",
-                        "created_at": datetime.datetime.now().isoformat()
-                    },
-                    "geometry": {
-                        "type": "Polygon",
-                        "coordinates": [coordinates]
+                    category = feature.get('properties', {}).get('category_name', 'osm_feature')
+
+                    annotation = {
+                        "type": "Feature",
+                        "id": len(geo_coco_annotations) + 1,
+                        "properties": {
+                            "category_name": category,
+                            "color": "#3388ff",
+                            "bbox": bbox,
+                            "source": "osm",
+                            "created_at": datetime.datetime.now().isoformat()
+                        },
+                        "geometry": {
+                            "type": "Polygon",
+                            "coordinates": [coordinates]
+                        }
                     }
-                }
 
-                geo_coco_annotations.append(annotation)
-                added_count += 1
-                app.logger.info(f"OSM Annotation added: {annotation['id']}")
+                    geo_coco_annotations.append(annotation)
+                    added_count += 1
 
         if added_count > 0:
             save_annotations_to_file()
@@ -343,13 +344,12 @@ def clear_annotations():
     """Clear all annotations."""
     global geo_coco_annotations
 
-    # Backup before clearing
-    if geo_coco_annotations:
-        backup_annotations()
-
-    geo_coco_annotations = []
     try:
-        initialize_annotations_file()
+        with annotation_lock:
+            if geo_coco_annotations:
+                backup_annotations()
+            geo_coco_annotations = []
+            initialize_annotations_file()
         app.logger.info("All annotations cleared.")
         return jsonify(success=True)
     except Exception as e:
@@ -762,11 +762,12 @@ session_lock = threading.Lock()
 
 
 def _get_chat_session(session_id: str = "default"):
-    """Get or create a chat session."""
+    """Get or create a chat session (thread-safe)."""
     from nl_gis.chat import ChatSession
-    if session_id not in chat_sessions:
-        chat_sessions[session_id] = ChatSession(layer_store=layer_store)
-    return chat_sessions[session_id]
+    with session_lock:
+        if session_id not in chat_sessions:
+            chat_sessions[session_id] = ChatSession(layer_store=layer_store)
+        return chat_sessions[session_id]
 
 
 @app.route('/api/chat', methods=['POST'])
@@ -839,9 +840,10 @@ def api_get_layers():
 @csrf.exempt
 def api_delete_layer(layer_name):
     """Delete a named layer."""
-    if layer_name in layer_store:
-        del layer_store[layer_name]
-        return jsonify(success=True)
+    with layer_lock:
+        if layer_name in layer_store:
+            del layer_store[layer_name]
+            return jsonify(success=True)
     return jsonify(error='Layer not found'), 404
 
 

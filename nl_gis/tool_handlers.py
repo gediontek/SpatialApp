@@ -720,51 +720,52 @@ def handle_add_annotation(params: dict, layer_store: dict = None) -> dict:
     category_name = params.get("category_name", "unknown")
     color = params.get("color", "#3388ff")
 
-    # Import app-level annotation functions
+    # Import app-level annotation functions + lock
     try:
-        from app import geo_coco_annotations, save_annotations_to_file
+        from app import geo_coco_annotations, save_annotations_to_file, annotation_lock
     except ImportError:
         return {"error": "Cannot access annotation store"}
 
     added = 0
 
-    if layer_name and layer_store and layer_name in layer_store:
-        features = layer_store[layer_name].get("features", [])
-        for f in features:
-            geom = f.get("geometry")
-            if geom:
-                annotation = {
-                    "type": "Feature",
-                    "id": len(geo_coco_annotations) + 1,
-                    "properties": {
-                        "category_name": category_name,
-                        "color": color,
-                        "source": "chat",
-                        "created_at": datetime.datetime.now().isoformat(),
-                    },
-                    "geometry": geom,
-                }
-                geo_coco_annotations.append(annotation)
-                added += 1
-    elif geometry:
-        annotation = {
-            "type": "Feature",
-            "id": len(geo_coco_annotations) + 1,
-            "properties": {
-                "category_name": category_name,
-                "color": color,
-                "source": "chat",
-                "created_at": datetime.datetime.now().isoformat(),
-            },
-            "geometry": geometry,
-        }
-        geo_coco_annotations.append(annotation)
-        added = 1
-    else:
-        return {"error": "Provide either geometry or layer_name"}
+    with annotation_lock:
+        if layer_name and layer_store and layer_name in layer_store:
+            features = layer_store[layer_name].get("features", [])
+            for f in features:
+                geom = f.get("geometry")
+                if geom:
+                    annotation = {
+                        "type": "Feature",
+                        "id": len(geo_coco_annotations) + 1,
+                        "properties": {
+                            "category_name": category_name,
+                            "color": color,
+                            "source": "chat",
+                            "created_at": datetime.datetime.now().isoformat(),
+                        },
+                        "geometry": geom,
+                    }
+                    geo_coco_annotations.append(annotation)
+                    added += 1
+        elif geometry:
+            annotation = {
+                "type": "Feature",
+                "id": len(geo_coco_annotations) + 1,
+                "properties": {
+                    "category_name": category_name,
+                    "color": color,
+                    "source": "chat",
+                    "created_at": datetime.datetime.now().isoformat(),
+                },
+                "geometry": geometry,
+            }
+            geo_coco_annotations.append(annotation)
+            added = 1
+        else:
+            return {"error": "Provide either geometry or layer_name"}
 
-    if added > 0:
-        save_annotations_to_file()
+        if added > 0:
+            save_annotations_to_file()
 
     return {"success": True, "added": added, "category": category_name}
 
