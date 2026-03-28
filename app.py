@@ -451,21 +451,8 @@ def clear_annotations():
         return jsonify(success=False, error=str(e)), 500
 
 
-# Mapping of user-friendly feature types to OSM query parameters
-OSM_FEATURE_MAPPINGS = {
-    'building': {'key': 'building', 'value': None},
-    'forest': {'key': 'landuse', 'value': 'forest'},
-    'water': {'key': 'natural', 'value': 'water'},
-    'park': {'key': 'leisure', 'value': 'park'},
-    'grass': {'key': 'landuse', 'value': 'grass'},
-    'farmland': {'key': 'landuse', 'value': 'farmland'},
-    'residential': {'key': 'landuse', 'value': 'residential'},
-    'commercial': {'key': 'landuse', 'value': 'commercial'},
-    'industrial': {'key': 'landuse', 'value': 'industrial'},
-    'road': {'key': 'highway', 'value': None},
-    'river': {'key': 'waterway', 'value': 'river'},
-    'lake': {'key': 'natural', 'value': 'water'},
-}
+# Mapping of user-friendly feature types to OSM query parameters (shared with nl_gis/tool_handlers.py)
+from nl_gis.tool_handlers import OSM_FEATURE_MAPPINGS
 
 
 @app.route('/fetch_osm_data', methods=['POST'])
@@ -647,10 +634,12 @@ def finalize_annotations():
     """Finalize and save annotations with backup."""
     global geo_coco_annotations
     try:
-        backup_annotations()
-        save_annotations_to_file()
+        with annotation_lock:
+            backup_annotations()
+            save_annotations_to_file()
+            count = len(geo_coco_annotations)
         app.logger.info("Annotations finalized and saved.")
-        return jsonify(success=True, count=len(geo_coco_annotations))
+        return jsonify(success=True, count=count)
     except Exception as e:
         app.logger.error(f"Error finalizing annotations: {str(e)}", exc_info=True)
         return jsonify(success=False, error=str(e)), 500
@@ -659,18 +648,19 @@ def finalize_annotations():
 @app.route('/export_annotations/<format_type>')
 def export_annotations(format_type):
     """Export annotations in different formats."""
-    global geo_coco_annotations
-
-    if not geo_coco_annotations:
-        return jsonify(error='No annotations to export'), 400
-
     valid_formats = ['geojson', 'shapefile', 'geopackage']
     if format_type not in valid_formats:
         return jsonify(error=f'Invalid format. Choose from: {", ".join(valid_formats)}'), 400
 
+    with annotation_lock:
+        if not geo_coco_annotations:
+            return jsonify(error='No annotations to export'), 400
+        # Snapshot under lock
+        features_copy = list(geo_coco_annotations)
+
     try:
-        # Create GeoDataFrame from annotations
-        gdf = gpd.GeoDataFrame.from_features(geo_coco_annotations)
+        # Create GeoDataFrame from snapshot
+        gdf = gpd.GeoDataFrame.from_features(features_copy)
         gdf.set_crs(epsg=4326, inplace=True)
 
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")

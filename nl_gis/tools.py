@@ -157,7 +157,9 @@ def get_tool_definitions() -> list:
                     },
                     "distance_m": {
                         "type": "number",
-                        "description": "Buffer distance in meters"
+                        "description": "Buffer distance in meters (max 100,000 = 100km)",
+                        "minimum": 1,
+                        "maximum": 100000
                     }
                 },
                 "required": ["distance_m"]
@@ -237,8 +239,10 @@ def get_tool_definitions() -> list:
                     },
                     "radius_m": {
                         "type": "number",
-                        "description": "Search radius in meters",
-                        "default": 500
+                        "description": "Search radius in meters (max 50,000 = 50km)",
+                        "default": 500,
+                        "minimum": 1,
+                        "maximum": 50000
                     },
                     "feature_type": {
                         "type": "string",

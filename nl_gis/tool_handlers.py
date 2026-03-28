@@ -250,12 +250,17 @@ def handle_fetch_osm(params: dict) -> dict:
     geojson = _osm_to_geojson(osm_data, category_name, feature_type)
     layer_name = f"{feature_type}_{category_name}".replace(" ", "_").lower()
 
-    return {
+    count = len(geojson["features"])
+    capped = count >= Config.MAX_FEATURES_PER_LAYER
+    result = {
         "geojson": geojson,
-        "feature_count": len(geojson["features"]),
+        "feature_count": count,
         "layer_name": layer_name,
-        "capped": len(geojson["features"]) >= Config.MAX_FEATURES_PER_LAYER,
+        "capped": capped,
     }
+    if capped:
+        result["note"] = f"Results capped at {Config.MAX_FEATURES_PER_LAYER} features. The actual area may contain more. Try a smaller area for complete data."
+    return result
 
 
 def handle_map_command(params: dict) -> dict:
