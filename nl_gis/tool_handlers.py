@@ -947,30 +947,35 @@ def handle_export_annotations(params: dict) -> dict:
         return {"error": f"Invalid format. Choose from: {', '.join(valid_formats)}"}
 
     try:
-        from app import geo_coco_annotations
+        from app import geo_coco_annotations, annotation_lock
     except ImportError:
         return {"error": "Cannot access annotation store"}
 
-    if not geo_coco_annotations:
+    with annotation_lock:
+        count = len(geo_coco_annotations)
+
+    if count == 0:
         return {"error": "No annotations to export"}
 
     return {
         "success": True,
         "format": format_type,
-        "count": len(geo_coco_annotations),
+        "count": count,
         "download_url": f"/export_annotations/{format_type}",
-        "description": f"Export {len(geo_coco_annotations)} annotations as {format_type}",
+        "description": f"Export {count} annotations as {format_type}",
     }
 
 
 def handle_get_annotations(params: dict) -> dict:
     """Get current annotations summary."""
     try:
-        from app import geo_coco_annotations
+        from app import geo_coco_annotations, annotation_lock
     except ImportError:
         return {"error": "Cannot access annotation store"}
 
-    features = geo_coco_annotations
+    with annotation_lock:
+        features = list(geo_coco_annotations)
+
     categories = {}
     for f in features:
         cat = f.get("properties", {}).get("category_name", "unknown")
