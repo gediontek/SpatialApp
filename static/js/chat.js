@@ -5,8 +5,10 @@
 var ChatPanel = (function() {
     var eventSource = null;
     var sessionId = 'session_' + Date.now();
+    var _layerManager = null;
 
     function init(map, layerManager) {
+        _layerManager = layerManager;
         bindEvents(map, layerManager);
     }
 
@@ -18,6 +20,15 @@ var ChatPanel = (function() {
         $('#chatInput').on('keydown', function(e) {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
+                sendMessage(map, layerManager);
+            }
+        });
+
+        // Quick action buttons
+        $('.quick-action-btn').on('click', function() {
+            var msg = $(this).data('msg');
+            if (msg) {
+                $('#chatInput').val(msg);
                 sendMessage(map, layerManager);
             }
         });
@@ -163,6 +174,14 @@ var ChatPanel = (function() {
                 }
                 break;
 
+            case 'highlight':
+                if (layerManager && data.layer_name) {
+                    layerManager.highlightFeatures(
+                        data.layer_name, data.attribute, data.value, data.color || '#ff0000'
+                    );
+                }
+                break;
+
             case 'heatmap':
                 if (window.L && window.L.heatLayer && data.points) {
                     var heatLayer = L.heatLayer(data.points, data.options || {});
@@ -258,6 +277,8 @@ var ChatPanel = (function() {
                 return result.area_sq_km + ' sq km reachable (' + result.profile + ')';
             case 'heatmap':
                 return result.point_count + ' points';
+            case 'highlight_features':
+                return result.highlighted + '/' + result.total + ' features highlighted';
             case 'show_layer':
             case 'hide_layer':
             case 'remove_layer':
@@ -270,10 +291,50 @@ var ChatPanel = (function() {
     function appendMessage(role, text) {
         var msgClass = role === 'user' ? 'chat-msg-user' :
                        role === 'error' ? 'chat-msg-error' : 'chat-msg-assistant';
-        var html = '<div class="chat-msg ' + msgClass + '">' +
-                   '<div class="chat-msg-content">' + escapeHtml(text) + '</div>' +
-                   '</div>';
-        $('#chatMessages').append(html);
+        var content;
+        if (role === 'assistant' && window.marked && window.DOMPurify) {
+            content = DOMPurify.sanitize(marked.parse(text));
+        } else {
+            content = escapeHtml(text);
+        }
+
+        var msgDiv = document.createElement('div');
+        msgDiv.className = 'chat-msg ' + msgClass;
+        var contentDiv = document.createElement('div');
+        contentDiv.className = 'chat-msg-content';
+        contentDiv.innerHTML = content;  // Already sanitized by DOMPurify above
+        msgDiv.appendChild(contentDiv);
+        document.getElementById('chatMessages').appendChild(msgDiv);
+
+        // Make layer names clickable using safe DOM APIs
+        if (role === 'assistant' && _layerManager) {
+            var layerNames = _layerManager.getLayerNames();
+            // Walk text nodes and wrap layer name matches in clickable spans
+            layerNames.forEach(function(name) {
+                var walker = document.createTreeWalker(contentDiv, NodeFilter.SHOW_TEXT, null, false);
+                var textNode;
+                while ((textNode = walker.nextNode())) {
+                    var idx = textNode.nodeValue.indexOf(name);
+                    if (idx >= 0) {
+                        var before = textNode.nodeValue.substring(0, idx);
+                        var after = textNode.nodeValue.substring(idx + name.length);
+                        var span = document.createElement('span');
+                        span.className = 'layer-ref';
+                        span.textContent = name;  // Safe: textContent, not innerHTML
+                        span.addEventListener('click', (function(n) {
+                            return function() { if (_layerManager) _layerManager.fitToLayer(n); };
+                        })(name));
+                        var parent = textNode.parentNode;
+                        if (before) parent.insertBefore(document.createTextNode(before), textNode);
+                        parent.insertBefore(span, textNode);
+                        if (after) parent.insertBefore(document.createTextNode(after), textNode);
+                        parent.removeChild(textNode);
+                        break;  // One replacement per layer name per message
+                    }
+                }
+            });
+        }
+
         scrollToBottom();
     }
 

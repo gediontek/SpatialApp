@@ -291,6 +291,33 @@ def get_tool_definitions() -> list:
                 "required": ["layer_name"]
             }
         },
+        {
+            "name": "highlight_features",
+            "description": "Highlight features in a layer that match a specific attribute value. Changes the style of matching features to draw attention to them. Useful for 'highlight all residential buildings' or 'show me the forests in green'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name of the layer containing features to highlight"
+                    },
+                    "attribute": {
+                        "type": "string",
+                        "description": "Property name to match on (e.g., 'category_name', 'feature_type')"
+                    },
+                    "value": {
+                        "type": "string",
+                        "description": "Value to match (e.g., 'residential', 'forest')"
+                    },
+                    "color": {
+                        "type": "string",
+                        "description": "Hex color for highlighted features (e.g., '#ff0000')",
+                        "default": "#ff0000"
+                    }
+                },
+                "required": ["layer_name", "attribute", "value"]
+            }
+        },
         # ---- Phase 3: Annotation & Classification Tools ----
         {
             "name": "add_annotation",
@@ -370,10 +397,56 @@ def get_tool_definitions() -> list:
                 "properties": {}
             }
         },
+        {
+            "name": "merge_layers",
+            "description": "Merge two named layers into a single new layer. Optionally perform a spatial join to transfer attributes from one layer to another based on spatial relationship. Useful for combining datasets or enriching features with attributes from another layer.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_a": {
+                        "type": "string",
+                        "description": "First layer name"
+                    },
+                    "layer_b": {
+                        "type": "string",
+                        "description": "Second layer name"
+                    },
+                    "output_name": {
+                        "type": "string",
+                        "description": "Name for the merged output layer"
+                    },
+                    "operation": {
+                        "type": "string",
+                        "description": "Merge operation: 'union' combines all features, 'spatial_join' transfers attributes from layer_b to layer_a based on spatial overlap",
+                        "enum": ["union", "spatial_join"],
+                        "default": "union"
+                    }
+                },
+                "required": ["layer_a", "layer_b", "output_name"]
+            }
+        },
+        {
+            "name": "import_layer",
+            "description": "Import a vector file (GeoJSON, Shapefile, GeoPackage) as a named layer on the map. The user must upload the file via the /api/import endpoint. Use this tool to tell the user how to import and to process inline GeoJSON data.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "geojson": {
+                        "type": "object",
+                        "description": "GeoJSON FeatureCollection to import directly as a layer"
+                    },
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name for the imported layer"
+                    }
+                },
+                "required": ["layer_name"]
+            }
+        },
         # ---- Phase 4: Routing Tools ----
         {
             "name": "find_route",
-            "description": "Find a route between two locations. Returns a GeoJSON LineString with distance and duration. Supports driving, walking, and cycling profiles. Uses OSRM routing engine.",
+            "description": "Find a route between two locations. Returns a GeoJSON LineString with distance and duration. Supports driving, walking, and cycling profiles. Uses Valhalla routing engine.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -406,7 +479,7 @@ def get_tool_definitions() -> list:
         },
         {
             "name": "isochrone",
-            "description": "Calculate the area reachable from a point within a given time or distance. Returns a GeoJSON polygon approximation of the reachable area. Uses buffer-based estimation when OSRM isochrone is unavailable.",
+            "description": "Calculate the area reachable from a point within a given time or distance. Returns a true network-based isochrone polygon using the Valhalla routing engine. The result follows actual roads, not a simple circle.",
             "input_schema": {
                 "type": "object",
                 "properties": {

@@ -15,9 +15,13 @@ from nl_gis.tool_handlers import (
     handle_aggregate,
     handle_search_nearby,
     handle_layer_visibility,
+    handle_highlight_features,
     handle_add_annotation,
     handle_export_annotations,
     handle_get_annotations,
+    handle_import_layer,
+    handle_merge_layers,
+    MAX_BUFFER_DISTANCE_M,
 )
 
 
@@ -320,7 +324,7 @@ class TestHandleAnnotation:
     def test_dispatch_known_tools(self):
         """Verify all Phase 2+3 tools are registered in dispatch."""
         store = make_layer_store()
-        phase2_tools = ["buffer", "spatial_query", "aggregate", "show_layer", "hide_layer", "remove_layer"]
+        phase2_tools = ["buffer", "spatial_query", "aggregate", "show_layer", "hide_layer", "remove_layer", "highlight_features"]
         phase3_tools = ["add_annotation", "classify_landcover", "export_annotations", "get_annotations"]
 
         for tool in phase2_tools + phase3_tools:
@@ -330,6 +334,54 @@ class TestHandleAnnotation:
                 dispatch_tool(tool, {}, store)
             except ValueError:
                 pytest.fail(f"Tool '{tool}' not registered in dispatch_tool")
+
+
+class TestHighlightFeatures:
+    """Tests for highlight_features handler."""
+
+    def test_highlight_matching(self):
+        store = make_layer_store()
+        result = handle_highlight_features({
+            "layer_name": "buildings",
+            "attribute": "category_name",
+            "value": "residential",
+            "color": "#ff0000"
+        }, store)
+        assert result["success"] is True
+        assert result["highlighted"] == 1
+        assert result["total"] == 2
+
+    def test_highlight_no_match(self):
+        store = make_layer_store()
+        result = handle_highlight_features({
+            "layer_name": "buildings",
+            "attribute": "category_name",
+            "value": "nonexistent"
+        }, store)
+        assert result["success"] is True
+        assert result["highlighted"] == 0
+
+    def test_highlight_layer_not_found(self):
+        result = handle_highlight_features({
+            "layer_name": "nope",
+            "attribute": "category_name",
+            "value": "test"
+        }, {})
+        assert "error" in result
+
+    def test_highlight_missing_params(self):
+        result = handle_highlight_features({"layer_name": "x"}, {})
+        assert "error" in result
+
+    def test_dispatch_highlight(self):
+        store = make_layer_store()
+        result = dispatch_tool("highlight_features", {
+            "layer_name": "buildings",
+            "attribute": "category_name",
+            "value": "commercial"
+        }, store)
+        assert result["success"] is True
+        assert result["highlighted"] == 1
 
 
 class TestHandleExportAnnotations:
@@ -370,3 +422,126 @@ class TestHandleGetAnnotations:
         assert "total" in result
         assert "categories" in result
         assert "geojson" in result
+
+
+class TestBufferEdgeCases:
+    """Edge case tests for buffer tool."""
+
+    def test_buffer_exceeds_max(self):
+        result = handle_buffer({"distance_m": MAX_BUFFER_DISTANCE_M + 1}, {})
+        assert "error" in result
+        assert "100" in result["error"]  # mentions 100 km limit
+
+    def test_buffer_negative(self):
+        result = handle_buffer({"distance_m": -500}, {})
+        assert "error" in result
+
+    def test_buffer_zero(self):
+        result = handle_buffer({"distance_m": 0}, {})
+        assert "error" in result
+
+    def test_buffer_at_max(self):
+        """Buffer at exactly the max distance should succeed if geometry provided."""
+        store = make_layer_store()
+        result = handle_buffer({"distance_m": MAX_BUFFER_DISTANCE_M, "layer_name": "buildings"}, store)
+        assert "error" not in result
+
+
+class TestImportLayerEdgeCases:
+    """Edge case tests for import_layer tool."""
+
+    def test_import_inline_geojson(self):
+        store = {}
+        geojson = {"type": "FeatureCollection", "features": [
+            {"type": "Feature", "geometry": {"type": "Point", "coordinates": [0, 0]}, "properties": {}}
+        ]}
+        result = handle_import_layer({"layer_name": "test", "geojson": geojson}, store)
+        assert "error" not in result
+        assert result["feature_count"] == 1
+        assert "test" in store
+
+    def test_import_no_geojson_no_file(self):
+        result = handle_import_layer({"layer_name": "test"}, {})
+        assert "upload_url" in result  # Tells user how to upload
+
+    def test_import_no_name(self):
+        result = handle_import_layer({}, {})
+        assert "error" in result
+
+    def test_import_invalid_geojson_type(self):
+        result = handle_import_layer({
+            "layer_name": "bad",
+            "geojson": {"type": "Feature", "geometry": {"type": "Point", "coordinates": [0, 0]}}
+        }, {})
+        assert "error" in result  # Not a FeatureCollection
+
+    def test_import_empty_fc(self):
+        store = {}
+        result = handle_import_layer({
+            "layer_name": "empty",
+            "geojson": {"type": "FeatureCollection", "features": []}
+        }, store)
+        assert result["feature_count"] == 0
+
+
+class TestMergeLayersEdgeCases:
+    """Edge case tests for merge_layers tool."""
+
+    def test_merge_union(self):
+        store = make_layer_store()
+        # Add a second layer
+        store["parks"] = {
+            "type": "FeatureCollection",
+            "features": [{
+                "type": "Feature",
+                "geometry": {"type": "Polygon", "coordinates": [[[-122.4, 47.6], [-122.4, 47.61], [-122.39, 47.61], [-122.39, 47.6], [-122.4, 47.6]]]},
+                "properties": {"category_name": "park"}
+            }]
+        }
+        result = handle_merge_layers({
+            "layer_a": "buildings",
+            "layer_b": "parks",
+            "output_name": "merged",
+            "operation": "union"
+        }, store)
+        assert "error" not in result
+        assert result["feature_count"] == 3  # 2 buildings + 1 park
+        assert "merged" in store
+
+    def test_merge_missing_layer(self):
+        store = make_layer_store()
+        result = handle_merge_layers({
+            "layer_a": "buildings",
+            "layer_b": "nonexistent",
+            "output_name": "merged"
+        }, store)
+        assert "error" in result
+
+    def test_merge_no_store(self):
+        result = handle_merge_layers({
+            "layer_a": "a", "layer_b": "b", "output_name": "c"
+        }, None)
+        assert "error" in result
+
+    def test_merge_missing_params(self):
+        result = handle_merge_layers({"layer_a": "a"}, {})
+        assert "error" in result
+
+    def test_merge_spatial_join(self):
+        store = make_layer_store()
+        store["parks"] = {
+            "type": "FeatureCollection",
+            "features": [{
+                "type": "Feature",
+                "geometry": {"type": "Polygon", "coordinates": [[[-122.36, 47.59], [-122.36, 47.62], [-122.33, 47.62], [-122.33, 47.59], [-122.36, 47.59]]]},
+                "properties": {"park_name": "Central"}
+            }]
+        }
+        result = handle_merge_layers({
+            "layer_a": "buildings",
+            "layer_b": "parks",
+            "output_name": "joined",
+            "operation": "spatial_join"
+        }, store)
+        assert "error" not in result
+        assert result["operation"] == "spatial_join"

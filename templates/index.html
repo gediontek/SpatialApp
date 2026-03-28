@@ -9,6 +9,9 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
     <!-- Leaflet.draw CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet-draw/dist/leaflet.draw.css" />
+    <!-- Leaflet.markercluster CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
     <!-- Custom CSS -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
 </head>
@@ -150,6 +153,14 @@
             <!-- Tab 3: Chat -->
             <div id="tab-chat" class="tab-content">
                 <div id="chatMessages" class="chat-messages"></div>
+                <div class="chat-quick-actions">
+                    <button class="quick-action-btn" data-msg="Show me buildings in the current view">Buildings</button>
+                    <button class="quick-action-btn" data-msg="Classify landcover for this area">Classify</button>
+                    <button class="quick-action-btn" data-msg="What's the total area of the selected layer?">Area</button>
+                    <button class="quick-action-btn" data-msg="Find a route between two places">Route</button>
+                    <button class="quick-action-btn" data-msg="Show me what's within 15 minutes drive">Isochrone</button>
+                    <button class="quick-action-btn" data-msg="Export my annotations as GeoJSON">Export</button>
+                </div>
                 <div class="chat-input-area">
                     <textarea id="chatInput" placeholder="Ask about the map... (e.g., 'Show me buildings in Chicago')" rows="2"></textarea>
                     <button id="chatSendBtn" class="primary-btn">Send</button>
@@ -172,8 +183,13 @@
     <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
     <!-- Leaflet.draw JS -->
     <script src="https://unpkg.com/leaflet-draw/dist/leaflet.draw.js"></script>
+    <!-- Leaflet.markercluster JS -->
+    <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
     <!-- jQuery -->
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <!-- Markdown rendering for chat -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
     <!-- Custom JS -->
     <script src="{{ url_for('static', filename='js/layers.js') }}"></script>
     <script src="{{ url_for('static', filename='js/chat.js') }}"></script>

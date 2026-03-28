@@ -14,6 +14,15 @@ class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
     DEBUG = os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
 
+    @staticmethod
+    def validate():
+        """Validate critical configuration. Call at startup."""
+        if not Config.DEBUG and Config.SECRET_KEY == 'dev-secret-key-change-in-production':
+            raise RuntimeError(
+                "SECRET_KEY must be set in production. "
+                "Set the SECRET_KEY environment variable to a random string."
+            )
+
     # Folders
     UPLOAD_FOLDER = os.environ.get('UPLOAD_FOLDER', os.path.join('static', 'uploads'))
     LABELS_FOLDER = os.environ.get('LABELS_FOLDER', 'labels')

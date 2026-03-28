@@ -562,6 +562,43 @@ input[type="color"] {
     40% { transform: scale(1); opacity: 1; }
 }
 
+.layer-ref {
+    color: #007bff;
+    text-decoration: underline;
+    cursor: pointer;
+    font-weight: 500;
+}
+
+.layer-ref:hover {
+    color: #0056b3;
+}
+
+.chat-quick-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 6px 8px;
+    border-top: 1px solid #eee;
+    background: #f8f9fa;
+}
+
+.quick-action-btn {
+    font-size: 11px;
+    padding: 3px 8px;
+    border: 1px solid #ced4da;
+    border-radius: 12px;
+    background: #fff;
+    color: #495057;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.quick-action-btn:hover {
+    background: #e9ecef;
+    border-color: #007bff;
+    color: #007bff;
+}
+
 .chat-input-area {
     display: flex;
     gap: 6px;

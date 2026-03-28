@@ -2,6 +2,7 @@
 
 import json
 import logging
+import threading
 from typing import Generator
 
 import anthropic
@@ -46,6 +47,7 @@ TOOLS OVERVIEW:
 - spatial_query: Find features matching spatial predicates (intersects, within, contains, within_distance)
 - aggregate: Count features, total area, group by attribute
 - show_layer/hide_layer/remove_layer: Layer visibility control
+- highlight_features: Highlight features matching an attribute value
 - add_annotation: Save features as labeled annotations
 - classify_landcover: Auto-classify land use from OSM data
 - export_annotations: Export annotations as GeoJSON/Shapefile/GeoPackage
@@ -65,15 +67,25 @@ class ChatSession:
         self.max_history = 50  # Keep last 50 messages to prevent memory leak
         self.layer_store = layer_store or {}
         self.client = None
+        self.usage = {"total_input_tokens": 0, "total_output_tokens": 0, "api_calls": 0}
+        self._lock = threading.Lock()  # Prevent concurrent process_message on same session
         self._init_client()
 
     def _init_client(self):
-        """Initialize the Anthropic client if API key is available."""
+        """Initialize the Anthropic client if API key is available.
+
+        Validates the key format and logs clear warnings for misconfiguration.
+        """
         api_key = Config.ANTHROPIC_API_KEY
-        if api_key:
-            self.client = anthropic.Anthropic(api_key=api_key)
-        else:
+        if not api_key:
             logger.warning("No ANTHROPIC_API_KEY set. Chat will use rule-based fallback only.")
+            return
+        if not api_key.startswith("sk-ant-"):
+            logger.error(
+                "ANTHROPIC_API_KEY appears invalid (expected 'sk-ant-...' format). "
+                "Chat may fail on first request. Check your .env file."
+            )
+        self.client = anthropic.Anthropic(api_key=api_key)
 
     def _trim_history(self):
         """Keep message history within bounds to prevent memory leaks."""
@@ -117,6 +129,17 @@ class ChatSession:
         Yields:
             Event dicts for SSE streaming.
         """
+        if not self._lock.acquire(timeout=60):
+            yield {"type": "error", "text": "Session is busy processing another request. Please wait."}
+            return
+
+        try:
+            yield from self._process_message_inner(message, map_context)
+        finally:
+            self._lock.release()
+
+    def _process_message_inner(self, message: str, map_context: dict = None) -> Generator[dict, None, None]:
+        """Internal message processing (called under lock)."""
         if not self.client:
             # Rule-based fallback
             yield from self._fallback_process(message)
@@ -143,6 +166,7 @@ class ChatSession:
         tools = get_tool_definitions()
         tool_call_count = 0
         max_tool_calls = Config.MAX_TOOL_CALLS_PER_MESSAGE
+        completed_tools = []  # Track successful tools for error recovery
 
         try:
             while True:
@@ -153,6 +177,20 @@ class ChatSession:
                     tools=tools,
                     messages=self.messages,
                 )
+
+                # Track token usage
+                if hasattr(response, 'usage') and response.usage:
+                    self.usage["total_input_tokens"] += getattr(response.usage, 'input_tokens', 0)
+                    self.usage["total_output_tokens"] += getattr(response.usage, 'output_tokens', 0)
+                    self.usage["api_calls"] += 1
+                    logger.info(
+                        "Claude API usage: input=%d output=%d total_in=%d total_out=%d calls=%d",
+                        getattr(response.usage, 'input_tokens', 0),
+                        getattr(response.usage, 'output_tokens', 0),
+                        self.usage["total_input_tokens"],
+                        self.usage["total_output_tokens"],
+                        self.usage["api_calls"],
+                    )
 
                 # Serialize SDK objects to dicts for JSON safety
                 assistant_content = response.content
@@ -184,15 +222,22 @@ class ChatSession:
                             # Execute tool
                             try:
                                 result = dispatch_tool(tool_name, tool_input, self.layer_store)
-                            except Exception as e:
-                                logger.error(f"Tool {tool_name} failed: {e}")
+                            except ValueError as e:
+                                # Expected validation errors — safe to return
                                 result = {"error": str(e)}
+                            except Exception as e:
+                                # Unexpected errors — log details, return generic message
+                                logger.error(f"Tool {tool_name} failed: {e}", exc_info=True)
+                                result = {"error": f"Tool '{tool_name}' encountered an internal error."}
 
                             yield {"type": "tool_result", "tool": tool_name, "result": result}
 
+                            if "error" not in result:
+                                completed_tools.append(tool_name)
+
                             # Handle special tool results
                             # Tools that produce layers
-                            layer_tools = {"fetch_osm", "buffer", "spatial_query", "search_nearby", "classify_landcover", "find_route", "isochrone"}
+                            layer_tools = {"fetch_osm", "buffer", "spatial_query", "search_nearby", "classify_landcover", "find_route", "isochrone", "import_layer", "merge_layers"}
                             if tool_name in layer_tools and "geojson" in result:
                                 layer_name = result.get("layer_name", f"layer_{tool_call_count}")
                                 self.layer_store[layer_name] = result["geojson"]
@@ -226,6 +271,10 @@ class ChatSession:
                             if tool_name in ("show_layer", "hide_layer", "remove_layer") and result.get("success"):
                                 yield {"type": "layer_command", **result}
 
+                            # Feature highlighting
+                            if tool_name == "highlight_features" and result.get("success"):
+                                yield {"type": "highlight", **result}
+
                             # Heatmap rendering instruction
                             if tool_name == "heatmap" and result.get("success"):
                                 yield {"type": "heatmap", **result}
@@ -252,15 +301,28 @@ class ChatSession:
                             text_parts.append(block.text)
 
                     if text_parts:
-                        yield {"type": "message", "text": "\n".join(text_parts), "done": True}
+                        yield {
+                            "type": "message",
+                            "text": "\n".join(text_parts),
+                            "done": True,
+                            "usage": self.usage.copy(),
+                        }
                     break
 
         except anthropic.APIError as e:
             logger.error(f"Claude API error: {e}")
-            yield {"type": "error", "text": f"AI service error: {str(e)}"}
+            partial = ""
+            if completed_tools:
+                partial = f" Completed {len(completed_tools)} tool(s) before failure: {', '.join(completed_tools)}. Any layers created are still on the map."
+            # Sanitize: only show error type, not full details
+            error_type = type(e).__name__
+            yield {"type": "error", "text": f"AI service error ({error_type}). Please try again.{partial}"}
         except Exception as e:
             logger.error(f"Chat processing error: {e}", exc_info=True)
-            yield {"type": "error", "text": f"Error processing message: {str(e)}"}
+            partial = ""
+            if completed_tools:
+                partial = f" Completed {len(completed_tools)} tool(s) before failure: {', '.join(completed_tools)}. Any layers created are still on the map."
+            yield {"type": "error", "text": f"An unexpected error occurred. Please try again.{partial}"}
 
     def _fallback_process(self, message: str) -> Generator[dict, None, None]:
         """Simple rule-based fallback when Claude API is unavailable."""

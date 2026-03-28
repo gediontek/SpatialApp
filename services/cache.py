@@ -1,4 +1,4 @@
-"""Caching layer for external API responses (Nominatim, Overpass, OSRM)."""
+"""Caching layer for external API responses (Nominatim, Overpass, Valhalla)."""
 
 import hashlib
 import json
@@ -89,4 +89,5 @@ class FileCache:
 # Pre-configured caches for different services
 geocode_cache = FileCache("geocode", ttl_seconds=86400)      # 24 hours
 overpass_cache = FileCache("overpass", ttl_seconds=3600)      # 1 hour
-osrm_cache = FileCache("osrm", ttl_seconds=3600)             # 1 hour
+osrm_cache = FileCache("osrm", ttl_seconds=3600)             # 1 hour (legacy)
+valhalla_cache = FileCache("valhalla", ttl_seconds=3600)     # 1 hour

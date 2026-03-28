@@ -109,11 +109,14 @@ def dispatch_tool(tool_name: str, params: dict, layer_store: dict = None) -> dic
         "show_layer": lambda p: handle_layer_visibility(p, "show"),
         "hide_layer": lambda p: handle_layer_visibility(p, "hide"),
         "remove_layer": lambda p: handle_layer_visibility(p, "remove"),
+        "highlight_features": lambda p: handle_highlight_features(p, layer_store),
         # Phase 3
         "add_annotation": lambda p: handle_add_annotation(p, layer_store),
         "classify_landcover": handle_classify_landcover,
         "export_annotations": handle_export_annotations,
         "get_annotations": handle_get_annotations,
+        "import_layer": lambda p: handle_import_layer(p, layer_store),
+        "merge_layers": lambda p: handle_merge_layers(p, layer_store),
         # Phase 4
         "find_route": handle_find_route,
         "isochrone": handle_isochrone,
@@ -320,10 +323,10 @@ def handle_calculate_area(params: dict, layer_store: dict = None) -> dict:
 
     geometries = []
 
-    if layer_name and layer_store and layer_name in layer_store:
-        # Get features from layer store
-        layer_geojson = layer_store[layer_name]
-        features = layer_geojson.get("features", [])
+    if layer_name:
+        features, err = _get_layer_snapshot(layer_store, layer_name)
+        if err:
+            return {"error": err}
         for f in features:
             geom = f.get("geometry")
             if geom and geom.get("type") in ("Polygon", "MultiPolygon"):
@@ -417,16 +420,38 @@ def _safe_geojson_to_shapely(geojson_geom):
         return None
 
 
-def _get_layer_geometries(layer_store, layer_name):
-    """Extract Shapely geometries from a named layer. Thread-safe copy."""
-    if not layer_store or layer_name not in layer_store:
-        return None, f"Layer '{layer_name}' not found"
+def _get_layer_snapshot(layer_store, layer_name):
+    """Get a snapshot of a layer's features list. Thread-safe."""
     try:
-        # Take a copy of features to avoid race conditions
-        geojson = layer_store[layer_name]
-        features = list(geojson.get("features", []))
+        from app import layer_lock
+    except ImportError:
+        layer_lock = None
+
+    if not layer_store:
+        return None, f"Layer '{layer_name}' not found"
+
+    try:
+        if layer_lock:
+            with layer_lock:
+                geojson = layer_store.get(layer_name)
+                # Mark as recently used for LRU eviction
+                if geojson is not None and hasattr(layer_store, 'move_to_end'):
+                    layer_store.move_to_end(layer_name)
+        else:
+            geojson = layer_store.get(layer_name)
     except (KeyError, TypeError):
         return None, f"Layer '{layer_name}' not found"
+
+    if geojson is None:
+        return None, f"Layer '{layer_name}' not found"
+    return list(geojson.get("features", [])), None
+
+
+def _get_layer_geometries(layer_store, layer_name):
+    """Extract Shapely geometries from a named layer. Thread-safe copy."""
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return None, err
     geometries = []
     for f in features:
         geom = f.get("geometry")
@@ -437,11 +462,16 @@ def _get_layer_geometries(layer_store, layer_name):
     return geometries, None
 
 
+MAX_BUFFER_DISTANCE_M = 100000  # 100 km max
+
+
 def handle_buffer(params: dict, layer_store: dict = None) -> dict:
     """Create a buffer around geometry or layer features."""
     distance_m = params.get("distance_m")
     if not distance_m or distance_m <= 0:
         return {"error": "distance_m must be a positive number"}
+    if distance_m > MAX_BUFFER_DISTANCE_M:
+        return {"error": f"distance_m must be at most {MAX_BUFFER_DISTANCE_M} meters (100 km)"}
 
     layer_name = params.get("layer_name")
     geometry = params.get("geometry")
@@ -528,7 +558,8 @@ def handle_spatial_query(params: dict, layer_store: dict = None) -> dict:
         target_geom = buffer_geometry(target_geom, distance_m)
 
     # Get original features from source layer for result
-    source_features = layer_store[source_layer].get("features", [])
+    source_features, _ = _get_layer_snapshot(layer_store, source_layer)
+    source_features = source_features or []
 
     matching_features = []
     for i, (geom, feature) in enumerate(zip(source_geoms, source_features)):
@@ -565,10 +596,9 @@ def handle_aggregate(params: dict, layer_store: dict = None) -> dict:
     operation = params.get("operation")
     group_by_attr = params.get("group_by")
 
-    if not layer_store or layer_name not in layer_store:
-        return {"error": f"Layer '{layer_name}' not found"}
-
-    features = layer_store[layer_name].get("features", [])
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
 
     if operation == "count":
         if group_by_attr:
@@ -707,6 +737,44 @@ def handle_layer_visibility(params: dict, action: str) -> dict:
     }
 
 
+def handle_highlight_features(params: dict, layer_store: dict = None) -> dict:
+    """Highlight features matching an attribute value. Returns instruction for frontend."""
+    layer_name = params.get("layer_name")
+    attribute = params.get("attribute")
+    value = params.get("value")
+    color = params.get("color", "#ff0000")
+
+    if not layer_name:
+        return {"error": "layer_name is required"}
+    if not attribute or not value:
+        return {"error": "attribute and value are required"}
+
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
+
+    matched = 0
+    for f in features:
+        props = f.get("properties", {})
+        # Check nested osm_tags as well
+        if str(props.get(attribute, "")) == str(value):
+            matched += 1
+        elif str(props.get("osm_tags", {}).get(attribute, "")) == str(value):
+            matched += 1
+
+    return {
+        "success": True,
+        "action": "highlight",
+        "layer_name": layer_name,
+        "attribute": attribute,
+        "value": value,
+        "color": color,
+        "highlighted": matched,
+        "total": len(features),
+        "description": f"Highlighted {matched}/{len(features)} features where {attribute}={value}",
+    }
+
+
 # ============================================================
 # Phase 3: Annotation & Classification Handlers
 # ============================================================
@@ -729,24 +797,25 @@ def handle_add_annotation(params: dict, layer_store: dict = None) -> dict:
     added = 0
 
     with annotation_lock:
-        if layer_name and layer_store and layer_name in layer_store:
-            features = layer_store[layer_name].get("features", [])
-            for f in features:
-                geom = f.get("geometry")
-                if geom:
-                    annotation = {
-                        "type": "Feature",
-                        "id": len(geo_coco_annotations) + 1,
-                        "properties": {
-                            "category_name": category_name,
-                            "color": color,
-                            "source": "chat",
-                            "created_at": datetime.datetime.now().isoformat(),
-                        },
-                        "geometry": geom,
-                    }
-                    geo_coco_annotations.append(annotation)
-                    added += 1
+        if layer_name:
+            layer_features, _ = _get_layer_snapshot(layer_store, layer_name)
+            if layer_features:
+                for f in layer_features:
+                    geom = f.get("geometry")
+                    if geom:
+                        annotation = {
+                            "type": "Feature",
+                            "id": len(geo_coco_annotations) + 1,
+                            "properties": {
+                                "category_name": category_name,
+                                "color": color,
+                                "source": "chat",
+                                "created_at": datetime.datetime.now().isoformat(),
+                            },
+                            "geometry": geom,
+                        }
+                        geo_coco_annotations.append(annotation)
+                        added += 1
         elif geometry:
             annotation = {
                 "type": "Feature",
@@ -767,63 +836,98 @@ def handle_add_annotation(params: dict, layer_store: dict = None) -> dict:
         if added > 0:
             save_annotations_to_file()
 
+            # Persist to database
+            try:
+                from app import db as app_db
+                if app_db:
+                    if layer_name and layer_store and layer_name in layer_store:
+                        for f in layer_store[layer_name].get("features", []):
+                            geom = f.get("geometry")
+                            if geom:
+                                app_db.save_annotation(category_name, geom, color, "chat")
+                    elif geometry:
+                        app_db.save_annotation(category_name, geometry, color, "chat")
+            except Exception as db_err:
+                logger.warning(f"DB save failed (chat annotation): {db_err}")
+
     return {"success": True, "added": added, "category": category_name}
 
 
-def handle_classify_landcover(params: dict) -> dict:
-    """Classify landcover using OSM_auto_label module."""
-    try:
-        from OSM_auto_label import download_osm_landcover, OSMLandcoverClassifier
-        from OSM_auto_label.downloader import download_by_bbox
-        from OSM_auto_label.config import CATEGORY_COLORS
-    except ImportError:
-        return {"error": "OSM auto-label module not available"}
-
+def _classify_landcover_work(params: dict) -> dict:
+    """Heavy classification work — runs in a thread pool to avoid blocking."""
+    from OSM_auto_label import download_osm_landcover, OSMLandcoverClassifier
+    from OSM_auto_label.downloader import download_by_bbox
+    from OSM_auto_label.config import CATEGORY_COLORS
     import re
 
     location = params.get("location")
     bbox = params.get("bbox")
     classes = params.get("classes")
 
+    if bbox:
+        n, s, e, w = bbox.get("north"), bbox.get("south"), bbox.get("east"), bbox.get("west")
+        if None in (n, s, e, w):
+            return {"error": "bbox requires north, south, east, west"}
+        gdf = download_by_bbox(north=n, south=s, east=e, west=w, timeout=300)
+        safe_name = f"bbox_{abs(hash((n, s, e, w))) % 10000}"
+    else:
+        gdf = download_osm_landcover(location, timeout=300)
+        safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', location.split(',')[0].strip().lower())
+
+    if gdf is None or len(gdf) == 0:
+        return {"error": "No landcover data found"}
+
+    classifier = OSMLandcoverClassifier()
+    gdf_classified = classifier.process_geodataframe(gdf, name=None)
+
+    if gdf_classified is None or len(gdf_classified) == 0:
+        return {"error": "Classification produced no results"}
+
+    if classes and len(classes) > 0:
+        gdf_classified = gdf_classified[gdf_classified['classname'].isin(classes)]
+
+    if len(gdf_classified) == 0:
+        return {"error": "No features found for selected classes"}
+
+    import json as json_mod
+    geojson_data = json_mod.loads(gdf_classified.to_json())
+    layer_name = f"classified_{safe_name}"
+
+    return {
+        "geojson": geojson_data,
+        "layer_name": layer_name,
+        "feature_count": len(gdf_classified),
+        "colors": CATEGORY_COLORS,
+    }
+
+
+def handle_classify_landcover(params: dict) -> dict:
+    """Classify landcover using OSM_auto_label module.
+
+    Runs the heavy download+classify work in a thread pool so it doesn't
+    block the Flask server for other requests. Timeout: 5 minutes.
+    """
+    try:
+        from OSM_auto_label import download_osm_landcover  # noqa: F401
+    except ImportError:
+        return {"error": "OSM auto-label module not available"}
+
+    location = params.get("location")
+    bbox = params.get("bbox")
+
     if not location and not bbox:
         return {"error": "Provide either location or bbox"}
 
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+
     try:
-        if bbox:
-            n, s, e, w = bbox.get("north"), bbox.get("south"), bbox.get("east"), bbox.get("west")
-            if None in (n, s, e, w):
-                return {"error": "bbox requires north, south, east, west"}
-            gdf = download_by_bbox(north=n, south=s, east=e, west=w, timeout=300)
-            safe_name = f"bbox_{abs(hash((n, s, e, w))) % 10000}"
-        else:
-            gdf = download_osm_landcover(location, timeout=300)
-            safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', location.split(',')[0].strip().lower())
-
-        if gdf is None or len(gdf) == 0:
-            return {"error": "No landcover data found"}
-
-        classifier = OSMLandcoverClassifier()
-        gdf_classified = classifier.process_geodataframe(gdf, name=None)
-
-        if gdf_classified is None or len(gdf_classified) == 0:
-            return {"error": "Classification produced no results"}
-
-        if classes and len(classes) > 0:
-            gdf_classified = gdf_classified[gdf_classified['classname'].isin(classes)]
-
-        if len(gdf_classified) == 0:
-            return {"error": "No features found for selected classes"}
-
-        import json as json_mod
-        geojson_data = json_mod.loads(gdf_classified.to_json())
-        layer_name = f"classified_{safe_name}"
-
-        return {
-            "geojson": geojson_data,
-            "layer_name": layer_name,
-            "feature_count": len(gdf_classified),
-            "colors": CATEGORY_COLORS,
-        }
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_classify_landcover_work, params)
+            result = future.result(timeout=300)  # 5 minute timeout
+        return result
+    except FutureTimeout:
+        logger.error("Classification timed out after 300s")
+        return {"error": "Classification timed out. Try a smaller area."}
     except Exception as e:
         logger.error(f"Classification error: {e}", exc_info=True)
         return {"error": str(e)}
@@ -874,21 +978,109 @@ def handle_get_annotations(params: dict) -> dict:
     }
 
 
+def handle_merge_layers(params: dict, layer_store: dict = None) -> dict:
+    """Merge two layers or perform a spatial join."""
+    import geopandas as gpd_mod
+
+    layer_a = params.get("layer_a")
+    layer_b = params.get("layer_b")
+    output_name = params.get("output_name")
+    operation = params.get("operation", "union")
+
+    if not layer_a or not layer_b or not output_name:
+        return {"error": "layer_a, layer_b, and output_name are required"}
+
+    if not layer_store:
+        return {"error": "No layer store available"}
+
+    if layer_a not in layer_store:
+        return {"error": f"Layer '{layer_a}' not found"}
+    if layer_b not in layer_store:
+        return {"error": f"Layer '{layer_b}' not found"}
+
+    try:
+        gdf_a = gpd_mod.GeoDataFrame.from_features(
+            layer_store[layer_a].get("features", [])
+        )
+        gdf_b = gpd_mod.GeoDataFrame.from_features(
+            layer_store[layer_b].get("features", [])
+        )
+
+        if gdf_a.crs is None:
+            gdf_a.set_crs(epsg=4326, inplace=True)
+        if gdf_b.crs is None:
+            gdf_b.set_crs(epsg=4326, inplace=True)
+
+        if operation == "spatial_join":
+            merged = gpd_mod.sjoin(gdf_a, gdf_b, how="left", predicate="intersects")
+            # Drop the index_right column that sjoin adds
+            if "index_right" in merged.columns:
+                merged = merged.drop(columns=["index_right"])
+        else:
+            # Union: concatenate both GeoDataFrames
+            import pandas as pd_mod
+            merged = gpd_mod.GeoDataFrame(
+                pd_mod.concat([gdf_a, gdf_b], ignore_index=True),
+                crs=gdf_a.crs,
+            )
+
+        import json as json_mod
+        geojson_data = json_mod.loads(merged.to_json())
+
+        if layer_store is not None:
+            layer_store[output_name] = geojson_data
+
+        return {
+            "geojson": geojson_data,
+            "layer_name": output_name,
+            "feature_count": len(geojson_data.get("features", [])),
+            "operation": operation,
+            "description": f"Merged '{layer_a}' + '{layer_b}' → '{output_name}' ({operation}, {len(geojson_data.get('features', []))} features)",
+        }
+    except Exception as e:
+        logger.error(f"Merge error: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
+def handle_import_layer(params: dict, layer_store: dict = None) -> dict:
+    """Import GeoJSON data as a named layer."""
+    layer_name = params.get("layer_name")
+    geojson = params.get("geojson")
+
+    if not layer_name:
+        return {"error": "layer_name is required"}
+
+    if geojson:
+        # Direct GeoJSON import
+        if not isinstance(geojson, dict) or geojson.get("type") != "FeatureCollection":
+            return {"error": "geojson must be a GeoJSON FeatureCollection"}
+
+        if layer_store is not None:
+            layer_store[layer_name] = geojson
+
+        return {
+            "geojson": geojson,
+            "layer_name": layer_name,
+            "feature_count": len(geojson.get("features", [])),
+            "description": f"Imported {len(geojson.get('features', []))} features as '{layer_name}'",
+        }
+
+    # No inline GeoJSON — tell the user to use the file upload
+    return {
+        "success": True,
+        "layer_name": layer_name,
+        "description": "To import a file, use the upload button or drag-and-drop a GeoJSON, Shapefile (.zip), or GeoPackage (.gpkg) file onto the map.",
+        "upload_url": "/api/import",
+    }
+
+
 # ============================================================
 # Phase 4: Routing Handlers
 # ============================================================
 
-# Average speeds (m/s) for isochrone estimation
-PROFILE_SPEEDS = {
-    "driving": 13.9,   # ~50 km/h urban
-    "walking": 1.4,    # ~5 km/h
-    "cycling": 4.2,    # ~15 km/h
-}
-
-
 def handle_find_route(params: dict) -> dict:
-    """Find a route between two points using OSRM."""
-    from services.osrm_client import get_route
+    """Find a route between two points using Valhalla."""
+    from services.valhalla_client import get_route
 
     from_point = params.get("from_point")
     to_point = params.get("to_point")
@@ -980,10 +1172,13 @@ def handle_find_route(params: dict) -> dict:
 
 
 def handle_isochrone(params: dict) -> dict:
-    """Calculate reachable area from a point.
+    """Calculate reachable area from a point using Valhalla.
 
-    Uses buffer-based estimation: time * avg_speed = radius, then buffers.
+    Returns a true network-based isochrone polygon (not a circular buffer).
+    Falls back to buffer estimation if Valhalla is unavailable.
     """
+    from services.valhalla_client import get_isochrone
+
     lat = params.get("lat")
     lon = params.get("lon")
     location = params.get("location")
@@ -1001,18 +1196,63 @@ def handle_isochrone(params: dict) -> dict:
         else:
             return {"error": "Provide lat/lon or location"}
 
-    # Calculate radius
+    if not time_minutes and not distance_m:
+        return {"error": "Provide time_minutes or distance_m"}
+
+    # Try Valhalla network-based isochrone
+    distance_km = distance_m / 1000 if distance_m else None
+    iso_data = get_isochrone(
+        lon, lat,
+        time_minutes=time_minutes,
+        distance_km=distance_km,
+        profile=profile,
+    )
+
+    if iso_data is not None:
+        # Valhalla succeeded — true network isochrone
+        # Add center marker
+        iso_data["features"].append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [lon, lat]},
+            "properties": {"role": "center"},
+        })
+
+        desc = f"{time_minutes}min" if time_minutes else f"{int(distance_m)}m"
+        layer_name = f"isochrone_{desc}_{profile}"
+
+        # Calculate area of the isochrone polygon
+        area_sq_km = 0
+        for f in iso_data["features"]:
+            geom_type = f.get("geometry", {}).get("type", "")
+            if geom_type in ("Polygon", "MultiPolygon"):
+                try:
+                    shp = shape(f["geometry"])
+                    area_sq_km += abs(geodesic_area(shp)) / 1e6
+                except Exception:
+                    pass
+
+        return {
+            "geojson": iso_data,
+            "layer_name": layer_name,
+            "feature_count": len(iso_data["features"]),
+            "area_sq_km": round(area_sq_km, 2),
+            "profile": profile,
+            "method": "valhalla_network",
+        }
+
+    # Fallback: buffer-based estimation if Valhalla unavailable
+    logger.warning("Valhalla unavailable, falling back to buffer estimation")
+
+    PROFILE_SPEEDS = {"driving": 13.9, "walking": 1.4, "cycling": 4.2}
+
     if time_minutes:
         speed = PROFILE_SPEEDS.get(profile, PROFILE_SPEEDS["driving"])
         radius_m = time_minutes * 60 * speed
-    elif distance_m:
-        radius_m = distance_m
     else:
-        return {"error": "Provide time_minutes or distance_m"}
+        radius_m = distance_m
 
-    # Create buffer around center point
-    from shapely.geometry import Point
-    center = Point(lon, lat)
+    from shapely.geometry import Point as ShapelyPoint
+    center = ShapelyPoint(lon, lat)
     buffered = buffer_geometry(center, radius_m)
 
     iso_geojson = {
@@ -1028,7 +1268,6 @@ def handle_isochrone(params: dict) -> dict:
                     "method": "buffer_estimate",
                 },
             },
-            # Center marker
             {
                 "type": "Feature",
                 "geometry": {"type": "Point", "coordinates": [lon, lat]},
@@ -1057,10 +1296,9 @@ def handle_heatmap(params: dict, layer_store: dict = None) -> dict:
     radius = params.get("radius", 25)
     max_zoom = params.get("max_zoom", 15)
 
-    if not layer_store or layer_name not in layer_store:
-        return {"error": f"Layer '{layer_name}' not found"}
-
-    features = layer_store[layer_name].get("features", [])
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
     if not features:
         return {"error": "Layer has no features"}
 

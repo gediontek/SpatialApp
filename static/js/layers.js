@@ -11,6 +11,8 @@ var LayerManager = (function() {
         refreshUI();
     }
 
+    var CLUSTER_THRESHOLD = 200;  // Auto-cluster when point count exceeds this
+
     function addLayer(name, geojson, style) {
         // Remove existing layer with same name
         if (layers[name]) {
@@ -28,8 +30,29 @@ var LayerManager = (function() {
             return defaultStyle;
         };
 
-        var leafletLayer = L.geoJSON(geojson, {
+        var featureCount = geojson.features ? geojson.features.length : 0;
+
+        // Check if this is a point-heavy layer that should be clustered
+        var pointCount = 0;
+        if (geojson.features) {
+            for (var i = 0; i < geojson.features.length; i++) {
+                var geomType = geojson.features[i].geometry ? geojson.features[i].geometry.type : '';
+                if (geomType === 'Point' || geomType === 'MultiPoint') pointCount++;
+            }
+        }
+        var useClustering = window.L && L.markerClusterGroup && pointCount > CLUSTER_THRESHOLD;
+
+        var geoJsonLayer = L.geoJSON(geojson, {
             style: styleFunc,
+            pointToLayer: useClustering ? function(feature, latlng) {
+                return L.circleMarker(latlng, {
+                    radius: 6,
+                    fillColor: defaultStyle.color,
+                    color: '#333',
+                    weight: 1,
+                    fillOpacity: 0.7
+                });
+            } : undefined,
             onEachFeature: function(feature, layer) {
                 var props = feature.properties || {};
                 var popup = '<b>' + escapeHtml(props.category_name || props.classname || 'Feature') + '</b>';
@@ -39,15 +62,27 @@ var LayerManager = (function() {
             }
         });
 
-        leafletLayer.addTo(map);
+        var leafletLayer;
+        if (useClustering) {
+            leafletLayer = L.markerClusterGroup({
+                maxClusterRadius: 50,
+                spiderfyOnMaxZoom: true,
+                showCoverageOnHover: false,
+                disableClusteringAtZoom: 18,
+            });
+            leafletLayer.addLayer(geoJsonLayer);
+        } else {
+            leafletLayer = geoJsonLayer;
+        }
 
-        var featureCount = geojson.features ? geojson.features.length : 0;
+        leafletLayer.addTo(map);
 
         layers[name] = {
             leafletLayer: leafletLayer,
             visible: true,
             featureCount: featureCount,
-            style: defaultStyle
+            style: defaultStyle,
+            clustered: useClustering
         };
 
         refreshUI();
@@ -94,6 +129,19 @@ var LayerManager = (function() {
 
     function getLayerCount() {
         return Object.keys(layers).length;
+    }
+
+    function highlightFeatures(layerName, attribute, value, color) {
+        if (!layers[layerName]) return;
+
+        var leafletLayer = layers[layerName].leafletLayer;
+        leafletLayer.eachLayer(function(featureLayer) {
+            var props = featureLayer.feature ? featureLayer.feature.properties || {} : {};
+            var tags = props.osm_tags || {};
+            if (String(props[attribute]) === String(value) || String(tags[attribute]) === String(value)) {
+                featureLayer.setStyle({ color: color, weight: 3, fillColor: color, fillOpacity: 0.5 });
+            }
+        });
     }
 
     function refreshUI() {
@@ -162,6 +210,7 @@ var LayerManager = (function() {
         toggleLayer: toggleLayer,
         fitToLayer: fitToLayer,
         getLayerNames: getLayerNames,
-        getLayerCount: getLayerCount
+        getLayerCount: getLayerCount,
+        highlightFeatures: highlightFeatures
     };
 })();

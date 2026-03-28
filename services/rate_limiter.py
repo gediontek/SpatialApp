@@ -45,4 +45,5 @@ class RateLimiter:
 # Pre-configured limiters
 nominatim_limiter = RateLimiter("nominatim", min_interval_seconds=1.0)  # Nominatim policy
 overpass_limiter = RateLimiter("overpass", min_interval_seconds=2.0)    # Be gentle
-osrm_limiter = RateLimiter("osrm_public", min_interval_seconds=1.0)    # Public demo
+osrm_limiter = RateLimiter("osrm_public", min_interval_seconds=1.0)    # Public demo (legacy)
+valhalla_limiter = RateLimiter("valhalla_public", min_interval_seconds=1.0)  # FOSSGIS policy
