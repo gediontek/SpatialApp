@@ -54,6 +54,7 @@ def validate_bbox(south: float, west: float, north: float, east: float) -> tuple
     - Latitude in [-90, 90]
     - Longitude in [-180, 180]
     - south <= north
+    - west > east is allowed (antimeridian crossing)
 
     Returns:
         Tuple of (south, west, north, east) as floats.
@@ -72,6 +73,8 @@ def validate_bbox(south: float, west: float, north: float, east: float) -> tuple
         raise ValueError(f"Longitude out of range [-180, 180]: west={west}, east={east}")
     if south > north:
         raise ValueError(f"south ({south}) must be <= north ({north})")
+    # Note: west > east is valid — it represents an antimeridian-crossing bbox
+    # e.g., west=170, east=-170 spans the dateline. Overpass API handles this.
 
     return (south, west, north, east)
 
@@ -82,20 +85,29 @@ def bbox_to_overpass(south: float, west: float, north: float, east: float) -> st
 
 
 def estimate_utm_epsg(lon: float, lat: float) -> int:
-    """Estimate the UTM EPSG code for a given WGS84 coordinate.
+    """Estimate the best metric projection EPSG code for a given WGS84 coordinate.
+
+    Uses UTM for latitudes within ±84°. Falls back to UPS (Universal Polar
+    Stereographic) for polar regions where UTM is undefined.
 
     Args:
         lon: Longitude in degrees.
         lat: Latitude in degrees.
 
     Returns:
-        EPSG code for the appropriate UTM zone.
+        EPSG code for the appropriate projection zone.
     """
+    # Polar regions: use UPS (Universal Polar Stereographic)
+    if lat > 84.0:
+        return 32661  # UPS North (EPSG:32661)
+    if lat < -80.0:
+        return 32761  # UPS South (EPSG:32761)
+
     zone_number = int((lon + 180) / 6) + 1
     if lat >= 0:
-        return 32600 + zone_number  # Northern hemisphere
+        return 32600 + zone_number  # Northern hemisphere UTM
     else:
-        return 32700 + zone_number  # Southern hemisphere
+        return 32700 + zone_number  # Southern hemisphere UTM
 
 
 def project_geometry(geometry, from_crs: int, to_crs: int):

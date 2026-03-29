@@ -620,14 +620,17 @@ def handle_aggregate(params: dict, layer_store: dict = None) -> dict:
 
     elif operation == "area":
         total_area = 0.0
+        polygon_count = 0
         for f in features:
             geom = f.get("geometry")
             if geom and geom.get("type") in ("Polygon", "MultiPolygon"):
                 total_area += geodesic_area(geojson_to_shapely(geom))
+                polygon_count += 1
         return {
             "total_area_sq_m": round(total_area, 2),
             "total_area_sq_km": round(total_area / 1e6, 4),
             "total_area_acres": round(total_area / 4046.86, 2),
+            "polygon_count": polygon_count,
             "feature_count": len(features),
         }
 

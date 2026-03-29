@@ -120,8 +120,9 @@ def validate_bbox(bbox_str):
             return False, None
         if not (-180 <= west <= 180 and -180 <= east <= 180):
             return False, None
-        if south > north or west > east:
+        if south > north:
             return False, None
+        # west > east is valid (antimeridian crossing)
         return True, bbox_str
     except (ValueError, AttributeError):
         return False, None

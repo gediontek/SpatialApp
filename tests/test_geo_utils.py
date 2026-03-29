@@ -275,3 +275,68 @@ class TestGeoJsonConversion:
         restored = shapely_to_geojson(geom)
         assert restored["type"] == "Polygon"
         assert len(restored["coordinates"][0]) == 5
+
+
+class TestSpatialEdgeCases:
+    """Spatial edge cases: antimeridian, poles, degenerate geometry."""
+
+    def test_bbox_antimeridian_crossing(self):
+        """west > east is valid for antimeridian-crossing bbox."""
+        result = validate_bbox(south=-45, west=170, north=-30, east=-170)
+        assert result == (-45.0, 170.0, -30.0, -170.0)
+
+    def test_bbox_normal(self):
+        result = validate_bbox(south=47.5, west=-122.5, north=47.6, east=-122.3)
+        assert result[0] == 47.5
+
+    def test_bbox_south_greater_than_north_rejected(self):
+        with pytest.raises(ValueError):
+            validate_bbox(south=48, west=-122, north=47, east=-121)
+
+    def test_utm_polar_north(self):
+        """Polar regions should use UPS, not crash."""
+        epsg = estimate_utm_epsg(lon=0, lat=85)
+        assert epsg == 32661  # UPS North
+
+    def test_utm_polar_south(self):
+        epsg = estimate_utm_epsg(lon=0, lat=-81)
+        assert epsg == 32761  # UPS South
+
+    def test_utm_mid_latitude(self):
+        epsg = estimate_utm_epsg(lon=-122.3, lat=47.6)
+        assert 32601 <= epsg <= 32660  # Northern UTM zone
+
+    def test_buffer_at_pole(self):
+        """Buffer at high latitude should not crash."""
+        from shapely.geometry import Point
+        # Svalbard (78°N) — within UTM range
+        point = Point(15.6, 78.2)
+        buffered = buffer_geometry(point, 1000)
+        assert buffered.is_valid
+        assert not buffered.is_empty
+
+    def test_buffer_near_antimeridian(self):
+        """Buffer near 180° longitude should produce valid geometry."""
+        from shapely.geometry import Point
+        point = Point(179.9, 0)
+        buffered = buffer_geometry(point, 5000)
+        assert buffered.is_valid
+
+    def test_geodesic_area_zero_area_polygon(self):
+        """Degenerate polygon (line) should return ~0 area."""
+        from shapely.geometry import Polygon
+        # Three collinear points forming a degenerate polygon
+        poly = Polygon([(-122.3, 47.6), (-122.3, 47.7), (-122.3, 47.6)])
+        area = geodesic_area(poly)
+        assert area < 1.0  # Essentially zero
+
+    def test_geodesic_distance_same_point(self):
+        p = ValidatedPoint(lat=47.6, lon=-122.3)
+        assert geodesic_distance(p, p) == 0.0
+
+    def test_validated_point_antimeridian(self):
+        """Points at ±180 longitude are valid."""
+        p1 = ValidatedPoint(lat=0, lon=180)
+        p2 = ValidatedPoint(lat=0, lon=-180)
+        assert p1.as_geojson() == [180, 0]
+        assert p2.as_geojson() == [-180, 0]
