@@ -28,17 +28,26 @@ def get_connection() -> sqlite3.Connection:
 
 
 def init_db():
-    """Create database tables if they don't exist."""
+    """Create database tables if they don't exist.
+
+    Handles migration from older schemas gracefully:
+    - Adds user_id columns to existing tables
+    - Creates new tables (users, query_metrics) if missing
+    - Layers table keeps original PK on existing DBs
+    """
     conn = get_connection()
     try:
-        conn.executescript("""
+        # Create tables individually to handle existing DBs gracefully
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id TEXT PRIMARY KEY,
                 username TEXT NOT NULL,
                 api_token TEXT UNIQUE NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
+            )
+        """)
 
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS annotations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id TEXT DEFAULT 'anonymous',
@@ -48,8 +57,13 @@ def init_db():
                 geometry_json TEXT NOT NULL,
                 properties_json TEXT DEFAULT '{}',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
+            )
+        """)
 
+        # Layers table: on fresh DBs use composite PK (name, user_id).
+        # On existing DBs, the table already exists with name TEXT PRIMARY KEY
+        # and user_id gets added via migration below.
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS layers (
                 name TEXT NOT NULL,
                 user_id TEXT DEFAULT 'anonymous',
@@ -58,16 +72,20 @@ def init_db():
                 style_json TEXT DEFAULT '{}',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (name, user_id)
-            );
+            )
+        """)
 
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS chat_sessions (
                 session_id TEXT PRIMARY KEY,
                 user_id TEXT DEFAULT 'anonymous',
                 messages_json TEXT DEFAULT '[]',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
+            )
+        """)
 
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS query_metrics (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id TEXT DEFAULT 'anonymous',
@@ -79,28 +97,38 @@ def init_db():
                 duration_ms INTEGER DEFAULT 0,
                 error INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_annotations_category
-                ON annotations(category_name);
-            CREATE INDEX IF NOT EXISTS idx_annotations_source
-                ON annotations(source);
-            CREATE INDEX IF NOT EXISTS idx_annotations_user
-                ON annotations(user_id);
-            CREATE INDEX IF NOT EXISTS idx_layers_user
-                ON layers(user_id);
-            CREATE INDEX IF NOT EXISTS idx_sessions_user
-                ON chat_sessions(user_id);
-            CREATE INDEX IF NOT EXISTS idx_metrics_user
-                ON query_metrics(user_id);
-            CREATE INDEX IF NOT EXISTS idx_metrics_created
-                ON query_metrics(created_at);
+            )
         """)
+
+        # Create indexes (IF NOT EXISTS handles idempotency)
+        for idx_sql in [
+            "CREATE INDEX IF NOT EXISTS idx_annotations_category ON annotations(category_name)",
+            "CREATE INDEX IF NOT EXISTS idx_annotations_source ON annotations(source)",
+            "CREATE INDEX IF NOT EXISTS idx_metrics_created ON query_metrics(created_at)",
+        ]:
+            conn.execute(idx_sql)
 
         # Migration: add user_id columns to existing tables if missing
         _migrate_add_column(conn, "annotations", "user_id", "TEXT DEFAULT 'anonymous'")
         _migrate_add_column(conn, "layers", "user_id", "TEXT DEFAULT 'anonymous'")
         _migrate_add_column(conn, "chat_sessions", "user_id", "TEXT DEFAULT 'anonymous'")
+
+        # Create user_id indexes (only after migration ensures columns exist)
+        for idx_sql in [
+            "CREATE INDEX IF NOT EXISTS idx_annotations_user ON annotations(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_sessions_user ON chat_sessions(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_metrics_user ON query_metrics(user_id)",
+        ]:
+            try:
+                conn.execute(idx_sql)
+            except Exception:
+                pass  # Column may not exist on very old schemas
+
+        # layers.user_id index — only if column was added successfully
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_layers_user ON layers(user_id)")
+        except Exception:
+            pass
 
         conn.commit()
         logger.info("Database initialized at %s", DB_PATH)
