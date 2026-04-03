@@ -322,6 +322,15 @@ class TestSpatialEdgeCases:
         buffered = buffer_geometry(point, 5000)
         assert buffered.is_valid
 
+    def test_buffer_crossing_antimeridian(self):
+        """Large buffer crossing the antimeridian must still be valid."""
+        from shapely.geometry import Point
+        point = Point(179.9, 0)
+        buffered = buffer_geometry(point, 50000)  # 50km — will cross 180°
+        assert buffered.is_valid
+        assert not buffered.is_empty
+        assert geodesic_area(buffered) > 0
+
     def test_geodesic_area_zero_area_polygon(self):
         """Degenerate polygon (line) should return ~0 area."""
         from shapely.geometry import Polygon

@@ -415,11 +415,20 @@ def handle_measure_distance(params: dict) -> dict:
 # ============================================================
 
 def _safe_geojson_to_shapely(geojson_geom):
-    """Safely convert GeoJSON to Shapely, returning None on failure."""
+    """Safely convert GeoJSON to Shapely, returning None on failure.
+
+    Automatically repairs invalid geometries (e.g., self-intersecting polygons)
+    using the buffer(0) technique.
+    """
     try:
         geom = geojson_to_shapely(geojson_geom)
         if geom.is_empty:
             return None
+        # Auto-repair invalid geometries (self-intersections, etc.)
+        if not geom.is_valid:
+            geom = geom.buffer(0)
+            if geom.is_empty:
+                return None
         return geom
     except Exception:
         return None
