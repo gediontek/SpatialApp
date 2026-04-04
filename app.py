@@ -1066,8 +1066,8 @@ def _start_session_cleanup_timer():
             _t.sleep(300)  # Every 5 minutes
             try:
                 _cleanup_expired_sessions()
-            except Exception:
-                pass
+            except Exception as e:
+                logging.error(f"Session cleanup failed: {e}", exc_info=True)
 
     t = threading.Thread(target=_loop, daemon=True, name="session-cleanup")
     t.start()
@@ -1126,6 +1126,8 @@ def api_chat():
     message = data['message'].strip()
     if not message:
         return jsonify(error='Empty message'), 400
+    if len(message) > 10000:
+        return jsonify(error='Message too long (max 10,000 characters)'), 400
 
     session_id = data.get('session_id', 'default')
     map_context = data.get('context', {})

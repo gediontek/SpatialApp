@@ -481,8 +481,11 @@ MAX_BUFFER_DISTANCE_M = 100000  # 100 km max
 
 def handle_buffer(params: dict, layer_store: dict = None) -> dict:
     """Create a buffer around geometry or layer features."""
-    distance_m = params.get("distance_m")
-    if not distance_m or distance_m <= 0:
+    try:
+        distance_m = float(params.get("distance_m", 0))
+    except (TypeError, ValueError):
+        return {"error": "distance_m must be a number"}
+    if distance_m <= 0:
         return {"error": "distance_m must be a positive number"}
     if distance_m > MAX_BUFFER_DISTANCE_M:
         return {"error": f"distance_m must be at most {MAX_BUFFER_DISTANCE_M} meters (100 km)"}

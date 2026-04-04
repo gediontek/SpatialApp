@@ -156,7 +156,7 @@ class ChatSession:
         Yields:
             Event dicts for SSE streaming.
         """
-        if not self._lock.acquire(timeout=60):
+        if not self._lock.acquire(timeout=330):  # Must exceed max tool timeout (300s)
             yield {"type": "error", "text": "Session is busy processing another request. Please wait."}
             return
 

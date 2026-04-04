@@ -58,7 +58,8 @@ class FileCache:
             return None
 
     def set(self, key: str, data: dict):
-        """Store value in cache."""
+        """Store value in cache. Uses atomic write (tempfile + rename)."""
+        import tempfile
         path = self._file_path(key)
         try:
             entry = {
@@ -66,9 +67,16 @@ class FileCache:
                 "key": key,
                 "data": data,
             }
-            with open(path, "w") as f:
-                json.dump(entry, f)
-        except IOError as e:
+            # Write to temp file then atomic rename to prevent corruption
+            fd, tmp_path = tempfile.mkstemp(dir=self.cache_path, suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump(entry, f)
+                os.replace(tmp_path, path)  # Atomic on POSIX
+            except Exception:
+                os.unlink(tmp_path)  # Clean up temp file on failure
+                raise
+        except (IOError, OSError) as e:
             logger.warning(f"Cache write failed: {e}")
 
     def clear(self):
