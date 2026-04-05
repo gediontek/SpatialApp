@@ -47,8 +47,10 @@ class TestHandleGeocode:
         result = handle_geocode({})
         assert "error" in result
 
+    @patch("nl_gis.tool_handlers.geocode_cache")
     @patch("nl_gis.tool_handlers.urllib.request.urlopen")
-    def test_successful_geocode(self, mock_urlopen):
+    def test_successful_geocode(self, mock_urlopen, mock_cache):
+        mock_cache.get.return_value = None  # Bypass cache
         mock_response = MagicMock()
         mock_response.read.return_value = json.dumps([{
             "lat": "47.6062",
