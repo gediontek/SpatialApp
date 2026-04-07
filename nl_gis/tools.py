@@ -322,6 +322,77 @@ def get_tool_definitions() -> list:
                 "required": ["layer_name", "attribute", "value"]
             }
         },
+        {
+            "name": "filter_layer",
+            "description": "Filter features in an existing layer by attribute value. Creates a new layer with only the matching features. Use for queries like 'show only residential buildings', 'parks named Central Park', or filtering by any property.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name of the layer to filter"
+                    },
+                    "attribute": {
+                        "type": "string",
+                        "description": "Property name to filter on (e.g., 'feature_type', 'category_name', or any OSM tag key)"
+                    },
+                    "operator": {
+                        "type": "string",
+                        "description": "Comparison operator",
+                        "enum": ["equals", "not_equals", "contains", "starts_with"]
+                    },
+                    "value": {
+                        "type": "string",
+                        "description": "Value to compare against"
+                    },
+                    "output_name": {
+                        "type": "string",
+                        "description": "Name for the filtered output layer"
+                    }
+                },
+                "required": ["layer_name", "attribute", "operator", "value", "output_name"]
+            }
+        },
+        {
+            "name": "style_layer",
+            "description": "Change the visual style of an existing layer. Set color, weight (line thickness), fill opacity, or fill color. Use for 'color the parks green', 'make the roads thicker', 'set building fill to 50% opacity'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name of the layer to style"
+                    },
+                    "color": {
+                        "type": "string",
+                        "description": "Outline/stroke color as hex (e.g., '#ff0000' for red, '#00ff00' for green)"
+                    },
+                    "fill_color": {
+                        "type": "string",
+                        "description": "Fill color as hex (defaults to same as color)"
+                    },
+                    "weight": {
+                        "type": "number",
+                        "description": "Line/border thickness in pixels (1-10)",
+                        "minimum": 1,
+                        "maximum": 10
+                    },
+                    "fill_opacity": {
+                        "type": "number",
+                        "description": "Fill opacity (0.0 = transparent, 1.0 = opaque)",
+                        "minimum": 0,
+                        "maximum": 1
+                    },
+                    "opacity": {
+                        "type": "number",
+                        "description": "Stroke opacity (0.0 = transparent, 1.0 = opaque)",
+                        "minimum": 0,
+                        "maximum": 1
+                    }
+                },
+                "required": ["layer_name"]
+            }
+        },
         # ---- Phase 3: Annotation & Classification Tools ----
         {
             "name": "add_annotation",

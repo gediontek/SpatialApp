@@ -11,7 +11,9 @@ import urllib.parse
 
 from flask import Flask, render_template, jsonify, request, send_from_directory, send_file
 from flask_wtf.csrf import CSRFProtect
+import numpy as np
 import rasterio
+from rasterio.enums import ColorInterp
 from pyproj import Transformer
 import geopandas as gpd
 from shapely.geometry import shape
@@ -44,6 +46,30 @@ except RuntimeError as e:
 # Initialize CSRF protection
 csrf = CSRFProtect(app)
 
+
+# CORS: restrict to same-origin only
+@app.after_request
+def add_cors_headers(response):
+    """Set CORS headers restricting access to same-origin requests.
+
+    Only allows the request's Origin if it matches the server's host.
+    Prevents cross-origin API abuse while allowing same-origin frontend calls.
+    """
+    origin = request.headers.get('Origin')
+    if origin:
+        # Parse the request's Host header to determine our own origin
+        request_host = request.host  # e.g., 'localhost:5000' or 'example.com'
+        # Build allowed origins from the request scheme + host
+        allowed_origin = f"{request.scheme}://{request_host}"
+        if origin == allowed_origin:
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, DELETE, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-CSRFToken'
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+            response.headers['Access-Control-Max-Age'] = '600'
+    return response
+
+
 # Paths
 ANNOTATIONS_FILE = os.path.join(Config.LABELS_FOLDER, 'annotations.geojson')
 
@@ -74,7 +100,7 @@ try:
         try:
             db_module.cleanup_old_metrics(days=180)
         except Exception:
-            pass
+            logging.debug("Metrics cleanup failed on startup", exc_info=True)
     else:
         logging.error("Database integrity check failed — running without DB persistence")
 except Exception as e:
@@ -128,7 +154,7 @@ def validate_bbox(bbox_str):
         return False, None
 
 
-MAX_ANNOTATIONS_STARTUP = 10000  # Cap in-memory annotations on startup
+MAX_ANNOTATIONS_STARTUP = Config.MAX_ANNOTATIONS_STARTUP  # From config with env var override
 
 
 def load_annotations():
@@ -228,7 +254,12 @@ def cleanup_old_backups(keep=10):
 
 
 def save_annotations_to_file():
-    """Save current annotations to file."""
+    """Save current annotations to file.
+
+    IMPORTANT: Must be called with annotation_lock held, or from within
+    a ``with annotation_lock:`` block.  The function reads the global
+    ``geo_coco_annotations`` list without acquiring the lock itself.
+    """
     geo_coco_format = {
         "type": "FeatureCollection",
         "features": geo_coco_annotations
@@ -270,7 +301,11 @@ def upload():
 
 
 def render_overlay(image_path):
-    """Process raster file and return overlay information."""
+    """Process raster file and return overlay information.
+
+    Reprojects bounds to EPSG:4326, converts raster data to a
+    browser-renderable PNG, and returns an HTTP URL for Leaflet.
+    """
     try:
         with rasterio.open(image_path) as src:
             bounds = src.bounds
@@ -283,7 +318,53 @@ def render_overlay(image_path):
             center_lat = (min_lat + max_lat) / 2
             center_lon = (min_lon + max_lon) / 2
 
-        image_url = image_path.replace('\\', '/')
+            # Convert GeoTIFF to PNG (browsers cannot render .tif)
+            png_filename = os.path.splitext(os.path.basename(image_path))[0] + '.png'
+            png_path = os.path.join(app.config['UPLOAD_FOLDER'], png_filename)
+
+            band_count = src.count
+            color_interps = [src.colorinterp[i] for i in range(band_count)]
+
+            if band_count >= 3:
+                # RGB or RGBA — use first 3 bands
+                rgb = np.stack([src.read(i + 1) for i in range(3)])
+            elif band_count == 1:
+                # Single band — replicate to RGB
+                band = src.read(1)
+                rgb = np.stack([band, band, band])
+            else:
+                # 2 bands — use first as grayscale
+                band = src.read(1)
+                rgb = np.stack([band, band, band])
+
+            # Normalize each band to 0-255 uint8 for PNG
+            rgb_uint8 = np.zeros_like(rgb, dtype=np.uint8)
+            for i in range(3):
+                band = rgb[i].astype(np.float64)
+                nodata = src.nodata
+                if nodata is not None:
+                    mask = band != nodata
+                else:
+                    mask = np.ones_like(band, dtype=bool)
+                if mask.any():
+                    bmin = band[mask].min()
+                    bmax = band[mask].max()
+                    if bmax > bmin:
+                        band = (band - bmin) / (bmax - bmin) * 255
+                    else:
+                        band = np.where(mask, 128, 0)
+                rgb_uint8[i] = np.clip(band, 0, 255).astype(np.uint8)
+
+            # Write PNG with rasterio
+            with rasterio.open(
+                png_path, 'w', driver='PNG',
+                height=rgb_uint8.shape[1], width=rgb_uint8.shape[2],
+                count=3, dtype='uint8',
+            ) as dst:
+                for i in range(3):
+                    dst.write(rgb_uint8[i], i + 1)
+
+        image_url = f"/static/uploads/{png_filename}"
         return jsonify(
             image_url=image_url,
             image_bounds=image_bounds,
@@ -311,9 +392,10 @@ def save_annotation():
 
     try:
         with annotation_lock:
+            next_id = max((a.get("id", 0) for a in geo_coco_annotations), default=0) + 1
             annotation = {
                 "type": "Feature",
-                "id": len(geo_coco_annotations) + 1,
+                "id": next_id,
                 "properties": {
                     "category_name": data.get('properties', {}).get('category_name', 'unknown'),
                     "color": data.get('properties', {}).get('color', '#3388ff'),
@@ -341,8 +423,8 @@ def save_annotation():
         app.logger.info(f"Annotation saved: {annotation['id']}")
         return jsonify(success=True, id=annotation['id'])
     except Exception as e:
-        app.logger.error(f"Error saving annotation: {str(e)}", exc_info=True)
-        return jsonify(success=False, error=str(e)), 500
+        app.logger.exception(f"Error saving annotation: {e}")
+        return jsonify(success=False, error="An internal error occurred."), 500
 
 
 @app.route('/add_osm_annotations', methods=['POST'])
@@ -379,9 +461,10 @@ def add_osm_annotations():
 
                     category = feature.get('properties', {}).get('category_name', 'osm_feature')
 
+                    next_id = max((a.get("id", 0) for a in geo_coco_annotations), default=0) + 1
                     annotation = {
                         "type": "Feature",
-                        "id": len(geo_coco_annotations) + 1,
+                        "id": next_id,
                         "properties": {
                             "category_name": category,
                             "color": "#3388ff",
@@ -414,8 +497,8 @@ def add_osm_annotations():
 
         return jsonify(success=True, added=added_count)
     except Exception as e:
-        app.logger.error(f"Error adding OSM annotations: {str(e)}", exc_info=True)
-        return jsonify(success=False, error=str(e)), 500
+        app.logger.exception(f"Error adding OSM annotations: {e}")
+        return jsonify(success=False, error="An internal error occurred."), 500
 
 
 @app.route('/get_annotations')
@@ -496,9 +579,7 @@ def fetch_osm_data():
               way["{key}"]({sanitized_bbox});
               relation["{key}"]({sanitized_bbox});
             );
-            out body;
-            >;
-            out skel qt;
+            out geom qt;
             """
         else:
             # Fetch only features with specific key=value
@@ -508,9 +589,7 @@ def fetch_osm_data():
               way["{key}"="{value}"]({sanitized_bbox});
               relation["{key}"="{value}"]({sanitized_bbox});
             );
-            out body;
-            >;
-            out skel qt;
+            out geom qt;
             """
 
         app.logger.debug(f"Overpass query for feature_type={feature_type}, key={key}, value={value}")
@@ -624,10 +703,10 @@ def display_table():
 
         import pandas as pd
         df = pd.DataFrame(table_data)
-        return df.to_html(classes='table', index=False, escape=False)
+        return df.to_html(classes='table', index=False, escape=True)
     except Exception as e:
-        app.logger.error(f"Error displaying table: {str(e)}", exc_info=True)
-        return jsonify(message=str(e)), 500
+        app.logger.exception(f"Error displaying table: {e}")
+        return jsonify(message="An internal error occurred."), 500
 
 
 @app.route('/finalize_annotations', methods=['POST'])
@@ -642,8 +721,8 @@ def finalize_annotations():
         app.logger.info("Annotations finalized and saved.")
         return jsonify(success=True, count=count)
     except Exception as e:
-        app.logger.error(f"Error finalizing annotations: {str(e)}", exc_info=True)
-        return jsonify(success=False, error=str(e)), 500
+        app.logger.exception(f"Error finalizing annotations: {e}")
+        return jsonify(success=False, error="An internal error occurred."), 500
 
 
 @app.route('/export_annotations/<format_type>')
@@ -1013,7 +1092,7 @@ def api_import_layer():
 from collections import OrderedDict
 layer_store = OrderedDict()
 layer_lock = threading.Lock()
-MAX_LAYERS_IN_MEMORY = 100
+MAX_LAYERS_IN_MEMORY = Config.MAX_LAYERS_IN_MEMORY  # From config with env var override
 
 
 def _evict_layers_if_needed():
@@ -1037,7 +1116,7 @@ if db:
 # In-memory chat sessions (keyed by session_id)
 chat_sessions = {}  # {session_id: {"session": ChatSession, "last_access": float}}
 session_lock = threading.Lock()
-SESSION_TTL_SECONDS = 3600  # Evict sessions idle for 1 hour
+SESSION_TTL_SECONDS = Config.SESSION_TTL_SECONDS  # From config with env var override
 
 
 def _cleanup_expired_sessions():
@@ -1053,7 +1132,7 @@ def _cleanup_expired_sessions():
                 try:
                     db.save_chat_session(sid, entry["session"].messages)
                 except Exception:
-                    pass
+                    logging.debug("Failed to persist expired session %s to DB", sid, exc_info=True)
         if expired:
             logging.info(f"Evicted {len(expired)} expired chat sessions")
 
@@ -1076,9 +1155,11 @@ def _start_session_cleanup_timer():
 _start_session_cleanup_timer()
 
 
-def _get_chat_session(session_id: str = "default"):
+def _get_chat_session(session_id: str = "default", user_id: str = "anonymous"):
     """Get or create a chat session (thread-safe).
 
+    Verifies the requesting user owns the session. Returns None if
+    the session exists but belongs to a different user.
     Restores message history from database if available.
     """
     import time as _t
@@ -1086,8 +1167,13 @@ def _get_chat_session(session_id: str = "default"):
     with session_lock:
 
         if session_id in chat_sessions:
-            chat_sessions[session_id]["last_access"] = _t.time()
-            return chat_sessions[session_id]["session"]
+            entry = chat_sessions[session_id]
+            # Verify session ownership
+            owner = entry.get("user_id", "anonymous")
+            if owner != "anonymous" and user_id != "anonymous" and owner != user_id:
+                return None  # Caller must handle as 403
+            entry["last_access"] = _t.time()
+            return entry["session"]
 
         session = ChatSession(layer_store=layer_store)
         # Restore message history from database
@@ -1098,7 +1184,7 @@ def _get_chat_session(session_id: str = "default"):
                     session.messages = saved
             except Exception as db_err:
                 app.logger.warning(f"DB restore failed (session): {db_err}")
-        chat_sessions[session_id] = {"session": session, "last_access": _t.time()}
+        chat_sessions[session_id] = {"session": session, "last_access": _t.time(), "user_id": user_id}
         return session
 
 
@@ -1133,7 +1219,9 @@ def api_chat():
     map_context = data.get('context', {})
     user_id = getattr(g, 'user_id', 'anonymous')
 
-    session = _get_chat_session(session_id)
+    session = _get_chat_session(session_id, user_id=user_id)
+    if session is None:
+        return jsonify(error='Session belongs to another user'), 403
 
     def generate():
         start_time = _time.time()
@@ -1183,7 +1271,7 @@ def api_chat():
                         error=had_error,
                     )
                 except Exception:
-                    pass
+                    logging.debug("Failed to log query metrics for session %s", session_id, exc_info=True)
         except Exception as e:
             app.logger.error(f"SSE stream error: {e}", exc_info=True)
             error_event = {"type": "error", "text": f"Stream error: {str(e)}"}
@@ -1291,11 +1379,14 @@ def api_health():
         free_mb = usage.free / (1024 * 1024)
         health["checks"]["disk"] = {"status": "ok" if free_mb > 100 else "warning", "free_mb": round(free_mb)}
     except Exception:
+        logging.debug("Disk space check failed", exc_info=True)
         health["checks"]["disk"] = {"status": "unknown"}
 
-    # Claude API check
-    health["checks"]["claude_api"] = {
-        "status": "configured" if Config.ANTHROPIC_API_KEY else "not_configured"
+    # LLM provider check
+    llm_key = Config.get_llm_api_key()
+    health["checks"]["llm"] = {
+        "provider": Config.LLM_PROVIDER,
+        "status": "configured" if llm_key else "not_configured",
     }
 
     # Layer store

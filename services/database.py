@@ -122,13 +122,13 @@ def init_db():
             try:
                 conn.execute(idx_sql)
             except Exception:
-                pass  # Column may not exist on very old schemas
+                logger.debug("Index creation skipped (column may not exist): %s", idx_sql, exc_info=True)
 
         # layers.user_id index — only if column was added successfully
         try:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_layers_user ON layers(user_id)")
         except Exception:
-            pass
+            logger.debug("layers.user_id index creation skipped", exc_info=True)
 
         conn.commit()
         logger.info("Database initialized at %s", DB_PATH)
@@ -136,8 +136,22 @@ def init_db():
         conn.close()
 
 
+_ALLOWED_TABLES = {"users", "annotations", "layers", "chat_sessions", "query_metrics"}
+_ALLOWED_COLUMNS = {"user_id", "username", "api_token", "category_name", "color",
+                    "source", "geometry_json", "properties_json", "geojson",
+                    "feature_count", "style_json", "messages_json", "session_id",
+                    "message", "tool_calls", "input_tokens", "output_tokens",
+                    "duration_ms", "error", "created_at", "updated_at", "name"}
+
+
 def _migrate_add_column(conn, table: str, column: str, definition: str):
     """Add a column to a table if it doesn't already exist."""
+    if table not in _ALLOWED_TABLES:
+        logger.warning(f"Migration refused: unknown table '{table}'")
+        return
+    if column not in _ALLOWED_COLUMNS:
+        logger.warning(f"Migration refused: unknown column '{column}'")
+        return
     try:
         cols = [row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()]
         if column not in cols:

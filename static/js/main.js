@@ -90,6 +90,10 @@ $(document).ready(function() {
                 imageOverlay = L.imageOverlay(data.image_url, data.image_bounds, { opacity: 0.4 }).addTo(map);
                 map.fitBounds(data.image_bounds);
 
+                // Show the opacity controls now that a raster is loaded
+                $('#raster-controls').show();
+                $('#transparency-slider').val(0.4);
+
                 showToast('Raster file uploaded successfully!', 'success');
             },
             error: function(xhr) {

@@ -1,0 +1,376 @@
+"""Multi-provider LLM abstraction for tool-calling chat.
+
+Supports Anthropic (Claude), Google Gemini, and OpenAI-compatible providers.
+Each provider normalizes its responses to a common format consumed by ChatSession.
+"""
+
+import json
+import logging
+import uuid
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Normalized response types (provider-agnostic)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TextBlock:
+    text: str
+    type: str = "text"
+
+
+@dataclass
+class ToolUseBlock:
+    id: str
+    name: str
+    input: dict
+    type: str = "tool_use"
+
+
+@dataclass
+class LLMResponse:
+    """Normalized LLM response returned by every provider."""
+    content: list  # List of TextBlock / ToolUseBlock
+    stop_reason: str  # "tool_use" or "end_turn"
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+# ---------------------------------------------------------------------------
+# Abstract base
+# ---------------------------------------------------------------------------
+
+class LLMProvider(ABC):
+    """Interface every LLM backend must implement."""
+
+    @abstractmethod
+    def create_message(
+        self,
+        *,
+        model: str,
+        system: str,
+        messages: list,
+        tools: list,
+        max_tokens: int = 2048,
+    ) -> LLMResponse:
+        """Send messages + tools and return a normalized response."""
+
+    @staticmethod
+    def _tool_id() -> str:
+        return f"tool_{uuid.uuid4().hex[:12]}"
+
+
+# ---------------------------------------------------------------------------
+# Anthropic (Claude)
+# ---------------------------------------------------------------------------
+
+class AnthropicProvider(LLMProvider):
+    """Thin wrapper — Anthropic's format IS the internal format."""
+
+    def __init__(self, api_key: str):
+        import anthropic
+        self.client = anthropic.Anthropic(api_key=api_key)
+
+    def create_message(self, *, model, system, messages, tools, max_tokens=2048):
+        response = self.client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            system=system,
+            tools=tools,
+            messages=messages,
+        )
+
+        content = []
+        for block in response.content:
+            if hasattr(block, "text"):
+                content.append(TextBlock(text=block.text))
+            elif hasattr(block, "name"):
+                content.append(ToolUseBlock(id=block.id, name=block.name, input=block.input))
+
+        stop = "tool_use" if response.stop_reason == "tool_use" else "end_turn"
+        usage = response.usage if hasattr(response, "usage") else None
+        return LLMResponse(
+            content=content,
+            stop_reason=stop,
+            input_tokens=getattr(usage, "input_tokens", 0) if usage else 0,
+            output_tokens=getattr(usage, "output_tokens", 0) if usage else 0,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Google Gemini
+# ---------------------------------------------------------------------------
+
+class GeminiProvider(LLMProvider):
+    """Google Gemini via the google-genai SDK."""
+
+    def __init__(self, api_key: str):
+        from google import genai
+        self.client = genai.Client(api_key=api_key)
+
+    def _convert_tools(self, tools: list) -> list:
+        """Convert Anthropic-format tool defs to Gemini function declarations."""
+        declarations = []
+        for tool in tools:
+            schema = tool["input_schema"].copy()
+            # Gemini doesn't support top-level 'additionalProperties' on params
+            schema.pop("additionalProperties", None)
+            # Recursively clean nested schemas
+            self._clean_schema(schema)
+            declarations.append({
+                "name": tool["name"],
+                "description": tool["description"],
+                "parameters": schema,
+            })
+        return declarations
+
+    def _clean_schema(self, schema: dict):
+        """Remove JSON Schema fields Gemini doesn't support."""
+        schema.pop("additionalProperties", None)
+        props = schema.get("properties", {})
+        for prop in props.values():
+            if isinstance(prop, dict):
+                self._clean_schema(prop)
+            # Handle items for array types
+            items = prop.get("items") if isinstance(prop, dict) else None
+            if isinstance(items, dict):
+                self._clean_schema(items)
+
+    def _convert_messages(self, messages: list, system: str):
+        """Convert Anthropic-format messages to Gemini contents list."""
+        from google.genai import types
+
+        contents = []
+        for msg in messages:
+            role = "user" if msg["role"] == "user" else "model"
+            raw_content = msg["content"]
+
+            if isinstance(raw_content, str):
+                contents.append(types.Content(
+                    role=role,
+                    parts=[types.Part.from_text(text=raw_content)],
+                ))
+            elif isinstance(raw_content, list):
+                parts = []
+                for block in raw_content:
+                    if block.get("type") == "text":
+                        parts.append(types.Part.from_text(text=block["text"]))
+                    elif block.get("type") == "tool_use":
+                        parts.append(types.Part.from_function_call(
+                            name=block["name"],
+                            args=block["input"],
+                        ))
+                    elif block.get("type") == "tool_result":
+                        result_content = block.get("content", "{}")
+                        if isinstance(result_content, str):
+                            try:
+                                result_data = json.loads(result_content)
+                            except json.JSONDecodeError:
+                                result_data = {"result": result_content}
+                        else:
+                            result_data = result_content
+                        parts.append(types.Part.from_function_response(
+                            name=block.get("name", "unknown"),
+                            response=result_data,
+                        ))
+                if parts:
+                    contents.append(types.Content(role=role, parts=parts))
+        return contents
+
+    def create_message(self, *, model, system, messages, tools, max_tokens=2048):
+        from google.genai import types
+
+        gemini_tools = [types.Tool(function_declarations=self._convert_tools(tools))]
+        contents = self._convert_messages(messages, system)
+
+        config = types.GenerateContentConfig(
+            system_instruction=system,
+            tools=gemini_tools,
+            max_output_tokens=max_tokens,
+            temperature=0.2,
+        )
+
+        response = self.client.models.generate_content(
+            model=model,
+            contents=contents,
+            config=config,
+        )
+
+        content = []
+        has_tool_call = False
+
+        if response.candidates and response.candidates[0].content:
+            for part in response.candidates[0].content.parts:
+                if part.function_call:
+                    fc = part.function_call
+                    # Convert proto map to regular dict
+                    args = dict(fc.args) if fc.args else {}
+                    content.append(ToolUseBlock(
+                        id=self._tool_id(),
+                        name=fc.name,
+                        input=args,
+                    ))
+                    has_tool_call = True
+                elif part.text:
+                    content.append(TextBlock(text=part.text))
+
+        usage_meta = getattr(response, "usage_metadata", None)
+        return LLMResponse(
+            content=content,
+            stop_reason="tool_use" if has_tool_call else "end_turn",
+            input_tokens=getattr(usage_meta, "prompt_token_count", 0) if usage_meta else 0,
+            output_tokens=getattr(usage_meta, "candidates_token_count", 0) if usage_meta else 0,
+        )
+
+
+# ---------------------------------------------------------------------------
+# OpenAI (and any OpenAI-compatible endpoint)
+# ---------------------------------------------------------------------------
+
+class OpenAIProvider(LLMProvider):
+    """OpenAI or any compatible API (Azure, Groq, Together, local Ollama, etc.)."""
+
+    def __init__(self, api_key: str, base_url: str = None):
+        import openai
+        kwargs = {"api_key": api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+        self.client = openai.OpenAI(**kwargs)
+
+    def _convert_tools(self, tools: list) -> list:
+        """Convert Anthropic-format tool defs to OpenAI function format."""
+        result = []
+        for tool in tools:
+            result.append({
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool["description"],
+                    "parameters": tool["input_schema"],
+                },
+            })
+        return result
+
+    def _convert_messages(self, messages: list, system: str) -> list:
+        """Convert Anthropic-format messages to OpenAI format."""
+        oai_messages = [{"role": "system", "content": system}]
+        for msg in messages:
+            role = msg["role"]
+            raw = msg["content"]
+
+            if isinstance(raw, str):
+                oai_messages.append({"role": role, "content": raw})
+            elif isinstance(raw, list):
+                # Check if this is tool results
+                if any(b.get("type") == "tool_result" for b in raw):
+                    for b in raw:
+                        if b["type"] == "tool_result":
+                            oai_messages.append({
+                                "role": "tool",
+                                "tool_call_id": b["tool_use_id"],
+                                "content": b["content"],
+                            })
+                else:
+                    # Assistant content with text/tool_use blocks
+                    text_parts = [b["text"] for b in raw if b.get("type") == "text"]
+                    tool_calls = []
+                    for b in raw:
+                        if b.get("type") == "tool_use":
+                            tool_calls.append({
+                                "id": b["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": b["name"],
+                                    "arguments": json.dumps(b["input"]),
+                                },
+                            })
+
+                    entry = {"role": "assistant"}
+                    if text_parts:
+                        entry["content"] = "\n".join(text_parts)
+                    else:
+                        entry["content"] = None
+                    if tool_calls:
+                        entry["tool_calls"] = tool_calls
+                    oai_messages.append(entry)
+
+        return oai_messages
+
+    def create_message(self, *, model, system, messages, tools, max_tokens=2048):
+        oai_tools = self._convert_tools(tools)
+        oai_messages = self._convert_messages(messages, system)
+
+        response = self.client.chat.completions.create(
+            model=model,
+            messages=oai_messages,
+            tools=oai_tools,
+            max_tokens=max_tokens,
+            temperature=0.2,
+        )
+
+        choice = response.choices[0]
+        content = []
+        has_tool_call = False
+
+        if choice.message.tool_calls:
+            for tc in choice.message.tool_calls:
+                try:
+                    args = json.loads(tc.function.arguments)
+                except json.JSONDecodeError:
+                    args = {}
+                content.append(ToolUseBlock(
+                    id=tc.id,
+                    name=tc.function.name,
+                    input=args,
+                ))
+                has_tool_call = True
+
+        if choice.message.content:
+            content.append(TextBlock(text=choice.message.content))
+
+        usage = response.usage
+        return LLMResponse(
+            content=content,
+            stop_reason="tool_use" if has_tool_call else "end_turn",
+            input_tokens=getattr(usage, "prompt_tokens", 0) if usage else 0,
+            output_tokens=getattr(usage, "completion_tokens", 0) if usage else 0,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Factory
+# ---------------------------------------------------------------------------
+
+# Default model per provider
+DEFAULT_MODELS = {
+    "anthropic": "claude-sonnet-4-20250514",
+    "gemini": "gemini-2.5-flash",
+    "openai": "gpt-4.1",
+}
+
+
+def create_provider(
+    provider_name: str,
+    api_key: str,
+    base_url: str = None,
+) -> Optional[LLMProvider]:
+    """Create an LLM provider by name. Returns None if key is empty."""
+    if not api_key:
+        return None
+
+    provider_name = provider_name.lower().strip()
+
+    if provider_name == "anthropic":
+        return AnthropicProvider(api_key=api_key)
+    elif provider_name == "gemini":
+        return GeminiProvider(api_key=api_key)
+    elif provider_name == "openai":
+        return OpenAIProvider(api_key=api_key, base_url=base_url)
+    else:
+        logger.error(f"Unknown LLM provider: {provider_name}. Supported: anthropic, gemini, openai")
+        return None

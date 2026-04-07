@@ -108,8 +108,15 @@ var ChatPanel = (function() {
                                 var data = JSON.parse(dataStr);
                                 handleEvent(currentEvent || data.type, data, map, layerManager);
                             } catch (e) {
-                                // Incomplete JSON, put back in buffer
-                                buffer = lines.slice(i).join('\n');
+                                // Could be incomplete JSON split across chunks — buffer remaining lines
+                                var remaining = lines.slice(i).join('\n');
+                                if (remaining.length < 10000) {
+                                    buffer = remaining;
+                                } else {
+                                    // Too large to be a split — malformed event, discard and continue
+                                    console.warn('Discarding malformed SSE event:', dataStr.substring(0, 200));
+                                    buffer = '';
+                                }
                                 break;
                             }
                             currentEvent = null;
@@ -168,8 +175,8 @@ var ChatPanel = (function() {
 
             case 'layer_command':
                 if (layerManager && data.layer_name) {
-                    if (data.action === 'show') layerManager.toggleLayer(data.layer_name);
-                    else if (data.action === 'hide') layerManager.toggleLayer(data.layer_name);
+                    if (data.action === 'show') layerManager.showLayer(data.layer_name);
+                    else if (data.action === 'hide') layerManager.hideLayer(data.layer_name);
                     else if (data.action === 'remove') layerManager.removeLayer(data.layer_name);
                 }
                 break;
@@ -186,6 +193,12 @@ var ChatPanel = (function() {
                 if (window.L && window.L.heatLayer && data.points) {
                     var heatLayer = L.heatLayer(data.points, data.options || {});
                     heatLayer.addTo(map);
+                }
+                break;
+
+            case 'layer_style':
+                if (layerManager && data.layer_name && data.style) {
+                    layerManager.styleLayer(data.layer_name, data.style);
                 }
                 break;
 
@@ -217,6 +230,8 @@ var ChatPanel = (function() {
             map.setView([cmd.lat, cmd.lon], zoom);
         } else if (action === 'zoom') {
             map.setZoom(cmd.zoom);
+        } else if (action === 'zoom_relative') {
+            map.setZoom(map.getZoom() + (cmd.delta || 0));
         } else if (action === 'fit_bounds') {
             if (cmd.bbox && cmd.bbox.length === 4) {
                 map.fitBounds([
@@ -225,14 +240,17 @@ var ChatPanel = (function() {
                 ]);
             }
         } else if (action === 'change_basemap') {
-            // Trigger basemap change — needs reference to base layers
             if (window.baseMaps) {
-                if (cmd.basemap === 'satellite' && window.baseMaps['Google Satellite']) {
-                    map.removeLayer(window.baseMaps['OpenStreetMap']);
-                    map.addLayer(window.baseMaps['Google Satellite']);
-                } else if (cmd.basemap === 'osm' && window.baseMaps['OpenStreetMap']) {
-                    map.removeLayer(window.baseMaps['Google Satellite']);
-                    map.addLayer(window.baseMaps['OpenStreetMap']);
+                // Remove all basemaps first, then add the requested one
+                Object.values(window.baseMaps).forEach(function(layer) {
+                    if (map.hasLayer(layer)) map.removeLayer(layer);
+                });
+                if (cmd.basemap === 'satellite') {
+                    var sat = window.baseMaps['Google Satellite'] || Object.values(window.baseMaps)[1];
+                    if (sat) sat.addTo(map);
+                } else {
+                    var osm = window.baseMaps['OpenStreetMap'] || Object.values(window.baseMaps)[0];
+                    if (osm) osm.addTo(map);
                 }
             }
         }
@@ -279,6 +297,10 @@ var ChatPanel = (function() {
                 return result.point_count + ' points';
             case 'highlight_features':
                 return result.highlighted + '/' + result.total + ' features highlighted';
+            case 'filter_layer':
+                return result.feature_count + '/' + result.original_count + ' features matched';
+            case 'style_layer':
+                return result.description || 'Styled';
             case 'show_layer':
             case 'hide_layer':
             case 'remove_layer':

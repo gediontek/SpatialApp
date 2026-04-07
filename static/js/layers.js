@@ -101,7 +101,7 @@ var LayerManager = (function() {
     }
 
     function toggleLayer(name) {
-        if (!layers[name]) return;
+        if (!layers[name] || !layers[name].leafletLayer) return;
 
         if (layers[name].visible) {
             map.removeLayer(layers[name].leafletLayer);
@@ -112,6 +112,24 @@ var LayerManager = (function() {
         }
 
         refreshUI();
+    }
+
+    function showLayer(name) {
+        if (!layers[name] || !layers[name].leafletLayer) return;
+        if (!layers[name].visible) {
+            layers[name].leafletLayer.addTo(map);
+            layers[name].visible = true;
+            refreshUI();
+        }
+    }
+
+    function hideLayer(name) {
+        if (!layers[name] || !layers[name].leafletLayer) return;
+        if (layers[name].visible) {
+            map.removeLayer(layers[name].leafletLayer);
+            layers[name].visible = false;
+            refreshUI();
+        }
     }
 
     function fitToLayer(name) {
@@ -129,6 +147,22 @@ var LayerManager = (function() {
 
     function getLayerCount() {
         return Object.keys(layers).length;
+    }
+
+    function styleLayer(name, style) {
+        if (!layers[name] || !layers[name].leafletLayer) return;
+        var leafletLayer = layers[name].leafletLayer;
+        if (typeof leafletLayer.setStyle === 'function') {
+            leafletLayer.setStyle(style);
+        } else {
+            leafletLayer.eachLayer(function(featureLayer) {
+                if (typeof featureLayer.setStyle === 'function') {
+                    featureLayer.setStyle(style);
+                }
+            });
+        }
+        // Update stored style for UI color swatch
+        if (style.color) layers[name].style.color = style.color;
     }
 
     function highlightFeatures(layerName, attribute, value, color) {
@@ -208,9 +242,12 @@ var LayerManager = (function() {
         addLayer: addLayer,
         removeLayer: removeLayer,
         toggleLayer: toggleLayer,
+        showLayer: showLayer,
+        hideLayer: hideLayer,
         fitToLayer: fitToLayer,
         getLayerNames: getLayerNames,
         getLayerCount: getLayerCount,
-        highlightFeatures: highlightFeatures
+        highlightFeatures: highlightFeatures,
+        styleLayer: styleLayer
     };
 })();

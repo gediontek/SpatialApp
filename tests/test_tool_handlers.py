@@ -304,6 +304,8 @@ class TestHandleFetchOSM:
     @patch("nl_gis.tool_handlers.requests.get")
     def test_timeout(self, mock_get):
         import requests as req
+        from services.cache import overpass_cache
+        overpass_cache.clear()
         mock_get.side_effect = req.Timeout("timed out")
         result = handle_fetch_osm({
             "feature_type": "building",

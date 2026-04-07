@@ -38,33 +38,23 @@
 
             <!-- Tab 1: Manual Labeling -->
             <div id="tab-manual" class="tab-content active">
-                <div class="info-section">
-                    <p><strong>Transparency:</strong></p>
-                    <input type="range" id="transparency-slider" min="0" max="1" step="0.01" value="0.4">
-                </div>
-                <div class="info-section">
-                    <h3>Upload Raster</h3>
-                    <form id="uploadForm" enctype="multipart/form-data">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <label for="file">Choose raster file:</label><br>
-                        <input type="file" id="file" name="file" accept=".tif,.tiff"><br><br>
-                        <button type="submit" id="uploadBtn">Upload</button>
-                    </form>
-                </div>
+
+                <!-- 1. Label Settings (used by both OSM fetch and manual draw) -->
                 <div class="info-section">
                     <h3>Label Settings</h3>
                     <form id="drawForm">
-                        <label for="category_name">Category Name:</label><br>
-                        <input type="text" id="category_name" name="category_name" placeholder="e.g., building, forest, road"><br>
-                        <small class="hint">Required for both OSM fetch and manual drawing</small>
-                        <label for="color">Color:</label><br>
-                        <input type="color" id="color" name="color" value="#ff7800"><br>
+                        <label for="category_name">Category Name:</label>
+                        <input type="text" id="category_name" name="category_name" placeholder="e.g., building, forest, road">
+                        <label for="color">Color:</label>
+                        <input type="color" id="color" name="color" value="#ff7800">
                     </form>
                 </div>
+
+                <!-- 2. Data Sources -->
                 <div class="info-section">
                     <h3>Fetch from OSM</h3>
                     <form id="osmQueryForm">
-                        <label for="osm_feature">Feature Type:</label><br>
+                        <label for="osm_feature">Feature Type:</label>
                         <select id="osm_feature" name="osm_feature">
                             <option value="building">Building</option>
                             <option value="forest">Forest</option>
@@ -78,17 +68,35 @@
                             <option value="road">Road</option>
                             <option value="river">River</option>
                             <option value="lake">Lake</option>
-                        </select><br>
-                        <small class="hint">Fetches features in current map view</small><br>
+                        </select>
+                        <small class="hint">Fetches features in current map view</small>
                         <button type="button" id="fetchOsmBtn">Fetch OSM Data</button>
                     </form>
                 </div>
+
                 <div class="info-section">
                     <h3>Draw Annotations</h3>
-                    <small class="hint">Use toolbar on map to draw polygons, rectangles, circles</small>
+                    <small class="hint">Use the toolbar on the map to draw polygons, rectangles, or circles</small>
                 </div>
+
+                <!-- 3. Raster Upload (with inline transparency control) -->
                 <div class="info-section">
-                    <h3>Export Label</h3>
+                    <h3>Upload Raster</h3>
+                    <form id="uploadForm" enctype="multipart/form-data">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <label for="file">Choose raster file (.tif):</label>
+                        <input type="file" id="file" name="file" accept=".tif,.tiff">
+                        <button type="submit" id="uploadBtn">Upload</button>
+                    </form>
+                    <div id="raster-controls" style="display:none; margin-top: 8px;">
+                        <label for="transparency-slider">Overlay Opacity:</label>
+                        <input type="range" id="transparency-slider" min="0" max="1" step="0.01" value="0.4">
+                    </div>
+                </div>
+
+                <!-- 4. Export & Actions -->
+                <div class="info-section">
+                    <h3>Export</h3>
                     <div class="export-buttons">
                         <button id="exportGeoJsonBtn" class="export-btn">GeoJSON</button>
                         <button id="exportShapefileBtn" class="export-btn">Shapefile</button>
@@ -96,9 +104,9 @@
                     </div>
                 </div>
                 <div class="info-section actions">
-                    <button id="clearAnnotationsBtn" class="danger-btn">Clear Annotations</button>
                     <button id="openSavedAnnotationsBtn">Open Saved</button>
                     <button id="finalizeAnnotationsBtn" class="primary-btn">Finalize</button>
+                    <button id="clearAnnotationsBtn" class="danger-btn">Clear All</button>
                 </div>
             </div>
 

@@ -20,7 +20,7 @@ from nl_gis.geo_utils import (
     project_to_utm,
     project_to_wgs84,
 )
-from services.cache import geocode_cache, overpass_cache, osrm_cache
+from services.cache import geocode_cache, overpass_cache
 from services.rate_limiter import nominatim_limiter, overpass_limiter
 
 logger = logging.getLogger(__name__)
@@ -43,15 +43,17 @@ OSM_FEATURE_MAPPINGS = {
 
 
 def _osm_to_geojson(osm_data: dict, category_name: str, feature_type: str) -> dict:
-    """Convert Overpass API response to GeoJSON FeatureCollection."""
+    """Convert Overpass API response to GeoJSON FeatureCollection.
+
+    Supports both `out geom` (inline geometry) and legacy `out body + >`
+    (separate node elements) response formats.
+    """
     geojson = {"type": "FeatureCollection", "features": []}
     if "elements" not in osm_data:
         return geojson
 
-    nodes = {
-        n["id"]: (n["lon"], n["lat"])
-        for n in osm_data["elements"] if n["type"] == "node"
-    }
+    # Build node lookup only if needed (legacy format)
+    nodes = None
 
     count = 0
     max_features = Config.MAX_FEATURES_PER_LAYER
@@ -60,7 +62,18 @@ def _osm_to_geojson(osm_data: dict, category_name: str, feature_type: str) -> di
         if count >= max_features:
             break
         if el["type"] == "way":
-            coords = [nodes[nid] for nid in el.get("nodes", []) if nid in nodes]
+            # Prefer inline geometry from `out geom`
+            if "geometry" in el:
+                coords = [(pt["lon"], pt["lat"]) for pt in el["geometry"]]
+            else:
+                # Fallback: node ID lookup (legacy format)
+                if nodes is None:
+                    nodes = {
+                        n["id"]: (n["lon"], n["lat"])
+                        for n in osm_data["elements"] if n["type"] == "node"
+                    }
+                coords = [nodes[nid] for nid in el.get("nodes", []) if nid in nodes]
+
             if len(coords) < 3:
                 continue
             if coords[0] != coords[-1]:
@@ -110,6 +123,8 @@ def dispatch_tool(tool_name: str, params: dict, layer_store: dict = None) -> dic
         "hide_layer": lambda p: handle_layer_visibility(p, "hide"),
         "remove_layer": lambda p: handle_layer_visibility(p, "remove"),
         "highlight_features": lambda p: handle_highlight_features(p, layer_store),
+        "filter_layer": lambda p: handle_filter_layer(p, layer_store),
+        "style_layer": handle_style_layer,
         # Phase 3
         "add_annotation": lambda p: handle_add_annotation(p, layer_store),
         "classify_landcover": handle_classify_landcover,
@@ -208,7 +223,8 @@ def handle_fetch_osm(params: dict) -> dict:
     key = mapping["key"]
     value = mapping["value"]
 
-    # Build Overpass query
+    # Build Overpass query — use `out geom` to get coordinates inline
+    # (avoids slow node-by-node reconstruction)
     if value is None:
         overpass_query = f"""
         [out:json][timeout:30];
@@ -216,9 +232,7 @@ def handle_fetch_osm(params: dict) -> dict:
           way["{key}"]({bbox});
           relation["{key}"]({bbox});
         );
-        out body;
-        >;
-        out skel qt;
+        out geom qt;
         """
     else:
         overpass_query = f"""
@@ -227,17 +241,22 @@ def handle_fetch_osm(params: dict) -> dict:
           way["{key}"="{value}"]({bbox});
           relation["{key}"="{value}"]({bbox});
         );
-        out body;
-        >;
-        out skel qt;
+        out geom qt;
         """
+
+    # Check cache before hitting the API
+    cache_key = f"{key}={value}|{bbox}"
+    cached = overpass_cache.get(cache_key)
+    if cached:
+        logger.debug(f"Overpass cache hit: {cache_key}")
+        return cached
 
     try:
         overpass_limiter.wait()
         response = requests.get(
             "https://overpass-api.de/api/interpreter",
             params={"data": overpass_query},
-            timeout=Config.OSM_REQUEST_TIMEOUT,
+            timeout=(5, Config.OSM_REQUEST_TIMEOUT),
         )
         response.raise_for_status()
         osm_data = response.json()
@@ -260,6 +279,9 @@ def handle_fetch_osm(params: dict) -> dict:
     }
     if capped:
         result["note"] = f"Results capped at {Config.MAX_FEATURES_PER_LAYER} features. The actual area may contain more. Try a smaller area for complete data."
+
+    # Cache successful result
+    overpass_cache.set(cache_key, result)
     return result
 
 
@@ -431,6 +453,7 @@ def _safe_geojson_to_shapely(geojson_geom):
                 return None
         return geom
     except Exception:
+        logger.debug("Failed to parse geometry in _safe_shape", exc_info=True)
         return None
 
 
@@ -713,9 +736,7 @@ def handle_search_nearby(params: dict) -> dict:
     (
       way{tag_filter}(around:{radius_m},{lat},{lon});
     );
-    out body;
-    >;
-    out skel qt;
+    out geom qt;
     """
 
     try:
@@ -741,6 +762,76 @@ def handle_search_nearby(params: dict) -> dict:
         "feature_count": len(geojson["features"]),
         "center": {"lat": lat, "lon": lon},
         "radius_m": radius_m,
+    }
+
+
+def handle_filter_layer(params: dict, layer_store: dict = None) -> dict:
+    """Filter features in a layer by attribute value. Returns a new layer."""
+    layer_name = params.get("layer_name")
+    attribute = params.get("attribute")
+    operator = params.get("operator", "equals")
+    value = params.get("value", "")
+    output_name = params.get("output_name", f"filtered_{layer_name}")
+
+    if not layer_name or not attribute:
+        return {"error": "layer_name and attribute are required"}
+
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
+
+    filtered = []
+    val_lower = value.lower()
+    for feature in features:
+        props = feature.get("properties", {})
+        tags = props.get("osm_tags", {})
+        # Check both direct properties and OSM tags
+        prop_val = str(props.get(attribute, tags.get(attribute, "")))
+
+        match = False
+        if operator == "equals":
+            match = prop_val.lower() == val_lower
+        elif operator == "not_equals":
+            match = prop_val.lower() != val_lower
+        elif operator == "contains":
+            match = val_lower in prop_val.lower()
+        elif operator == "starts_with":
+            match = prop_val.lower().startswith(val_lower)
+
+        if match:
+            filtered.append(feature)
+
+    result_geojson = {"type": "FeatureCollection", "features": filtered}
+    return {
+        "geojson": result_geojson,
+        "layer_name": output_name,
+        "feature_count": len(filtered),
+        "original_count": len(features),
+    }
+
+
+def handle_style_layer(params: dict) -> dict:
+    """Change the visual style of a layer. Returns instruction for frontend."""
+    layer_name = params.get("layer_name")
+    if not layer_name:
+        return {"error": "layer_name is required"}
+
+    style = {}
+    for key in ("color", "fill_color", "weight", "fill_opacity", "opacity"):
+        if params.get(key) is not None:
+            # Convert fill_color → fillColor for Leaflet
+            leaflet_key = key.replace("fill_color", "fillColor").replace("fill_opacity", "fillOpacity")
+            style[leaflet_key] = params[key]
+
+    if not style:
+        return {"error": "At least one style property (color, weight, fill_opacity, etc.) is required"}
+
+    return {
+        "success": True,
+        "action": "style",
+        "layer_name": layer_name,
+        "style": style,
+        "description": f"Styled layer '{layer_name}'",
     }
 
 
@@ -816,16 +907,22 @@ def handle_add_annotation(params: dict, layer_store: dict = None) -> dict:
 
     added = 0
 
+    # Get layer snapshot BEFORE acquiring annotation_lock to avoid
+    # deadlock (_get_layer_snapshot acquires layer_lock internally).
+    layer_features = None
+    if layer_name:
+        layer_features, _ = _get_layer_snapshot(layer_store, layer_name)
+
     with annotation_lock:
         if layer_name:
-            layer_features, _ = _get_layer_snapshot(layer_store, layer_name)
             if layer_features:
                 for f in layer_features:
                     geom = f.get("geometry")
                     if geom:
+                        next_id = max((a.get("id", 0) for a in geo_coco_annotations), default=0) + 1
                         annotation = {
                             "type": "Feature",
-                            "id": len(geo_coco_annotations) + 1,
+                            "id": next_id,
                             "properties": {
                                 "category_name": category_name,
                                 "color": color,
@@ -837,9 +934,10 @@ def handle_add_annotation(params: dict, layer_store: dict = None) -> dict:
                         geo_coco_annotations.append(annotation)
                         added += 1
         elif geometry:
+            next_id = max((a.get("id", 0) for a in geo_coco_annotations), default=0) + 1
             annotation = {
                 "type": "Feature",
-                "id": len(geo_coco_annotations) + 1,
+                "id": next_id,
                 "properties": {
                     "category_name": category_name,
                     "color": color,
@@ -1053,7 +1151,15 @@ def handle_merge_layers(params: dict, layer_store: dict = None) -> dict:
         geojson_data = json_mod.loads(merged.to_json())
 
         if layer_store is not None:
-            layer_store[output_name] = geojson_data
+            try:
+                from app import layer_lock as _lk
+            except ImportError:
+                _lk = None
+            if _lk:
+                with _lk:
+                    layer_store[output_name] = geojson_data
+            else:
+                layer_store[output_name] = geojson_data
 
         return {
             "geojson": geojson_data,
@@ -1081,7 +1187,15 @@ def handle_import_layer(params: dict, layer_store: dict = None) -> dict:
             return {"error": "geojson must be a GeoJSON FeatureCollection"}
 
         if layer_store is not None:
-            layer_store[layer_name] = geojson
+            try:
+                from app import layer_lock as _lk
+            except ImportError:
+                _lk = None
+            if _lk:
+                with _lk:
+                    layer_store[layer_name] = geojson
+            else:
+                layer_store[layer_name] = geojson
 
         return {
             "geojson": geojson,
@@ -1254,7 +1368,7 @@ def handle_isochrone(params: dict) -> dict:
                     shp = shape(f["geometry"])
                     area_sq_km += abs(geodesic_area(shp)) / 1e6
                 except Exception:
-                    pass
+                    logger.debug("Failed to calculate isochrone area for feature", exc_info=True)
 
         return {
             "geojson": iso_data,
