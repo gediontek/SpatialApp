@@ -217,6 +217,96 @@ def handle_map_command(params: dict) -> dict:
     return result
 
 
+def handle_reverse_geocode(params: dict) -> dict:
+    """Reverse geocode coordinates to an address/place name. Cached, rate-limited.
+
+    Returns:
+        Dict with display_name, address components, lat, lon, osm metadata.
+    """
+    lat = params.get("lat")
+    lon = params.get("lon")
+    if lat is None or lon is None:
+        return {"error": "lat and lon are required"}
+
+    # Validate coordinates
+    try:
+        lat = float(lat)
+        lon = float(lon)
+    except (TypeError, ValueError):
+        return {"error": "lat and lon must be numbers"}
+
+    if not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
+        return {"error": "Invalid coordinates: lat must be -90..90, lon must be -180..180"}
+
+    # Check cache first
+    cache_key = f"reverse_{lat}_{lon}"
+    cached = geocode_cache.get(cache_key)
+    if cached:
+        logger.debug(f"Reverse geocode cache hit: {lat},{lon}")
+        return cached
+
+    try:
+        nominatim_limiter.wait()
+        url = f"https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json"
+        headers = {"User-Agent": "SpatialApp/1.0"}
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        if "error" in data:
+            return {"error": f"No result found for coordinates ({lat}, {lon})"}
+
+        result = {
+            "display_name": data.get("display_name", "Unknown location"),
+            "address": data.get("address", {}),
+            "lat": lat,
+            "lon": lon,
+            "osm_type": data.get("osm_type"),
+            "osm_id": data.get("osm_id"),
+        }
+        geocode_cache.set(cache_key, result)
+        return result
+    except Exception as e:
+        logger.error("Reverse geocoding error: %s", e, exc_info=True)
+        return {"error": f"Reverse geocoding failed: {str(e)}"}
+
+
+def handle_batch_geocode(params: dict, layer_store: dict = None) -> dict:
+    """Geocode a list of addresses into a point layer.
+
+    Returns:
+        Dict with geojson FeatureCollection, layer_name, counts, and failed list.
+    """
+    addresses = params.get("addresses", [])
+    if not addresses:
+        return {"error": "addresses list is required"}
+    if len(addresses) > 50:
+        return {"error": "Maximum 50 addresses per batch"}
+
+    features = []
+    failed = []
+    for addr in addresses:
+        result = handle_geocode({"query": addr})
+        if "error" in result:
+            failed.append(addr)
+            continue
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [result["lon"], result["lat"]]},
+            "properties": {"address": addr, "display_name": result.get("display_name", addr)}
+        })
+
+    layer_name = params.get("layer_name", "geocoded_points")
+    geojson = {"type": "FeatureCollection", "features": features}
+    return {
+        "geojson": geojson,
+        "layer_name": layer_name,
+        "geocoded": len(features),
+        "failed": failed,
+        "total": len(addresses),
+    }
+
+
 def handle_search_nearby(params: dict) -> dict:
     """Search for OSM features near a point."""
     from nl_gis.handlers import OSM_FEATURE_MAPPINGS, _osm_to_geojson
