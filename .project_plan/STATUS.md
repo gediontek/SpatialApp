@@ -1,112 +1,126 @@
 # SpatialApp Project Status
 
-**Last updated**: 2026-04-02
-**Tests**: 236 passing
-**Commits**: 13 on main
+**Last updated**: 2026-04-11
+**Tests**: 438 passing
+**Commits**: 22 on main
 **Health**: All systems operational
 
 ---
 
-## Current State: Complete
-
-All 6 phases from design.md/work_plan.md are implemented and hardened.
+## Current State: Production-Hardened + Feature-Complete
 
 ### Core Metrics
 
-| Metric | Value |
-|--------|-------|
-| Tools (Claude API) | 24 |
-| API endpoints | 24 |
-| Database tables | 5 (users, annotations, layers, chat_sessions, query_metrics) |
-| Test count | 236 (unit + integration + E2E + edge cases) |
-| Python LOC | ~13,000 |
-| JavaScript LOC | ~1,300 |
+| Metric | Before (2026-04-02) | After (2026-04-11) | Delta |
+|--------|---------------------|---------------------|-------|
+| Tools (Claude API) | 24 | 26 (+ waypoints, dashboard) | +2 |
+| API endpoints | 24 | 30 | +6 |
+| Database tables | 5 | 5 | — |
+| Test count | 236 | 438 | +86% |
+| Python LOC | ~13,000 | ~14,500 | +12% |
+| JavaScript LOC | ~1,300 | ~1,800 | +38% |
+| Bugs fixed | — | 80 | — |
+| Improvements | — | 33 | — |
 
-### Architecture
+### Architecture (Post-Refactor)
 
 ```
-Browser (Leaflet + jQuery + Chat Panel)
-  |  REST + SSE
-Flask Backend (app.py)
-  |-- /api/chat          Claude API with 24 tools
-  |-- /api/layers         Named layer CRUD
-  |-- /api/import         Vector file import
-  |-- /api/register       User registration
-  |-- /api/metrics        Query metrics
-  |-- /api/health         Health check
-  |-- Legacy routes       Upload, annotations, OSM, export, classify
-  |
-  |-- nl_gis/             NL-to-GIS module
-  |   |-- chat.py         Claude API integration, tool dispatch
-  |   |-- tools.py        24 tool schemas for Claude
-  |   |-- tool_handlers.py Tool implementations
-  |   |-- geo_utils.py    ValidatedPoint, projections, spatial ops
-  |   |-- schemas.py      Pydantic models
-  |
-  |-- services/
-  |   |-- database.py     SQLite + WAL, 5 tables, migrations
-  |   |-- valhalla_client.py  Routing + isochrone
-  |   |-- cache.py        File cache (geocode 24h, overpass 1h, valhalla 1h)
-  |   |-- rate_limiter.py Token bucket (nominatim, overpass, valhalla)
-  |
-  External APIs: Nominatim, Overpass, Valhalla, Claude
+app.py (239 lines) — create_app() factory only
+state.py (30 lines) — shared mutable state
+
+blueprints/
+  auth.py         — /api/register, /api/me, /api/health
+  annotations.py  — 8 annotation CRUD routes
+  chat.py         — /api/chat (SSE), /api/usage, /api/metrics
+  layers.py       — /api/layers, /api/import
+  osm.py          — /, /upload, /fetch_osm_data, /api/geocode, /api/auto-classify
+  dashboard.py    — /dashboard, /api/dashboard, session management
+  websocket.py    — Socket.IO events (connect, chat_message, join_session)
+
+nl_gis/
+  chat.py         — ChatSession: LLM tool dispatch loop + SSE streaming
+  tools.py        — 26 tool schemas for Claude API
+  geo_utils.py    — ValidatedPoint, projections, geodesic ops
+  handlers/
+    __init__.py   — dispatch_tool, shared helpers, STRtree indexing
+    navigation.py — geocode, fetch_osm, map_command, search_nearby
+    analysis.py   — buffer, spatial_query, aggregate, area, distance, filter
+    layers.py     — style, visibility, highlight, merge, import
+    annotations.py — add_annotation, classify_landcover, export, get
+    routing.py    — find_route (multi-stop), isochrone, heatmap
+
+services/
+  database.py     — SQLite + WAL, thread-local connection pooling
+  db_interface.py — DatabaseInterface ABC (24 methods)
+  postgres_db.py  — PostgreSQL stub (migration path)
+  valhalla_client.py — Routing + isochrone + retry logic
+  cache.py        — File cache with size limits + collision verification
+  rate_limiter.py — Token bucket (release-before-sleep)
+  logging_config.py — JSON structured logging with request IDs
 ```
 
-### Features Implemented
+### What Was Done (2026-04-10 — 2026-04-11 Session)
 
-**NL-to-GIS Chat (24 tools):**
-- Navigation: geocode, map_command, search_nearby, import_layer
-- Analysis: buffer, spatial_query, aggregate, calculate_area, measure_distance, merge_layers
-- Layers: show/hide/remove_layer, highlight_features
-- Annotations: add_annotation, classify_landcover, export_annotations, get_annotations
-- Routing: find_route (Valhalla), isochrone (network-based), heatmap
+#### Phase 1: Bug Investigation & Fixes (80 bugs)
+- 2 critical: geodesic area for polygons with holes, inverted contains predicate
+- 15 high: tool call limit, history trimming, XSS (3), timing attack, thread safety (4), session bypass
+- 32 medium: info leaks (7), SSE parser, connection leak, race conditions, missing validation
+- 31 low: schema validation, null guards, edge cases
 
-**Infrastructure:**
-- Multi-user auth (SHA-256 hashed tokens, per-user data isolation)
-- SQLite with WAL, auto-migration, integrity checks
-- Session TTL (1h idle, background cleanup)
-- Layer LRU eviction (100 max)
-- Query metrics (tokens, duration, errors)
-- Health endpoint with subsystem checks
-- Thread safety: annotation_lock, layer_lock, per-session lock, snapshot reads
-- Error recovery: partial results on mid-chain failure, sanitized messages
+#### Phase 2: Quality Improvements (33 items)
+- Security: CSRF on fetch, hmac tokens, session hardening, consistent auth
+- Quality: annotation/point dedup, pyproj caching, error handlers, cache limits
+- Features: abort controller, numeric filters, OSM relations, offline reconnection
+- Accessibility: ARIA labels, keyboard navigation
+- Performance: system prompt bounds, spatial indexing (STRtree)
 
-**Frontend:**
-- Leaflet map with drawing tools
-- SSE streaming with tool execution steps
-- Markdown chat rendering (marked.js + DOMPurify)
-- Quick action buttons, clickable layer refs
-- Feature clustering (Leaflet.markerCluster)
-- Vector file import
+#### Phase 3: Architectural Refactor (5 items)
+- S1: Extract 5 Flask blueprints from monolithic app.py (1452→239 lines, -86%)
+- S2: Application factory pattern (create_app())
+- S3: Shared state module (state.py) — eliminates circular imports
+- S4: Split tool_handlers.py into handlers/ package (1500→6 modules)
+- S5: DB-first data flow (writes to DB before in-memory cache)
 
-**Spatial Correctness:**
-- ValidatedPoint prevents coordinate order bugs
-- Antimeridian-crossing bbox support
-- Polar UPS projection fallback
-- Buffer auto-repair for antimeridian validity
-- Invalid geometry auto-repair (buffer(0))
-- Geodesic area/distance via pyproj WGS84 ellipsoid
+#### Phase 4: Infrastructure (5 items)
+- SQLite connection pooling (thread-local)
+- Structured JSON logging with request IDs
+- Gunicorn production config (gthread workers)
+- STRtree spatial indexing for O(log n) queries
+- Responsive CSS for tablet (768px) and phone (480px)
+
+#### Phase 5: New Features (4 items)
+- Multi-stop routing with Valhalla waypoints
+- User dashboard (sessions, layers, usage stats)
+- WebSocket transport via Flask-SocketIO (alongside SSE)
+- PostGIS migration path (database abstraction layer)
+
+#### Phase 6: Cleanup
+- Deleted backward-compat shim (tool_handlers.py)
+- Migrated all imports to canonical paths (state.py, nl_gis.handlers)
+- Removed all app.py re-exports
+- Zero stale imports verified by grep
 
 ### Known Limitations
 
 | Limitation | Condition | Impact |
 |------------|-----------|--------|
 | UTM zone distortion | Geometry spans > 6 longitude | 0.2-31% area error |
-| No spatial indexing | > 10K features | Slow but correct |
-| SQLite single-writer | High write concurrency | WAL helps; PostGIS for scale |
-| Flask dev server | Production load | Need Gunicorn/uWSGI |
+| No spatial indexing at DB level | > 10K features in DB queries | Slow DB reads |
+| SQLite single-writer | High write concurrency | WAL helps; PostGIS migration path ready |
+| Flask dev server in dev | Production load | Gunicorn config ready |
+| No raster analysis | Elevation/terrain queries | Not supported |
+| Chat layers not persisted to DB | Server restart | Chat-created layers lost |
 
-### Recent Changes (This Session)
+### Test Coverage
 
-1. Wired database into all app operations
-2. Replaced OSRM with Valhalla (true network isochrones)
-3. Added multi-user identity model
-4. Added query metrics tracking
-5. Added 8 new tools (highlight, import, merge, etc.)
-6. Added E2E Playwright tests
-7. Fixed all thread safety gaps (locks on all reads)
-8. Fixed DB migration for existing databases
-9. Fixed antimeridian buffer validity
-10. Fixed polar projection (UPS fallback)
-11. Added input geometry auto-repair
-12. Upgraded system prompt with all 24 tools + limits + error recovery
+| Category | Count | Files |
+|----------|-------|-------|
+| Unit/handler tests | 296 | test_app, test_tool_handlers, test_phase2/4, test_filter, test_valhalla |
+| Coverage gap tests | 34 | test_coverage_gaps |
+| Chat engine tests | 31 | test_chat_engine |
+| E2E Playwright | 25 | test_e2e |
+| Multi-stop routing | 10 | test_multistop_routing |
+| Dashboard | 21 | test_dashboard |
+| WebSocket | 13 | test_websocket |
+| DB interface | 16 | test_db_interface |
+| **Total** | **438** | **15 test files** |
