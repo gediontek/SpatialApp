@@ -143,30 +143,54 @@ def _decode_polyline6(encoded: str) -> list:
 
 
 def get_route(
-    origin_lon: float,
-    origin_lat: float,
-    dest_lon: float,
-    dest_lat: float,
+    origin_lon: float = None,
+    origin_lat: float = None,
+    dest_lon: float = None,
+    dest_lat: float = None,
     profile: str = "driving",
     timeout: int = 15,
+    locations: list = None,
 ) -> Optional[dict]:
-    """Get a route between two points using Valhalla.
+    """Get a route through multiple locations using Valhalla.
+
+    Supports two calling conventions:
+    - Legacy 2-point: get_route(origin_lon, origin_lat, dest_lon, dest_lat)
+    - Multi-stop: get_route(locations=[(lat, lon), (lat, lon), ...])
 
     Args:
-        origin_lon, origin_lat: Origin coordinates (WGS84).
-        dest_lon, dest_lat: Destination coordinates (WGS84).
+        origin_lon, origin_lat: Origin coordinates (WGS84). Legacy interface.
+        dest_lon, dest_lat: Destination coordinates (WGS84). Legacy interface.
         profile: 'driving', 'walking', or 'cycling'.
         timeout: Request timeout in seconds.
+        locations: List of (lat, lon) tuples. Minimum 2. Overrides origin/dest.
 
     Returns:
         Dict with: geometry (GeoJSON LineString), distance_m, duration_s,
                     distance_km, duration_min, summary. None on failure.
     """
+    # Build locations list from either interface
+    if locations is not None:
+        if len(locations) < 2:
+            logger.warning("Route requires at least 2 locations, got %d", len(locations))
+            return None
+        valhalla_locations = [
+            {"lat": lat, "lon": lon, "type": "break"} for lat, lon in locations
+        ]
+    elif origin_lon is not None and origin_lat is not None and dest_lon is not None and dest_lat is not None:
+        valhalla_locations = [
+            {"lat": origin_lat, "lon": origin_lon, "type": "break"},
+            {"lat": dest_lat, "lon": dest_lon, "type": "break"},
+        ]
+    else:
+        logger.warning("Route requires either locations list or origin/dest coordinates")
+        return None
+
     base_url = detect_valhalla_url()
     costing = COSTING_MAP.get(profile, "auto")
 
-    # Check cache
-    cache_key = f"route:{origin_lon:.5f},{origin_lat:.5f}:{dest_lon:.5f},{dest_lat:.5f}:{costing}"
+    # Check cache -- build key from all locations
+    loc_key = ":".join(f"{loc['lon']:.5f},{loc['lat']:.5f}" for loc in valhalla_locations)
+    cache_key = f"route:{loc_key}:{costing}"
     cached = valhalla_cache.get(cache_key)
     if cached:
         return cached
@@ -176,10 +200,7 @@ def get_route(
         valhalla_limiter.wait()
 
     payload = {
-        "locations": [
-            {"lat": origin_lat, "lon": origin_lon},
-            {"lat": dest_lat, "lon": dest_lon},
-        ],
+        "locations": valhalla_locations,
         "costing": costing,
         "units": "kilometers",
     }
@@ -199,20 +220,42 @@ def get_route(
             logger.warning("Valhalla returned no route")
             return None
 
-        leg = trip["legs"][0]
-        summary = trip.get("summary", leg.get("summary", {}))
+        # Combine all legs into a single geometry
+        all_coords = []
+        all_steps = []
+        legs = trip["legs"]
+        for i, leg in enumerate(legs):
+            encoded_shape = leg.get("shape", "")
+            if not encoded_shape:
+                logger.warning("Valhalla route leg %d missing shape", i)
+                return None
+            leg_coords = _decode_polyline6(encoded_shape)
+            # Avoid duplicating the junction point between legs
+            if all_coords and leg_coords:
+                all_coords.extend(leg_coords[1:])
+            else:
+                all_coords.extend(leg_coords)
 
-        # Decode polyline6 shape to GeoJSON coordinates
-        encoded_shape = leg.get("shape", "")
-        if not encoded_shape:
-            logger.warning("Valhalla route missing shape")
+            # Extract turn-by-turn maneuvers per leg
+            maneuvers = leg.get("maneuvers", [])
+            for m in maneuvers:
+                all_steps.append({
+                    "instruction": m.get("instruction", ""),
+                    "type": m.get("type", 0),
+                    "distance_km": m.get("length", 0),
+                    "time_s": m.get("time", 0),
+                    "street_name": ", ".join(m.get("street_names", [])),
+                    "leg": i,
+                })
+
+        if not all_coords:
+            logger.warning("Valhalla route decoded to empty coordinates")
             return None
 
-        coords = _decode_polyline6(encoded_shape)
+        geometry = {"type": "LineString", "coordinates": all_coords}
 
-        geometry = {"type": "LineString", "coordinates": coords}
-
-        # Valhalla returns length in km (when units=kilometers) and time in seconds
+        # Use trip-level summary for totals
+        summary = trip.get("summary", legs[0].get("summary", {}))
         distance_km = summary.get("length", 0)
         duration_s = summary.get("time", 0)
         distance_m = distance_km * 1000
@@ -223,21 +266,22 @@ def get_route(
             "duration_s": duration_s,
             "distance_km": round(distance_km, 2),
             "duration_min": round(duration_s / 60, 1),
+            "leg_count": len(legs),
         }
 
-        # Extract turn-by-turn maneuvers
-        maneuvers = leg.get("maneuvers", [])
-        if maneuvers:
-            result["steps"] = [
-                {
-                    "instruction": m.get("instruction", ""),
-                    "type": m.get("type", 0),
-                    "distance_km": m.get("length", 0),
-                    "time_s": m.get("time", 0),
-                    "street_name": ", ".join(m.get("street_names", [])),
-                }
-                for m in maneuvers
-            ]
+        if all_steps:
+            result["steps"] = all_steps
+
+        # Per-leg summaries for multi-stop routes
+        if len(legs) > 1:
+            result["legs"] = []
+            for i, leg in enumerate(legs):
+                leg_summary = leg.get("summary", {})
+                result["legs"].append({
+                    "leg": i,
+                    "distance_km": round(leg_summary.get("length", 0), 2),
+                    "duration_min": round(leg_summary.get("time", 0) / 60, 1),
+                })
 
         valhalla_cache.set(cache_key, result)
         return result

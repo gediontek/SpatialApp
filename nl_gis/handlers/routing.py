@@ -5,6 +5,7 @@ import logging
 from shapely.geometry import shape
 
 from nl_gis.geo_utils import (
+    ValidatedPoint,
     geodesic_area,
     geojson_to_shapely,
     shapely_to_geojson,
@@ -20,7 +21,10 @@ logger = logging.getLogger(__name__)
 
 
 def handle_find_route(params: dict) -> dict:
-    """Find a route between two points using Valhalla."""
+    """Find a route between two or more points using Valhalla.
+
+    Supports optional intermediate waypoints for multi-stop routing.
+    """
     from services.valhalla_client import get_route
 
     profile = params.get("profile", "driving")
@@ -37,44 +41,90 @@ def handle_find_route(params: dict) -> dict:
         return {"error": err}
     dest_lat, dest_lon = dest_vp.lat, dest_vp.lon
 
-    route = get_route(origin_lon, origin_lat, dest_lon, dest_lat, profile=profile)
+    # Resolve optional waypoints
+    waypoints_param = params.get("waypoints", [])
+    waypoint_coords = []  # list of (lat, lon, name)
+    for i, wp in enumerate(waypoints_param):
+        wp_lat = wp.get("lat")
+        wp_lon = wp.get("lon")
+        wp_location = wp.get("location")
+
+        if wp_lat is not None and wp_lon is not None:
+            try:
+                vp = ValidatedPoint(lat=float(wp_lat), lon=float(wp_lon))
+                waypoint_coords.append((vp.lat, vp.lon, None))
+            except (ValueError, TypeError) as e:
+                return {"error": f"Invalid waypoint {i + 1} coordinates: {e}"}
+        elif wp_location:
+            from nl_gis.handlers.navigation import handle_geocode
+            geo_result = handle_geocode({"query": wp_location})
+            if "error" in geo_result:
+                return {"error": f"Could not geocode waypoint {i + 1}: {wp_location}"}
+            waypoint_coords.append((
+                geo_result["lat"],
+                geo_result["lon"],
+                geo_result.get("display_name"),
+            ))
+        else:
+            return {"error": f"Waypoint {i + 1} must have lat/lon or location"}
+
+    # Build full locations list: origin + waypoints + destination
+    locations = [(origin_lat, origin_lon)]
+    for lat, lon, _name in waypoint_coords:
+        locations.append((lat, lon))
+    locations.append((dest_lat, dest_lon))
+
+    route = get_route(locations=locations, profile=profile)
 
     if route is None:
         return {"error": "Could not find a route. The routing service may be unavailable."}
 
-    # Build GeoJSON FeatureCollection with route line
+    # Build GeoJSON FeatureCollection with route line and markers
+    features = [
+        {
+            "type": "Feature",
+            "geometry": route["geometry"],
+            "properties": {
+                "distance_km": route["distance_km"],
+                "duration_min": route["duration_min"],
+                "profile": profile,
+            },
+        },
+        # Origin marker
+        {
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [origin_lon, origin_lat]},
+            "properties": {"role": "origin", "name": from_name or "Origin"},
+        },
+        # Destination marker
+        {
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [dest_lon, dest_lat]},
+            "properties": {"role": "destination", "name": to_name or "Destination"},
+        },
+    ]
+
+    # Add waypoint markers
+    waypoint_names = []
+    for i, (lat, lon, name) in enumerate(waypoint_coords):
+        label = name or f"Waypoint {i + 1}"
+        waypoint_names.append(label)
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [lon, lat]},
+            "properties": {"role": "waypoint", "name": label, "waypoint_index": i + 1},
+        })
+
     route_geojson = {
         "type": "FeatureCollection",
-        "features": [
-            {
-                "type": "Feature",
-                "geometry": route["geometry"],
-                "properties": {
-                    "distance_km": route["distance_km"],
-                    "duration_min": route["duration_min"],
-                    "profile": profile,
-                },
-            },
-            # Origin marker
-            {
-                "type": "Feature",
-                "geometry": {"type": "Point", "coordinates": [origin_lon, origin_lat]},
-                "properties": {"role": "origin", "name": from_name or "Origin"},
-            },
-            # Destination marker
-            {
-                "type": "Feature",
-                "geometry": {"type": "Point", "coordinates": [dest_lon, dest_lat]},
-                "properties": {"role": "destination", "name": to_name or "Destination"},
-            },
-        ],
+        "features": features,
     }
 
     origin_label = from_name.split(",")[0] if from_name else "origin"
     dest_label = to_name.split(",")[0] if to_name else "dest"
     layer_name = f"route_{origin_label}_{dest_label}".replace(" ", "_").lower()[:50]
 
-    return {
+    result = {
         "geojson": route_geojson,
         "layer_name": layer_name,
         "feature_count": 1,
@@ -84,6 +134,15 @@ def handle_find_route(params: dict) -> dict:
         "from_name": from_name,
         "to_name": to_name,
     }
+
+    if waypoint_names:
+        result["waypoint_names"] = waypoint_names
+        result["waypoint_count"] = len(waypoint_names)
+        result["leg_count"] = route.get("leg_count", 1)
+        if "legs" in route:
+            result["legs"] = route["legs"]
+
+    return result
 
 
 def handle_isochrone(params: dict) -> dict:

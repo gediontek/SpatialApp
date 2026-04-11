@@ -524,7 +524,7 @@ def get_tool_definitions() -> list:
         # ---- Phase 4: Routing Tools ----
         {
             "name": "find_route",
-            "description": "Find a route between two locations. Returns a GeoJSON LineString with distance and duration. Supports driving, walking, and cycling profiles. Uses Valhalla routing engine.",
+            "description": "Find a route between two or more locations. Returns a GeoJSON LineString with distance and duration. Supports driving, walking, and cycling profiles. Supports optional intermediate waypoints for multi-stop routes. Uses Valhalla routing engine.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -547,6 +547,18 @@ def get_tool_definitions() -> list:
                         "description": "Destination as {lat, lon}",
                         "properties": {"lat": {"type": "number"}, "lon": {"type": "number"}},
                         "required": ["lat", "lon"]
+                    },
+                    "waypoints": {
+                        "type": "array",
+                        "description": "Optional intermediate stops between origin and destination. Each item has lat/lon coordinates or a location name to be geocoded.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "lat": {"type": "number"},
+                                "lon": {"type": "number"},
+                                "location": {"type": "string"}
+                            }
+                        }
                     },
                     "profile": {
                         "type": "string",
