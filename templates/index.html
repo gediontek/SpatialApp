@@ -32,6 +32,18 @@
     <div id="map-container">
         <div id="sidebar">
             <h2>Spatial Labeler</h2>
+            <div id="dashboard-link" style="display:none; margin-bottom: 10px;">
+                <a href="/dashboard" style="font-size: 13px; color: #007bff; text-decoration: none;">View Dashboard</a>
+            </div>
+            <script>
+                (function() {
+                    var token = localStorage.getItem('api_token');
+                    if (token) {
+                        var el = document.getElementById('dashboard-link');
+                        if (el) el.style.display = 'block';
+                    }
+                })();
+            </script>
 
             <!-- Tab Navigation -->
             <div class="tab-nav">

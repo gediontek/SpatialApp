@@ -493,6 +493,81 @@ def verify_db_integrity() -> bool:
         return False
 
 
+def get_user_sessions(user_id: str) -> list:
+    """Get all chat sessions for a user, with message counts."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT session_id, messages_json, created_at, updated_at FROM chat_sessions WHERE user_id = ? ORDER BY updated_at DESC",
+        (user_id,)
+    ).fetchall()
+    result = []
+    for r in rows:
+        try:
+            messages = json.loads(r["messages_json"]) if r["messages_json"] else []
+        except (json.JSONDecodeError, TypeError):
+            messages = []
+        result.append({
+            "session_id": r["session_id"],
+            "created_at": r["created_at"],
+            "updated_at": r["updated_at"],
+            "message_count": len(messages),
+        })
+    return result
+
+
+def get_user_layers(user_id: str) -> list:
+    """Get all layers for a user with metadata."""
+    return get_all_layers(user_id=user_id)
+
+
+def get_user_stats(user_id: str) -> dict:
+    """Get aggregated query stats for a user (for dashboard)."""
+    summary = get_metrics_summary(user_id=user_id)
+    return {
+        "total_queries": summary["total_queries"],
+        "total_tokens_used": summary["total_input_tokens"] + summary["total_output_tokens"],
+        "avg_response_time_ms": summary["avg_duration_ms"],
+        "total_tool_calls": summary["total_tool_calls"],
+    }
+
+
+def get_chat_session_with_owner(session_id: str) -> Optional[dict]:
+    """Get a chat session with its owner user_id. Returns dict or None."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT session_id, user_id, messages_json, created_at, updated_at FROM chat_sessions WHERE session_id = ?",
+        (session_id,)
+    ).fetchone()
+    if not row:
+        return None
+    try:
+        messages = json.loads(row["messages_json"]) if row["messages_json"] else []
+    except (json.JSONDecodeError, TypeError):
+        messages = []
+    return {
+        "session_id": row["session_id"],
+        "user_id": row["user_id"],
+        "messages": messages,
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def delete_chat_session_for_user(session_id: str, user_id: str) -> bool:
+    """Delete a chat session only if owned by user_id. Returns True if deleted."""
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            "DELETE FROM chat_sessions WHERE session_id = ? AND user_id = ?",
+            (session_id, user_id)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    except Exception:
+        conn.rollback()
+        raise
+
+
 def get_metrics_summary(user_id: str = None) -> dict:
     """Get aggregated metrics. Optionally filter by user."""
     conn = get_connection()
