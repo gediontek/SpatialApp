@@ -1,0 +1,295 @@
+"""Data fetching handlers: geocode, OSM fetch, map commands, nearby search."""
+
+import logging
+import requests
+
+from config import Config
+from nl_gis.geo_utils import ValidatedPoint
+from services.cache import geocode_cache, overpass_cache
+from services.rate_limiter import nominatim_limiter, overpass_limiter
+
+logger = logging.getLogger(__name__)
+
+
+def handle_geocode(params: dict) -> dict:
+    """Geocode a place name using Nominatim. Cached for 24h, rate-limited.
+
+    Returns:
+        Dict with lat, lon, display_name, bbox.
+    """
+    query = params.get("query", "")
+    if not query:
+        return {"error": "No query provided"}
+
+    # Check cache first
+    cached = geocode_cache.get(query.lower().strip())
+    if cached:
+        logger.debug(f"Geocode cache hit: {query}")
+        return cached
+
+    try:
+        nominatim_limiter.wait()
+        url = "https://nominatim.openstreetmap.org/search"
+        resp = requests.get(
+            url,
+            params={"q": query, "format": "json", "limit": 1},
+            headers={"User-Agent": "SpatialLabeler/1.0"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        if not data:
+            return {"error": f"Location not found: {query}"}
+
+        result = data[0]
+        bbox = result.get("boundingbox", [])
+
+        geo_result = {
+            "lat": float(result["lat"]),
+            "lon": float(result["lon"]),
+            "display_name": result["display_name"],
+            "bbox": [float(b) for b in bbox] if bbox else None,
+        }
+        geocode_cache.set(query.lower().strip(), geo_result)
+        return geo_result
+    except Exception as e:
+        logger.error("Geocoding error: %s", e, exc_info=True)
+        return {"error": f"Geocoding failed: {str(e)}"}
+
+
+def handle_fetch_osm(params: dict) -> dict:
+    """Fetch OSM features via Overpass API.
+
+    Returns:
+        GeoJSON FeatureCollection with fetched features,
+        plus metadata (feature_count, layer_name).
+    """
+    from nl_gis.handlers import OSM_FEATURE_MAPPINGS, _osm_to_geojson
+
+    feature_type = params.get("feature_type", "building")
+    category_name = params.get("category_name", feature_type)
+    bbox = params.get("bbox")
+    location = params.get("location")
+
+    # If no bbox but location given, geocode to get bbox
+    if not bbox and location:
+        geo_result = handle_geocode({"query": location})
+        if "error" in geo_result:
+            return geo_result
+        # Nominatim bbox is [south_lat, north_lat, west_lon, east_lon]
+        nom_bbox = geo_result.get("bbox")
+        if nom_bbox and len(nom_bbox) == 4:
+            bbox = f"{nom_bbox[0]},{nom_bbox[2]},{nom_bbox[1]},{nom_bbox[3]}"
+        else:
+            # Fallback: create small bbox around point
+            lat, lon = geo_result["lat"], geo_result["lon"]
+            bbox = f"{lat - 0.01},{lon - 0.01},{lat + 0.01},{lon + 0.01}"
+
+    if not bbox:
+        return {"error": "No bounding box or location provided"}
+
+    if feature_type not in OSM_FEATURE_MAPPINGS:
+        return {"error": f"Unknown feature type: {feature_type}. Valid types: {', '.join(OSM_FEATURE_MAPPINGS.keys())}"}
+
+    mapping = OSM_FEATURE_MAPPINGS[feature_type]
+    key = mapping["key"]
+    value = mapping["value"]
+
+    # Build Overpass query — use `out geom` to get coordinates inline
+    # (avoids slow node-by-node reconstruction)
+    if value is None:
+        overpass_query = f"""
+        [out:json][timeout:30];
+        (
+          way["{key}"]({bbox});
+          relation["{key}"]({bbox});
+        );
+        out geom qt;
+        """
+    else:
+        overpass_query = f"""
+        [out:json][timeout:30];
+        (
+          way["{key}"="{value}"]({bbox});
+          relation["{key}"="{value}"]({bbox});
+        );
+        out geom qt;
+        """
+
+    # Check cache before hitting the API
+    cache_key = f"{key}={value}|{bbox}"
+    cached = overpass_cache.get(cache_key)
+    if cached:
+        logger.debug(f"Overpass cache hit: {cache_key}")
+        return cached
+
+    try:
+        overpass_limiter.wait()
+        response = requests.get(
+            "https://overpass-api.de/api/interpreter",
+            params={"data": overpass_query},
+            timeout=(5, Config.OSM_REQUEST_TIMEOUT),
+        )
+        response.raise_for_status()
+        osm_data = response.json()
+    except requests.Timeout:
+        return {"error": "OSM request timed out. Try a smaller area."}
+    except requests.RequestException as e:
+        return {"error": f"OSM request failed: {str(e)}"}
+
+    # Convert to GeoJSON
+    geojson = _osm_to_geojson(osm_data, category_name, feature_type)
+    layer_name = f"{feature_type}_{category_name}".replace(" ", "_").lower()
+
+    count = len(geojson["features"])
+    capped = count >= Config.MAX_FEATURES_PER_LAYER
+    result = {
+        "geojson": geojson,
+        "feature_count": count,
+        "layer_name": layer_name,
+        "capped": capped,
+    }
+    if capped:
+        result["note"] = f"Results capped at {Config.MAX_FEATURES_PER_LAYER} features. The actual area may contain more. Try a smaller area for complete data."
+
+    # Cache successful result
+    overpass_cache.set(cache_key, result)
+    return result
+
+
+def handle_map_command(params: dict) -> dict:
+    """Process a map control command.
+
+    Returns instruction dict for the frontend to execute.
+    """
+    action = params.get("action")
+    valid_actions = ["pan", "zoom", "pan_and_zoom", "fit_bounds", "change_basemap"]
+
+    if action not in valid_actions:
+        return {"error": f"Unknown action: {action}. Valid: {', '.join(valid_actions)}"}
+
+    result = {"success": True, "action": action}
+
+    if action == "pan":
+        lat, lon = params.get("lat"), params.get("lon")
+        if lat is None or lon is None:
+            return {"error": "pan requires lat and lon"}
+        result["lat"] = lat
+        result["lon"] = lon
+        result["description"] = f"Panned to ({lat:.4f}, {lon:.4f})"
+
+    elif action == "zoom":
+        zoom = params.get("zoom")
+        if zoom is None:
+            return {"error": "zoom requires zoom level"}
+        result["zoom"] = max(1, min(20, zoom))
+        result["description"] = f"Zoom set to {result['zoom']}"
+
+    elif action == "pan_and_zoom":
+        lat, lon = params.get("lat"), params.get("lon")
+        zoom = params.get("zoom", 13)
+        if lat is None or lon is None:
+            return {"error": "pan_and_zoom requires lat and lon"}
+        result["lat"] = lat
+        result["lon"] = lon
+        result["zoom"] = max(1, min(20, zoom))
+        result["description"] = f"Panned to ({lat:.4f}, {lon:.4f}) at zoom {result['zoom']}"
+
+    elif action == "fit_bounds":
+        bbox = params.get("bbox")
+        if not bbox or len(bbox) != 4:
+            return {"error": "fit_bounds requires bbox [south, west, north, east]"}
+        result["bbox"] = bbox
+        result["description"] = f"Fitted map to bounds"
+
+    elif action == "change_basemap":
+        basemap = params.get("basemap", "osm")
+        if basemap not in ("osm", "satellite"):
+            return {"error": f"Unknown basemap: {basemap}. Use 'osm' or 'satellite'"}
+        result["basemap"] = basemap
+        result["description"] = f"Changed basemap to {basemap}"
+
+    return result
+
+
+def handle_search_nearby(params: dict) -> dict:
+    """Search for OSM features near a point."""
+    from nl_gis.handlers import OSM_FEATURE_MAPPINGS, _osm_to_geojson
+
+    lat = params.get("lat")
+    lon = params.get("lon")
+    location = params.get("location")
+    radius_m = params.get("radius_m", 500)
+    feature_type = params.get("feature_type", "building")
+
+    # Validate radius
+    try:
+        radius_m = float(radius_m)
+        if radius_m <= 0 or radius_m > 50000:
+            return {"error": "radius_m must be between 0 and 50000 meters"}
+    except (TypeError, ValueError):
+        return {"error": "radius_m must be a number"}
+
+    # Resolve location to coordinates
+    if lat is None or lon is None:
+        if location:
+            geo = handle_geocode({"query": location})
+            if "error" in geo:
+                return {"error": f"Could not geocode location: {geo['error']}"}
+            lat, lon = geo["lat"], geo["lon"]
+        else:
+            return {"error": "Provide lat/lon or location name"}
+
+    # Validate coordinates
+    try:
+        vp = ValidatedPoint(lat=float(lat), lon=float(lon))
+        lat, lon = vp.lat, vp.lon
+    except (ValueError, TypeError) as e:
+        return {"error": f"Invalid coordinates: {e}"}
+
+    if feature_type not in OSM_FEATURE_MAPPINGS:
+        return {"error": f"Unknown feature type: {feature_type}"}
+
+    mapping = OSM_FEATURE_MAPPINGS[feature_type]
+    key = mapping["key"]
+    value = mapping["value"]
+
+    # Build Overpass around query
+    if value is None:
+        tag_filter = f'["{key}"]'
+    else:
+        tag_filter = f'["{key}"="{value}"]'
+
+    overpass_query = f"""
+    [out:json][timeout:30];
+    (
+      way{tag_filter}(around:{radius_m},{lat},{lon});
+    );
+    out geom qt;
+    """
+
+    try:
+        overpass_limiter.wait()
+        response = requests.get(
+            "https://overpass-api.de/api/interpreter",
+            params={"data": overpass_query},
+            timeout=Config.OSM_REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        osm_data = response.json()
+    except requests.Timeout:
+        return {"error": "Search timed out. Try a smaller radius."}
+    except requests.RequestException as e:
+        return {"error": f"OSM request failed: {str(e)}"}
+
+    geojson = _osm_to_geojson(osm_data, feature_type, feature_type)
+    layer_name = f"nearby_{feature_type}_{int(radius_m)}m"
+
+    return {
+        "geojson": geojson,
+        "layer_name": layer_name,
+        "feature_count": len(geojson["features"]),
+        "center": {"lat": lat, "lon": lon},
+        "radius_m": radius_m,
+    }

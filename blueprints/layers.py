@@ -1,0 +1,135 @@
+"""Layers blueprint: layer CRUD and import."""
+
+import json
+import logging
+import os
+
+from flask import Blueprint, jsonify, request, g
+import geopandas as gpd
+from werkzeug.utils import secure_filename
+
+from config import Config
+import state
+from blueprints.auth import require_api_token
+
+layers_bp = Blueprint('layers', __name__)
+
+
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
+
+def _evict_layers_if_needed():
+    """Remove oldest layers when store exceeds limit. Call under layer_lock."""
+    while len(state.layer_store) > state.MAX_LAYERS_IN_MEMORY:
+        evicted_name, _ = state.layer_store.popitem(last=False)
+        logging.info(f"Evicted layer '{evicted_name}' from memory (limit: {state.MAX_LAYERS_IN_MEMORY})")
+
+
+# ------------------------------------------------------------------
+# Routes
+# ------------------------------------------------------------------
+
+@layers_bp.route('/api/layers')
+@require_api_token
+def api_get_layers():
+    """Get list of named layers."""
+    with state.layer_lock:
+        layers = []
+        for name, geojson in state.layer_store.items():
+            feature_count = len(geojson.get('features', [])) if isinstance(geojson, dict) else 0
+            layers.append({
+                'name': name,
+                'feature_count': feature_count,
+            })
+    return jsonify(layers=layers)
+
+
+@layers_bp.route('/api/layers/<layer_name>', methods=['DELETE'])
+@require_api_token
+def api_delete_layer(layer_name):
+    """Delete a named layer."""
+    from flask import current_app
+    user_id = getattr(g, 'user_id', 'anonymous')
+    with state.layer_lock:
+        if layer_name not in state.layer_store:
+            return jsonify(error='Layer not found'), 404
+        # DB first: if delete fails, in-memory stays consistent
+        if state.db:
+            state.db.delete_layer(layer_name, user_id=user_id)
+        # Only remove from cache after DB succeeds
+        del state.layer_store[layer_name]
+        return jsonify(success=True)
+
+
+@layers_bp.route('/api/import', methods=['POST'])
+@require_api_token
+def api_import_layer():
+    """Import a vector file (GeoJSON, Shapefile zip, GeoPackage) as a named layer."""
+    from flask import current_app
+    if 'file' not in request.files:
+        return jsonify(error='No file provided'), 400
+
+    file = request.files['file']
+    layer_name = request.form.get('layer_name', '')
+    if not file.filename:
+        return jsonify(error='No file selected'), 400
+
+    filename = secure_filename(file.filename)
+    ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+
+    if ext not in ('geojson', 'json', 'zip', 'gpkg'):
+        return jsonify(error='Supported formats: .geojson, .json, .zip (shapefile), .gpkg'), 400
+
+    import tempfile
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            filepath = os.path.join(tmp, filename)
+            file.save(filepath)
+
+            # For shapefile zips, extract first
+            if ext == 'zip':
+                import zipfile
+                with zipfile.ZipFile(filepath, 'r') as zf:
+                    zf.extractall(tmp)
+                # Find the .shp file
+                shp_files = [f for f in os.listdir(tmp) if f.endswith('.shp')]
+                if not shp_files:
+                    return jsonify(error='No .shp file found in zip'), 400
+                filepath = os.path.join(tmp, shp_files[0])
+
+            gdf = gpd.read_file(filepath)
+            if len(gdf) == 0:
+                return jsonify(error='File contains no features'), 400
+
+            # Ensure WGS84
+            if gdf.crs and gdf.crs.to_epsg() != 4326:
+                gdf = gdf.to_crs(epsg=4326)
+
+            geojson_data = json.loads(gdf.to_json())
+
+            if not layer_name:
+                layer_name = filename.rsplit('.', 1)[0].replace(' ', '_').lower()
+
+            # Cap features
+            if len(geojson_data.get('features', [])) > Config.MAX_FEATURES_PER_LAYER:
+                geojson_data['features'] = geojson_data['features'][:Config.MAX_FEATURES_PER_LAYER]
+
+            uid = getattr(g, 'user_id', 'anonymous')
+            # DB first: if save fails, in-memory stays consistent
+            if state.db:
+                state.db.save_layer(layer_name, geojson_data, user_id=uid)
+            # Only update cache after DB succeeds
+            with state.layer_lock:
+                state.layer_store[layer_name] = geojson_data
+                _evict_layers_if_needed()
+
+            return jsonify(
+                success=True,
+                layer_name=layer_name,
+                feature_count=len(geojson_data.get('features', [])),
+                geojson=geojson_data,
+            )
+    except Exception as e:
+        current_app.logger.error(f"Import error: {e}", exc_info=True)
+        return jsonify(error='Import failed'), 500

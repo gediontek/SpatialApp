@@ -1,0 +1,374 @@
+"""Spatial analysis handlers: buffer, spatial query, aggregate, area, distance, filter."""
+
+import logging
+
+from shapely.ops import unary_union
+
+from config import Config
+from nl_gis.geo_utils import (
+    ValidatedPoint,
+    geodesic_area,
+    geodesic_distance,
+    geojson_to_shapely,
+    shapely_to_geojson,
+    buffer_geometry,
+)
+from nl_gis.handlers import (
+    _resolve_point_from_object,
+    _safe_geojson_to_shapely,
+    _get_layer_snapshot,
+    _get_layer_geometries,
+    _build_spatial_index,
+)
+
+logger = logging.getLogger(__name__)
+
+MAX_BUFFER_DISTANCE_M = 100000  # 100 km max
+
+
+def handle_calculate_area(params: dict, layer_store: dict = None) -> dict:
+    """Calculate geodesic area of polygon features.
+
+    Accepts either a layer_name (looks up in layer_store) or a GeoJSON geometry.
+    """
+    layer_name = params.get("layer_name")
+    geometry = params.get("geometry")
+
+    geometries = []
+
+    if layer_name:
+        features, err = _get_layer_snapshot(layer_store, layer_name)
+        if err:
+            return {"error": err}
+        for f in features:
+            geom = f.get("geometry")
+            if geom and geom.get("type") in ("Polygon", "MultiPolygon"):
+                geometries.append(geojson_to_shapely(geom))
+    elif geometry:
+        geom = geojson_to_shapely(geometry)
+        if geom.geom_type in ("Polygon", "MultiPolygon"):
+            geometries.append(geom)
+    else:
+        return {"error": "Provide either layer_name or geometry"}
+
+    if not geometries:
+        return {"error": "No polygon geometries found to calculate area"}
+
+    total_area = 0.0
+    per_feature = []
+    for i, geom in enumerate(geometries):
+        area = geodesic_area(geom)
+        total_area += area
+        per_feature.append({"index": i, "area_sq_m": round(area, 2)})
+
+    return {
+        "total_area_sq_m": round(total_area, 2),
+        "total_area_sq_km": round(total_area / 1e6, 4),
+        "total_area_acres": round(total_area / 4046.86, 2),
+        "feature_count": len(geometries),
+        "per_feature": per_feature if len(per_feature) <= 20 else None,
+    }
+
+
+def handle_measure_distance(params: dict) -> dict:
+    """Measure geodesic distance between two points.
+
+    Points can be specified as {lat, lon} or as location names (geocoded).
+    """
+    # Resolve from point
+    from_vp, from_name, err = _resolve_point_from_object(params, "from_point", "from_location")
+    if err:
+        return {"error": err}
+
+    # Resolve to point
+    to_vp, to_name, err = _resolve_point_from_object(params, "to_point", "to_location")
+    if err:
+        return {"error": err}
+
+    distance = geodesic_distance(from_vp, to_vp)
+
+    return {
+        "distance_m": round(distance, 2),
+        "distance_km": round(distance / 1000, 2),
+        "distance_mi": round(distance / 1609.344, 2),
+        "from_name": from_name,
+        "to_name": to_name,
+    }
+
+
+def handle_buffer(params: dict, layer_store: dict = None) -> dict:
+    """Create a buffer around geometry or layer features."""
+    try:
+        distance_m = float(params.get("distance_m", 0))
+    except (TypeError, ValueError):
+        return {"error": "distance_m must be a number"}
+    if distance_m <= 0:
+        return {"error": "distance_m must be a positive number"}
+    if distance_m > MAX_BUFFER_DISTANCE_M:
+        return {"error": f"distance_m must be at most {MAX_BUFFER_DISTANCE_M} meters (100 km)"}
+
+    layer_name = params.get("layer_name")
+    geometry = params.get("geometry")
+
+    source_geoms = []
+
+    if layer_name:
+        geoms, err = _get_layer_geometries(layer_store, layer_name)
+        if err:
+            return {"error": err}
+        source_geoms = geoms
+    elif geometry:
+        source_geoms = [geojson_to_shapely(geometry)]
+    else:
+        return {"error": "Provide either layer_name or geometry"}
+
+    if not source_geoms:
+        return {"error": "No geometries to buffer"}
+
+    # Union all source geometries, then buffer
+    combined = unary_union(source_geoms)
+    buffered = buffer_geometry(combined, distance_m)
+
+    result_geojson = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "geometry": shapely_to_geojson(buffered),
+            "properties": {
+                "buffer_distance_m": distance_m,
+                "source": layer_name or "geometry",
+            }
+        }]
+    }
+
+    result_name = f"buffer_{int(distance_m)}m"
+    if layer_name:
+        result_name = f"buffer_{int(distance_m)}m_{layer_name}"
+
+    return {
+        "geojson": result_geojson,
+        "layer_name": result_name,
+        "feature_count": 1,
+        "buffer_distance_m": distance_m,
+        "area_sq_km": round(geodesic_area(buffered) / 1e6, 4),
+    }
+
+
+def handle_spatial_query(params: dict, layer_store: dict = None) -> dict:
+    """Find features matching a spatial predicate."""
+    source_layer = params.get("source_layer")
+    predicate = params.get("predicate")
+    target_layer = params.get("target_layer")
+    target_geometry = params.get("target_geometry")
+    distance_m = params.get("distance_m", 0)
+
+    valid_predicates = ["intersects", "contains", "within", "within_distance"]
+    if predicate not in valid_predicates:
+        return {"error": f"Unknown predicate: {predicate}. Valid: {', '.join(valid_predicates)}"}
+
+    # Get source features
+    source_geoms, err = _get_layer_geometries(layer_store, source_layer)
+    if err:
+        return {"error": f"Source: {err}"}
+
+    # Get target geometry
+    if target_layer:
+        target_geoms, err = _get_layer_geometries(layer_store, target_layer)
+        if err:
+            return {"error": f"Target: {err}"}
+        target_geom = unary_union(target_geoms) if target_geoms else None
+    elif target_geometry:
+        target_geom = geojson_to_shapely(target_geometry)
+    else:
+        return {"error": "Provide either target_layer or target_geometry"}
+
+    if target_geom is None:
+        return {"error": "No target geometry found"}
+
+    # For within_distance, buffer the target
+    if predicate == "within_distance":
+        if not distance_m or distance_m <= 0:
+            return {"error": "within_distance requires positive distance_m"}
+        target_geom = buffer_geometry(target_geom, distance_m)
+
+    # Get original features from source layer, aligned with source_geoms.
+    # _get_layer_geometries filters out features with invalid/missing geometry,
+    # so we must apply the same filter to keep indices aligned.
+    source_features, _ = _get_layer_snapshot(layer_store, source_layer)
+    source_features = source_features or []
+    valid_source_features = []
+    for f in source_features:
+        geom = f.get("geometry")
+        if geom:
+            shapely_geom = _safe_geojson_to_shapely(geom)
+            if shapely_geom:
+                valid_source_features.append(f)
+
+    matching_features = []
+
+    # Use spatial index (STRtree) to filter candidates by bounding box overlap,
+    # then verify with exact predicate. Identical results, faster for large layers.
+    tree = _build_spatial_index(source_geoms)
+    if tree is not None:
+        candidate_indices = tree.query(target_geom)
+        for i in candidate_indices:
+            geom = source_geoms[i]
+            match = False
+            if predicate == "intersects" or predicate == "within_distance":
+                match = geom.intersects(target_geom)
+            elif predicate == "contains":
+                match = geom.contains(target_geom)
+            elif predicate == "within":
+                match = geom.within(target_geom)
+            if match:
+                matching_features.append(valid_source_features[i])
+
+    result_geojson = {
+        "type": "FeatureCollection",
+        "features": matching_features[:Config.MAX_FEATURES_PER_LAYER],
+    }
+
+    result_name = f"{predicate}_{source_layer}"
+
+    return {
+        "geojson": result_geojson,
+        "layer_name": result_name,
+        "feature_count": len(matching_features),
+        "source_total": len(source_geoms),
+        "match_percentage": round(len(matching_features) / max(len(source_geoms), 1) * 100, 1),
+    }
+
+
+def handle_aggregate(params: dict, layer_store: dict = None) -> dict:
+    """Summarize features in a layer."""
+    layer_name = params.get("layer_name")
+    operation = params.get("operation")
+    group_by_attr = params.get("group_by")
+
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
+
+    if operation == "count":
+        if group_by_attr:
+            groups = {}
+            for f in features:
+                val = f.get("properties", {}).get(group_by_attr, "unknown")
+                groups[val] = groups.get(val, 0) + 1
+            return {
+                "total": len(features),
+                "groups": [{"value": k, "count": v} for k, v in sorted(groups.items(), key=lambda x: -x[1])],
+                "group_by": group_by_attr,
+            }
+        return {"total": len(features)}
+
+    elif operation == "area":
+        total_area = 0.0
+        polygon_count = 0
+        for f in features:
+            geom = f.get("geometry")
+            if geom and geom.get("type") in ("Polygon", "MultiPolygon"):
+                total_area += geodesic_area(geojson_to_shapely(geom))
+                polygon_count += 1
+        return {
+            "total_area_sq_m": round(total_area, 2),
+            "total_area_sq_km": round(total_area / 1e6, 4),
+            "total_area_acres": round(total_area / 4046.86, 2),
+            "polygon_count": polygon_count,
+            "feature_count": len(features),
+        }
+
+    elif operation == "group_by":
+        if not group_by_attr:
+            return {"error": "group_by operation requires group_by attribute name"}
+        groups = {}
+        for f in features:
+            val = f.get("properties", {}).get(group_by_attr, "unknown")
+            groups[val] = groups.get(val, 0) + 1
+        return {
+            "groups": [{"value": k, "count": v} for k, v in sorted(groups.items(), key=lambda x: -x[1])],
+            "total": len(features),
+            "group_by": group_by_attr,
+        }
+
+    return {"error": f"Unknown operation: {operation}"}
+
+
+def handle_filter_layer(params: dict, layer_store: dict = None) -> dict:
+    """Filter features in a layer by attribute value. Returns a new layer."""
+    layer_name = params.get("layer_name")
+    attribute = params.get("attribute")
+    operator = params.get("operator", "equals")
+    value = params.get("value") or ""
+    output_name = params.get("output_name", f"filtered_{layer_name}")
+
+    if not layer_name or not attribute:
+        return {"error": "layer_name and attribute are required"}
+
+    supported_operators = {"equals", "not_equals", "contains", "starts_with",
+                           "greater_than", "less_than", "greater_equal", "less_equal", "between"}
+    if operator not in supported_operators:
+        return {"error": f"Unknown operator '{operator}'. Supported: {', '.join(sorted(supported_operators))}"}
+
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
+
+    filtered = []
+    val_lower = value.lower()
+    for feature in features:
+        props = feature.get("properties", {})
+        tags = props.get("osm_tags", {})
+        # Check both direct properties and OSM tags
+        prop_val = str(props.get(attribute, tags.get(attribute, "")))
+
+        match = False
+        if operator == "equals":
+            match = prop_val.lower() == val_lower
+        elif operator == "not_equals":
+            match = prop_val.lower() != val_lower
+        elif operator == "contains":
+            match = val_lower in prop_val.lower()
+        elif operator == "starts_with":
+            match = prop_val.lower().startswith(val_lower)
+        elif operator == "greater_than":
+            try:
+                match = float(prop_val) > float(value)
+            except (ValueError, TypeError):
+                match = False
+        elif operator == "less_than":
+            try:
+                match = float(prop_val) < float(value)
+            except (ValueError, TypeError):
+                match = False
+        elif operator == "greater_equal":
+            try:
+                match = float(prop_val) >= float(value)
+            except (ValueError, TypeError):
+                match = False
+        elif operator == "less_equal":
+            try:
+                match = float(prop_val) <= float(value)
+            except (ValueError, TypeError):
+                match = False
+        elif operator == "between":
+            try:
+                parts = value.split(",")
+                if len(parts) != 2:
+                    match = False
+                else:
+                    min_val, max_val = float(parts[0].strip()), float(parts[1].strip())
+                    match = min_val <= float(prop_val) <= max_val
+            except (ValueError, TypeError):
+                match = False
+
+        if match:
+            filtered.append(feature)
+
+    result_geojson = {"type": "FeatureCollection", "features": filtered}
+    return {
+        "geojson": result_geojson,
+        "layer_name": output_name,
+        "feature_count": len(filtered),
+        "original_count": len(features),
+    }

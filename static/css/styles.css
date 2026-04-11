@@ -721,18 +721,291 @@ input[type="color"] {
     color: #dc3545;
 }
 
-/* Responsive */
+/* ============================================================
+   Mobile Toggle Button
+   ============================================================ */
+
+.mobile-sidebar-toggle {
+    display: none;
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1001;
+    padding: 12px 24px;
+    font-size: 15px;
+    font-weight: 600;
+    border-radius: 24px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    min-width: 44px;
+    min-height: 44px;
+}
+
+.mobile-layer-toggle {
+    display: none;
+    position: fixed;
+    bottom: 20px;
+    right: 16px;
+    z-index: 1001;
+    padding: 10px 14px;
+    font-size: 14px;
+    font-weight: 600;
+    border-radius: 24px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    background-color: #6c757d;
+    min-width: 44px;
+    min-height: 44px;
+}
+
+.mobile-layer-toggle:hover {
+    background-color: #5a6268;
+}
+
+/* ============================================================
+   Responsive: Tablet (max-width: 768px)
+   ============================================================ */
+
 @media (max-width: 768px) {
     #map-container {
         flex-direction: column;
+        position: relative;
+    }
+
+    #map {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 1;
     }
 
     #sidebar {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
         width: 100%;
-        max-height: 300px;
+        max-height: 55vh;
+        z-index: 1000;
+        border-right: none;
+        border-top: 2px solid #007bff;
+        box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.15);
+        transition: transform 0.3s ease;
+        overflow-y: auto;
+    }
+
+    #sidebar.mobile-hidden {
+        transform: translateY(100%);
+    }
+
+    #sidebar h2 {
+        font-size: 16px;
+        margin-bottom: 8px;
     }
 
     #tab-chat {
-        height: 300px;
+        height: 40vh;
+    }
+
+    /* Touch-friendly tap targets */
+    button {
+        min-height: 44px;
+        min-width: 44px;
+        padding: 10px 14px;
+        font-size: 14px;
+    }
+
+    .tab-btn {
+        min-height: 44px;
+        padding: 12px 8px;
+        font-size: 14px;
+    }
+
+    input[type="text"], input[type="file"], select {
+        min-height: 44px;
+        padding: 10px;
+        font-size: 14px;
+    }
+
+    .chat-input-area textarea {
+        min-height: 44px;
+        font-size: 14px;
+    }
+
+    .quick-action-btn {
+        min-height: 36px;
+        padding: 6px 12px;
+        font-size: 13px;
+    }
+
+    /* Layer panel adjustments */
+    #layerPanel {
+        max-height: 120px;
+    }
+
+    #layerPanel.mobile-collapsed {
+        display: none;
+    }
+
+    /* Mobile toggle buttons visible */
+    .mobile-sidebar-toggle,
+    .mobile-layer-toggle {
+        display: block;
+    }
+
+    #sidebar:not(.mobile-hidden) ~ .mobile-sidebar-toggle {
+        bottom: calc(55vh + 10px);
+    }
+
+    /* Table container */
+    #table-container {
+        position: relative;
+        z-index: 999;
+        height: 150px;
+    }
+
+    /* Move Leaflet draw toolbar so it doesn't overlap sidebar */
+    .leaflet-draw {
+        top: 10px !important;
+    }
+
+    .leaflet-top.leaflet-left {
+        top: 10px;
+        left: 10px;
+    }
+
+    /* Toast positioning */
+    #toast-container {
+        top: 10px;
+        right: 10px;
+        left: 10px;
+    }
+
+    .toast {
+        max-width: 100%;
+    }
+
+    /* Export buttons wrap */
+    .export-buttons {
+        flex-direction: column;
+    }
+
+    .export-btn {
+        width: 100%;
+    }
+
+    /* Checkbox touch targets */
+    .checkbox-label {
+        min-height: 44px;
+        padding: 6px 0;
+        font-size: 14px;
+    }
+
+    .checkbox-label input[type="checkbox"] {
+        width: 20px;
+        height: 20px;
+    }
+}
+
+/* ============================================================
+   Responsive: Phone (max-width: 480px)
+   ============================================================ */
+
+@media (max-width: 480px) {
+    #sidebar {
+        max-height: 60vh;
+        padding: 10px;
+    }
+
+    #sidebar h2 {
+        font-size: 14px;
+    }
+
+    #tab-chat {
+        height: 45vh;
+    }
+
+    .chat-messages {
+        min-height: 120px;
+    }
+
+    .chat-msg {
+        max-width: 95%;
+        font-size: 14px;
+    }
+
+    /* Stack action buttons vertically */
+    .actions {
+        flex-direction: column;
+    }
+
+    .actions button {
+        width: 100%;
+    }
+
+    .btn-row {
+        flex-direction: column;
+    }
+
+    .btn-row button {
+        width: 100%;
+    }
+
+    /* Larger tap targets on phone */
+    button {
+        min-height: 48px;
+        font-size: 15px;
+    }
+
+    .tab-btn {
+        font-size: 13px;
+        padding: 12px 4px;
+    }
+
+    /* Layer items touch-friendly */
+    .layer-item {
+        padding: 8px;
+        font-size: 13px;
+    }
+
+    .layer-toggle-btn,
+    .layer-fit-btn,
+    .layer-delete-btn {
+        min-width: 36px;
+        min-height: 36px;
+        font-size: 16px;
+        padding: 6px;
+    }
+
+    /* Table adjustments */
+    #table-container {
+        height: 120px;
+    }
+
+    table {
+        font-size: 11px;
+    }
+
+    th, td {
+        padding: 4px 6px;
+    }
+
+    /* Quick action buttons */
+    .chat-quick-actions {
+        gap: 6px;
+    }
+
+    .quick-action-btn {
+        font-size: 12px;
+        padding: 8px 12px;
+        min-height: 40px;
+    }
+
+    /* Small buttons */
+    .small-btn {
+        min-height: 36px;
+        padding: 6px 12px;
+        font-size: 12px;
     }
 }

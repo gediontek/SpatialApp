@@ -3,7 +3,7 @@
 <head>
     <title>Spatial Labeler</title>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
@@ -24,6 +24,10 @@
         <div class="spinner"></div>
         <p id="loading-text">Loading...</p>
     </div>
+
+    <!-- Mobile toggle buttons -->
+    <button class="mobile-sidebar-toggle" id="mobileSidebarToggle" onclick="document.getElementById('sidebar').classList.toggle('mobile-hidden'); this.textContent = document.getElementById('sidebar').classList.contains('mobile-hidden') ? 'Open Panel' : 'Close Panel';">Close Panel</button>
+    <button class="mobile-layer-toggle" id="mobileLayerToggle" onclick="document.getElementById('layerPanel').classList.toggle('mobile-collapsed'); this.textContent = document.getElementById('layerPanel').classList.contains('mobile-collapsed') ? 'Layers' : 'Hide Layers';">Layers</button>
 
     <div id="map-container">
         <div id="sidebar">
