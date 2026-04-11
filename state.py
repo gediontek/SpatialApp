@@ -28,3 +28,6 @@ SESSION_TTL_SECONDS = Config.SESSION_TTL_SECONDS
 
 # Database (set by create_app) -----------------------------------------
 db = None
+
+# SocketIO (set by create_app when flask-socketio is available) --------
+socketio = None

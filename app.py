@@ -14,6 +14,31 @@ from config import Config
 import state
 
 
+def _create_database():
+    """Database factory: returns the configured database backend.
+
+    Returns a DatabaseInterface implementation based on DATABASE_BACKEND config:
+    - 'sqlite' (default): SQLite via services.database.Database
+    - 'postgres': PostgreSQL/PostGIS via services.postgres_db.PostgresDatabase
+
+    Raises:
+        NotImplementedError: If postgres backend is selected (not yet implemented).
+        ValueError: If an unknown backend is configured.
+    """
+    backend = Config.DATABASE_BACKEND.lower()
+    if backend == 'postgres':
+        from services.postgres_db import PostgresDatabase
+        return PostgresDatabase(Config.DATABASE_URL)
+    elif backend == 'sqlite':
+        from services.database import Database
+        return Database(Config.DATABASE_PATH)
+    else:
+        raise ValueError(
+            f"Unknown DATABASE_BACKEND: {backend!r}. "
+            f"Supported values: 'sqlite', 'postgres'"
+        )
+
+
 def create_app(testing=False):
     """Application factory.
 
@@ -58,23 +83,29 @@ def create_app(testing=False):
     # ------------------------------------------------------------------
     @app.teardown_appcontext
     def close_db_connection(exception):
-        from services.database import close_connection
-        close_connection()
+        if state.db is not None:
+            state.db.close_connection()
+        else:
+            # Fallback: close module-level connection if db not initialized
+            from services.database import close_connection
+            close_connection()
 
     # ------------------------------------------------------------------
     # Initialize database
     # ------------------------------------------------------------------
     try:
-        import services.database as db_module
-        db_module.init_db()
-        if db_module.verify_db_integrity():
-            state.db = db_module
+        db_instance = _create_database()
+        db_instance.init_db()
+        if db_instance.verify_db_integrity():
+            state.db = db_instance
             try:
-                db_module.cleanup_old_metrics(days=180)
+                db_instance.cleanup_old_metrics(days=180)
             except Exception:
                 logging.debug("Metrics cleanup failed on startup", exc_info=True)
         else:
             logging.error("Database integrity check failed — running without DB persistence")
+    except NotImplementedError as e:
+        logging.warning(f"Database backend not available: {e}")
     except Exception as e:
         logging.warning(f"Database init skipped: {e}")
 
@@ -177,6 +208,20 @@ def create_app(testing=False):
     from blueprints.chat import _start_session_cleanup_timer
     _start_session_cleanup_timer()
 
+    # ------------------------------------------------------------------
+    # Initialize WebSocket support (optional — requires flask-socketio)
+    # ------------------------------------------------------------------
+    try:
+        from flask_socketio import SocketIO
+        from blueprints.websocket import register_websocket_events
+
+        socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+        register_websocket_events(socketio)
+        state.socketio = socketio
+        logging.info("WebSocket support enabled (flask-socketio)")
+    except ImportError:
+        logging.info("WebSocket support disabled (flask-socketio not installed)")
+
     return app
 
 
@@ -214,4 +259,8 @@ from blueprints.annotations import save_annotations_to_file, _persist_annotation
 from blueprints.osm import validate_osm_input, validate_bbox
 
 if __name__ == '__main__':
-    app.run(debug=Config.DEBUG, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    port = int(os.environ.get('PORT', 5000))
+    if state.socketio is not None:
+        state.socketio.run(app, debug=Config.DEBUG, host='0.0.0.0', port=port)
+    else:
+        app.run(debug=Config.DEBUG, host='0.0.0.0', port=port)

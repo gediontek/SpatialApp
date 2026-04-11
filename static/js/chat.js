@@ -24,10 +24,94 @@ var ChatPanel = (function() {
     var toolStepCounter = 0;
     var _lastToolStepId = null;
 
+    // WebSocket state
+    var _socket = null;
+    var _useWebSocket = false;
+    var _wsMap = null;
+    var _wsLayerManager = null;
+    var _wsTypingId = null;
+
     function init(map, layerManager) {
         _layerManager = layerManager;
         bindEvents(map, layerManager);
         initNetworkStatusMonitor();
+        initWebSocket(map, layerManager);
+    }
+
+    /**
+     * Initialize WebSocket transport if Socket.IO client is available.
+     * Falls back to SSE if Socket.IO is not loaded or connection fails.
+     */
+    function initWebSocket(map, layerManager) {
+        if (typeof io === 'undefined') {
+            console.log('ChatPanel: Socket.IO not available, using SSE transport');
+            return;
+        }
+
+        _wsMap = map;
+        _wsLayerManager = layerManager;
+
+        try {
+            var token = localStorage.getItem('api_token') || '';
+            _socket = io({
+                query: { token: token },
+                transports: ['websocket', 'polling'],
+                reconnection: true,
+                reconnectionAttempts: 5,
+                reconnectionDelay: 1000,
+                reconnectionDelayMax: 5000
+            });
+
+            _socket.on('connect', function() {
+                console.log('ChatPanel: WebSocket connected');
+                _useWebSocket = true;
+                // Join session room
+                _socket.emit('join_session', { session_id: sessionId });
+            });
+
+            _socket.on('disconnect', function(reason) {
+                console.log('ChatPanel: WebSocket disconnected:', reason);
+                // Keep _useWebSocket true so reconnection attempts work.
+                // Only fall back to SSE if we never connected successfully.
+            });
+
+            _socket.on('connect_error', function(err) {
+                console.warn('ChatPanel: WebSocket connection error, falling back to SSE:', err.message);
+                _useWebSocket = false;
+                if (_socket) {
+                    _socket.close();
+                    _socket = null;
+                }
+            });
+
+            _socket.on('session_joined', function(data) {
+                console.log('ChatPanel: Joined session room', data.session_id);
+            });
+
+            _socket.on('chat_event', function(data) {
+                var eventType = data.type || 'message';
+                handleEvent(eventType, data, _wsMap, _wsLayerManager);
+
+                // Clean up typing indicator and re-enable input on terminal events
+                if (eventType === 'message' && data.done) {
+                    removeTyping(_wsTypingId);
+                    _wsTypingId = null;
+                    enableInput();
+                } else if (eventType === 'error') {
+                    removeTyping(_wsTypingId);
+                    _wsTypingId = null;
+                    enableInput();
+                }
+            });
+
+            _socket.on('error', function(data) {
+                console.error('ChatPanel: WebSocket error event:', data);
+                appendMessage('error', data.text || 'WebSocket error');
+            });
+        } catch (e) {
+            console.warn('ChatPanel: Failed to initialize WebSocket, using SSE:', e);
+            _useWebSocket = false;
+        }
     }
 
     /**
@@ -100,12 +184,6 @@ var ChatPanel = (function() {
         input.prop('disabled', true);
         $('#chatSendBtn').text('Stop');
 
-        // Abort any in-flight request
-        if (currentAbortController) {
-            currentAbortController.abort();
-        }
-        currentAbortController = new AbortController();
-
         // Build map context
         var bounds = map.getBounds();
         var context = {
@@ -118,6 +196,25 @@ var ChatPanel = (function() {
             zoom: map.getZoom(),
             active_layers: layerManager ? layerManager.getLayerNames() : []
         };
+
+        // Use WebSocket transport if available and connected
+        if (_useWebSocket && _socket && _socket.connected) {
+            _wsTypingId = showTyping();
+            _socket.emit('chat_message', {
+                session_id: sessionId,
+                message: message,
+                context: context
+            });
+            return;
+        }
+
+        // --- SSE transport (default / fallback) ---
+
+        // Abort any in-flight request
+        if (currentAbortController) {
+            currentAbortController.abort();
+        }
+        currentAbortController = new AbortController();
 
         // Show typing indicator
         var typingId = showTyping();
