@@ -639,6 +639,111 @@ def get_tool_definitions() -> list:
                 "required": ["layer_name"]
             }
         },
+        {
+            "name": "import_kml",
+            "description": "Import KML data as a GeoJSON layer on the map. Parses KML Placemark elements with Point, LineString, and Polygon geometries. Extracts name and description from each placemark as feature properties. Use when the user provides KML content to display on the map.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "kml_data": {
+                        "type": "string",
+                        "description": "Raw KML content as a string. Must contain valid KML XML with Placemark elements."
+                    },
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name for the imported layer (default: 'kml_import'). Example: 'waypoints'"
+                    }
+                },
+                "required": ["kml_data"]
+            }
+        },
+        {
+            "name": "import_geoparquet",
+            "description": "Import a GeoParquet file (base64-encoded) as a GeoJSON layer on the map. Requires geopandas and pyarrow. Use when the user provides GeoParquet data.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "parquet_data": {
+                        "type": "string",
+                        "description": "Base64-encoded GeoParquet file content."
+                    },
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name for the imported layer (default: 'geoparquet_import'). Example: 'parcels'"
+                    }
+                },
+                "required": ["parquet_data"]
+            }
+        },
+        {
+            "name": "export_geoparquet",
+            "description": "Export an existing map layer as GeoParquet format (returned as base64-encoded data). Requires geopandas and pyarrow. Use when the user wants to export layer data as GeoParquet.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name of the layer to export. Example: 'buildings_nyc'"
+                    }
+                },
+                "required": ["layer_name"]
+            }
+        },
+        {
+            "name": "describe_layer",
+            "description": "Get summary statistics for a map layer: feature count, geometry types, bounding box, CRS, and per-attribute statistics (type, null count, unique count, min/max/mean for numeric). Use when the user asks 'describe this layer', 'what's in this layer?', or 'layer summary'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name of the layer to describe. Example: 'buildings_nyc'"
+                    }
+                },
+                "required": ["layer_name"]
+            }
+        },
+        {
+            "name": "detect_duplicates",
+            "description": "Find duplicate or near-duplicate features in a layer. Detects exact geometry matches and near-duplicates (centroids within a threshold distance). Use when the user asks 'find duplicates', 'are there duplicate features?', or 'check for near-duplicates'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name of the layer to check. Example: 'sensor_locations'"
+                    },
+                    "threshold_m": {
+                        "type": "number",
+                        "description": "Distance threshold in meters for near-duplicate detection (default: 1). Example: 10 for 10-meter tolerance",
+                        "default": 1
+                    },
+                    "output_name": {
+                        "type": "string",
+                        "description": "Name for the output layer of duplicate groups (optional)"
+                    }
+                },
+                "required": ["layer_name"]
+            }
+        },
+        {
+            "name": "clean_layer",
+            "description": "Clean a layer by removing null geometries, stripping whitespace from string properties, and removing attributes that are null for all features. Use when the user asks to 'clean data', 'fix layer', or 'remove nulls'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name of the layer to clean. Example: 'raw_data'"
+                    },
+                    "output_name": {
+                        "type": "string",
+                        "description": "Name for the cleaned output layer (default: '<layer_name>_cleaned'). Example: 'clean_data'"
+                    }
+                },
+                "required": ["layer_name"]
+            }
+        },
         # ---- Phase 4: Routing Tools ----
         {
             "name": "find_route",
@@ -1147,6 +1252,128 @@ def get_tool_definitions() -> list:
                     }
                 },
                 "required": ["layer_name", "attribute"]
+            }
+        },
+        # ---- Spatial Analysis Depth (Milestone 1) ----
+        {
+            "name": "interpolate",
+            "description": "Interpolate point values to create a contour surface. Takes a point layer with a numeric attribute, builds a regular grid, and generates contour polygons showing value distribution. Use for 'create elevation contours', 'interpolate temperature data', 'show value gradient across area'. Requires scipy and matplotlib.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name of the point layer containing values to interpolate. Example: 'weather_stations', 'soil_samples'"
+                    },
+                    "attribute": {
+                        "type": "string",
+                        "description": "Numeric attribute to interpolate. Example: 'temperature', 'elevation', 'pollution_index'"
+                    },
+                    "method": {
+                        "type": "string",
+                        "description": "Interpolation method. 'linear' for smooth gradients, 'cubic' for smoother results, 'nearest' for nearest-neighbor.",
+                        "enum": ["linear", "cubic", "nearest"],
+                        "default": "linear"
+                    },
+                    "resolution": {
+                        "type": "integer",
+                        "description": "Grid cells per axis (default 50, max 200). Higher = finer detail but slower. Example: 100 for detailed output",
+                        "default": 50,
+                        "minimum": 2,
+                        "maximum": 200
+                    },
+                    "contour_levels": {
+                        "type": "integer",
+                        "description": "Number of contour levels to generate (default 10). Example: 20 for fine gradations",
+                        "default": 10,
+                        "minimum": 2
+                    },
+                    "output_name": {
+                        "type": "string",
+                        "description": "Name for the output contour layer (default: interpolated_<layer_name>). Example: 'temperature_contours'"
+                    }
+                },
+                "required": ["layer_name", "attribute"]
+            }
+        },
+        {
+            "name": "validate_topology",
+            "description": "Check geometry validity for all features in a layer. Reports which features have invalid geometries (self-intersections, unclosed rings, etc.) with detailed explanations. Use for 'check if geometries are valid', 'find topology errors', 'validate layer quality'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name of the layer to validate. Example: 'imported_parcels', 'building_footprints'"
+                    }
+                },
+                "required": ["layer_name"]
+            }
+        },
+        {
+            "name": "repair_topology",
+            "description": "Auto-repair invalid geometries in a layer. Uses Shapely's make_valid to fix self-intersections, unclosed rings, and other topology errors. Returns a new layer with all geometries repaired. Use after validate_topology finds errors, or proactively before analysis.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name of the layer to repair. Example: 'imported_parcels', 'raw_boundaries'"
+                    },
+                    "output_name": {
+                        "type": "string",
+                        "description": "Name for the output repaired layer (default: repaired_<layer_name>). Example: 'parcels_clean'"
+                    }
+                },
+                "required": ["layer_name"]
+            }
+        },
+        {
+            "name": "service_area",
+            "description": "Compute multi-facility reachability zones. Given one or more facility locations, calculates isochrone polygons for each and unions them into a single coverage area. Optionally shows gap areas (unreachable zones). Use for 'show hospital coverage', 'find areas within 15 minutes of any fire station', 'identify service gaps'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "facility_layer": {
+                        "type": "string",
+                        "description": "Name of a point layer containing facility locations. Example: 'fire_stations', 'hospitals'"
+                    },
+                    "facilities": {
+                        "type": "array",
+                        "description": "List of facility coordinates. Example: [{\"lat\": 40.7, \"lon\": -74.0}, {\"lat\": 40.8, \"lon\": -73.9}]",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "lat": {"type": "number"},
+                                "lon": {"type": "number"}
+                            },
+                            "required": ["lat", "lon"]
+                        }
+                    },
+                    "time_minutes": {
+                        "type": "number",
+                        "description": "Travel time in minutes for reachability. Example: 15 for 15-minute service area"
+                    },
+                    "distance_m": {
+                        "type": "number",
+                        "description": "Travel distance in meters (alternative to time). Example: 5000 for 5km service area"
+                    },
+                    "profile": {
+                        "type": "string",
+                        "description": "Travel profile for isochrone computation.",
+                        "enum": ["auto", "pedestrian", "bicycle"],
+                        "default": "auto"
+                    },
+                    "output_name": {
+                        "type": "string",
+                        "description": "Name for the output layer (default: 'service_area'). Example: 'hospital_coverage_15min'"
+                    },
+                    "show_gaps": {
+                        "type": "boolean",
+                        "description": "If true, include gap polygons showing unreachable areas within the facility bounding box. Default: false",
+                        "default": False
+                    }
+                }
             }
         },
         # ---- Code Execution (Fallback) ----

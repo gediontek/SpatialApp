@@ -1399,6 +1399,357 @@ def handle_hot_spot_analysis(params: dict, layer_store: dict = None) -> dict:
         return {"error": "Hot spot analysis failed"}
 
 
+# ============================================================
+# Interpolation Tools
+# ============================================================
+
+
+def handle_interpolate(params: dict, layer_store: dict = None) -> dict:
+    """Interpolate point values to create a contour surface.
+
+    Extracts numeric values from point features, builds a regular grid
+    in projected (UTM) coordinates, interpolates using scipy.interpolate.griddata,
+    generates contour polygons via matplotlib, and returns them as GeoJSON.
+
+    Requires scipy and matplotlib (optional dependencies).
+    """
+    try:
+        import numpy as np
+        from scipy.interpolate import griddata as scipy_griddata
+    except ImportError:
+        return {"error": "scipy is required for interpolation. Install with: pip install scipy"}
+
+    try:
+        import matplotlib
+        matplotlib.use("Agg")  # Non-interactive backend
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return {"error": "matplotlib is required for contour generation. Install with: pip install matplotlib"}
+
+    layer_name = params.get("layer_name")
+    attribute = params.get("attribute")
+    method = params.get("method", "linear")
+    resolution = min(int(params.get("resolution", 50)), 200)
+    contour_levels = int(params.get("contour_levels", 10))
+    output_name = params.get("output_name", f"interpolated_{layer_name}")
+
+    if not layer_name:
+        return {"error": "layer_name is required"}
+    if not attribute:
+        return {"error": "attribute is required — specify the numeric field to interpolate"}
+    if method not in ("linear", "cubic", "nearest"):
+        return {"error": f"Invalid method '{method}'. Valid: linear, cubic, nearest"}
+    if resolution < 2:
+        return {"error": "resolution must be at least 2"}
+    if contour_levels < 2:
+        return {"error": "contour_levels must be at least 2"}
+
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
+    if not features:
+        return {"error": f"Layer '{layer_name}' has no features"}
+
+    # Extract point coordinates and values
+    points_xy = []  # (lon, lat) in WGS84
+    values = []
+    for feat in features:
+        geom = feat.get("geometry")
+        props = feat.get("properties", {})
+        val = props.get(attribute)
+
+        if geom is None or val is None:
+            continue
+
+        try:
+            val = float(val)
+        except (ValueError, TypeError):
+            continue
+
+        shapely_geom = _safe_geojson_to_shapely(geom)
+        if shapely_geom is None or shapely_geom.is_empty:
+            continue
+
+        centroid = shapely_geom.centroid
+        points_xy.append([centroid.x, centroid.y])
+        values.append(val)
+
+    if len(points_xy) < 3:
+        return {"error": f"Need at least 3 points with valid numeric '{attribute}' values, found {len(points_xy)}"}
+
+    points_xy = np.array(points_xy)
+    values = np.array(values, dtype=float)
+
+    # Project to UTM for metric grid
+    from nl_gis.geo_utils import estimate_utm_epsg, project_geometry
+    from shapely.geometry import Point as ShapelyPoint, MultiPoint
+
+    avg_lon = float(np.mean(points_xy[:, 0]))
+    avg_lat = float(np.mean(points_xy[:, 1]))
+    utm_epsg = estimate_utm_epsg(avg_lon, avg_lat)
+
+    # Project all points to UTM
+    projected_coords = []
+    for px, py in points_xy:
+        proj_pt = project_geometry(ShapelyPoint(px, py), 4326, utm_epsg)
+        projected_coords.append([proj_pt.x, proj_pt.y])
+    projected_coords = np.array(projected_coords)
+
+    # Build regular grid in projected space
+    x_min, y_min = projected_coords.min(axis=0)
+    x_max, y_max = projected_coords.max(axis=0)
+
+    # Add small buffer (5%) to avoid edge artifacts
+    x_range = x_max - x_min
+    y_range = y_max - y_min
+    if x_range == 0 or y_range == 0:
+        return {"error": "All points are collinear — cannot create interpolation grid"}
+
+    x_min -= x_range * 0.05
+    x_max += x_range * 0.05
+    y_min -= y_range * 0.05
+    y_max += y_range * 0.05
+
+    grid_x = np.linspace(x_min, x_max, resolution)
+    grid_y = np.linspace(y_min, y_max, resolution)
+    grid_xx, grid_yy = np.meshgrid(grid_x, grid_y)
+
+    # Interpolate
+    try:
+        grid_values = scipy_griddata(
+            projected_coords, values,
+            (grid_xx, grid_yy),
+            method=method,
+            fill_value=float("nan"),
+        )
+    except Exception:
+        logger.error("Interpolation failed", exc_info=True)
+        return {"error": "Interpolation computation failed"}
+
+    # Generate contour polygons using matplotlib
+    try:
+        fig, ax = plt.subplots()
+        v_min = float(np.nanmin(values))
+        v_max = float(np.nanmax(values))
+        levels = np.linspace(v_min, v_max, contour_levels + 1)
+        contour_set = ax.contourf(grid_xx, grid_yy, grid_values, levels=levels)
+        plt.close(fig)
+    except Exception:
+        logger.error("Contour generation failed", exc_info=True)
+        return {"error": "Contour generation failed"}
+
+    # Convert contour collections to GeoJSON polygons
+    from shapely.geometry import Polygon as ShapelyPolygon
+
+    contour_features = []
+    for i, collection in enumerate(contour_set.collections):
+        level_min = float(contour_set.levels[i])
+        level_max = float(contour_set.levels[i + 1]) if i + 1 < len(contour_set.levels) else level_min
+
+        for path in collection.get_paths():
+            # Each path may have multiple polygons (with holes)
+            for polygon_coords in path.to_polygons():
+                if len(polygon_coords) < 3:
+                    continue
+
+                # Project back to WGS84
+                wgs84_coords = []
+                for px, py in polygon_coords:
+                    wgs_pt = project_geometry(ShapelyPoint(px, py), utm_epsg, 4326)
+                    wgs84_coords.append([wgs_pt.x, wgs_pt.y])
+
+                # Close ring if needed
+                if wgs84_coords[0] != wgs84_coords[-1]:
+                    wgs84_coords.append(wgs84_coords[0])
+
+                try:
+                    poly = ShapelyPolygon(wgs84_coords)
+                    if poly.is_valid and not poly.is_empty:
+                        contour_features.append({
+                            "type": "Feature",
+                            "geometry": shapely_to_geojson(poly),
+                            "properties": {
+                                "value_min": round(level_min, 4),
+                                "value_max": round(level_max, 4),
+                                "level": i,
+                                "attribute": attribute,
+                            }
+                        })
+                except Exception:
+                    continue
+
+    result_geojson = {
+        "type": "FeatureCollection",
+        "features": contour_features,
+    }
+
+    return {
+        "geojson": result_geojson,
+        "layer_name": output_name,
+        "feature_count": len(contour_features),
+        "method": method,
+        "resolution": resolution,
+        "contour_levels": contour_levels,
+        "attribute": attribute,
+        "value_range": {"min": round(v_min, 4), "max": round(v_max, 4)},
+    }
+
+
+# ============================================================
+# Topology Validation Tools
+# ============================================================
+
+
+def handle_validate_topology(params: dict, layer_store: dict = None) -> dict:
+    """Check geometry validity for all features in a layer.
+
+    Uses Shapely's is_valid and explain_validity to identify and report
+    topology issues (self-intersections, ring errors, etc.).
+    """
+    from shapely.validation import explain_validity
+
+    layer_name = params.get("layer_name")
+
+    if not layer_name:
+        return {"error": "layer_name is required"}
+
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
+    if not features:
+        return {"error": f"Layer '{layer_name}' has no features"}
+
+    valid_count = 0
+    invalid_count = 0
+    errors = []
+
+    for i, feat in enumerate(features):
+        geom = feat.get("geometry")
+        if geom is None:
+            invalid_count += 1
+            errors.append({
+                "index": i,
+                "error_type": "missing_geometry",
+                "explanation": "Feature has no geometry",
+            })
+            continue
+
+        try:
+            shapely_geom = geojson_to_shapely(geom)
+        except Exception as exc:
+            invalid_count += 1
+            errors.append({
+                "index": i,
+                "error_type": "parse_error",
+                "explanation": f"Cannot parse geometry: {type(exc).__name__}",
+            })
+            continue
+
+        if shapely_geom.is_empty:
+            invalid_count += 1
+            errors.append({
+                "index": i,
+                "error_type": "empty_geometry",
+                "explanation": "Geometry is empty",
+            })
+        elif shapely_geom.is_valid:
+            valid_count += 1
+        else:
+            invalid_count += 1
+            explanation = explain_validity(shapely_geom)
+            errors.append({
+                "index": i,
+                "error_type": "invalid_geometry",
+                "explanation": explanation,
+            })
+
+    return {
+        "layer_name": layer_name,
+        "total_features": len(features),
+        "valid_count": valid_count,
+        "invalid_count": invalid_count,
+        "errors": errors,
+    }
+
+
+def handle_repair_topology(params: dict, layer_store: dict = None) -> dict:
+    """Auto-repair invalid geometries in a layer.
+
+    Uses Shapely's make_valid to fix geometry issues while preserving
+    as much of the original shape as possible.
+    """
+    from shapely.validation import make_valid
+
+    layer_name = params.get("layer_name")
+    output_name = params.get("output_name", f"repaired_{layer_name}")
+
+    if not layer_name:
+        return {"error": "layer_name is required"}
+
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
+    if not features:
+        return {"error": f"Layer '{layer_name}' has no features"}
+
+    repaired_count = 0
+    already_valid_count = 0
+    skipped_count = 0
+    result_features = []
+
+    for feat in features:
+        geom = feat.get("geometry")
+        props = dict(feat.get("properties", {}))
+
+        if geom is None:
+            skipped_count += 1
+            continue
+
+        try:
+            shapely_geom = geojson_to_shapely(geom)
+        except Exception:
+            skipped_count += 1
+            continue
+
+        if shapely_geom.is_empty:
+            skipped_count += 1
+            continue
+
+        if shapely_geom.is_valid:
+            already_valid_count += 1
+            result_features.append({
+                "type": "Feature",
+                "geometry": geom,
+                "properties": props,
+            })
+        else:
+            repaired = make_valid(shapely_geom)
+            if repaired.is_empty:
+                skipped_count += 1
+                continue
+            repaired_count += 1
+            props["_repaired"] = True
+            result_features.append({
+                "type": "Feature",
+                "geometry": shapely_to_geojson(repaired),
+                "properties": props,
+            })
+
+    result_geojson = {
+        "type": "FeatureCollection",
+        "features": result_features,
+    }
+
+    return {
+        "geojson": result_geojson,
+        "layer_name": output_name,
+        "feature_count": len(result_features),
+        "repaired_count": repaired_count,
+        "already_valid_count": already_valid_count,
+        "skipped_count": skipped_count,
+    }
+
+
 def handle_execute_code(params: dict, layer_store: dict = None) -> dict:
     """Execute sandboxed Python code for spatial analysis.
 
@@ -1433,3 +1784,330 @@ def handle_execute_code(params: dict, layer_store: dict = None) -> dict:
         response["layer_name"] = params.get("output_layer", "code_result")
 
     return response
+
+
+# ============================================================
+# Data Quality Tools
+# ============================================================
+
+def handle_describe_layer(params: dict, layer_store: dict = None) -> dict:
+    """Summary statistics for a layer."""
+    layer_name = params.get("layer_name")
+    if not layer_name:
+        return {"error": "layer_name is required"}
+
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
+
+    feature_count = len(features)
+    if feature_count == 0:
+        return {
+            "success": True,
+            "layer_name": layer_name,
+            "feature_count": 0,
+            "geometry_types": [],
+            "bbox": None,
+            "crs": "EPSG:4326",
+            "attributes": {},
+            "description": f"Layer '{layer_name}' has no features",
+        }
+
+    # Geometry types and bbox
+    geometry_types = set()
+    bbox_state = {
+        "min_lon": float("inf"), "min_lat": float("inf"),
+        "max_lon": float("-inf"), "max_lat": float("-inf"),
+    }
+
+    for f in features:
+        geom = f.get("geometry")
+        if geom:
+            geometry_types.add(geom.get("type", "Unknown"))
+            _update_bbox_from_geom(geom, bbox_state)
+
+    # Attribute statistics
+    all_keys = set()
+    for f in features:
+        props = f.get("properties") or {}
+        all_keys.update(props.keys())
+
+    attributes = {}
+    for key in sorted(all_keys):
+        values = [f.get("properties", {}).get(key) for f in features]
+        null_count = sum(1 for v in values if v is None)
+        non_null = [v for v in values if v is not None]
+        unique_count = len(set(str(v) for v in non_null)) if non_null else 0
+
+        attr_info = {
+            "null_count": null_count,
+            "unique_count": unique_count,
+            "total_count": feature_count,
+        }
+
+        # Detect numeric values
+        numeric_values = []
+        for v in non_null:
+            try:
+                numeric_values.append(float(v))
+            except (ValueError, TypeError):
+                pass
+
+        if numeric_values and len(numeric_values) == len(non_null):
+            attr_info["type"] = "numeric"
+            attr_info["min"] = min(numeric_values)
+            attr_info["max"] = max(numeric_values)
+            attr_info["mean"] = sum(numeric_values) / len(numeric_values)
+        elif non_null:
+            attr_info["type"] = "string"
+        else:
+            attr_info["type"] = "null"
+
+        attributes[key] = attr_info
+
+    bbox = None
+    if bbox_state["min_lon"] != float("inf"):
+        bbox = [bbox_state["min_lon"], bbox_state["min_lat"],
+                bbox_state["max_lon"], bbox_state["max_lat"]]
+
+    return {
+        "success": True,
+        "layer_name": layer_name,
+        "feature_count": feature_count,
+        "geometry_types": sorted(geometry_types),
+        "bbox": bbox,
+        "crs": "EPSG:4326",
+        "attributes": attributes,
+        "description": (
+            f"Layer '{layer_name}': {feature_count} features, "
+            f"types: {', '.join(sorted(geometry_types))}, "
+            f"{len(all_keys)} attributes"
+        ),
+    }
+
+
+def _update_bbox_from_geom(geom: dict, bbox_vars: dict):
+    """Recursively extract coordinate bounds from a GeoJSON geometry."""
+    coords = geom.get("coordinates")
+    if coords is None:
+        # GeometryCollection
+        for sub_geom in geom.get("geometries", []):
+            _update_bbox_from_geom(sub_geom, bbox_vars)
+        return
+
+    def _walk(c):
+        if isinstance(c, (list, tuple)):
+            if c and isinstance(c[0], (int, float)):
+                # This is a coordinate pair [lon, lat] or [lon, lat, alt]
+                lon, lat = float(c[0]), float(c[1])
+                if lon < bbox_vars["min_lon"]:
+                    bbox_vars["min_lon"] = lon
+                if lon > bbox_vars["max_lon"]:
+                    bbox_vars["max_lon"] = lon
+                if lat < bbox_vars["min_lat"]:
+                    bbox_vars["min_lat"] = lat
+                if lat > bbox_vars["max_lat"]:
+                    bbox_vars["max_lat"] = lat
+            else:
+                for item in c:
+                    _walk(item)
+
+    _walk(coords)
+
+
+def handle_detect_duplicates(params: dict, layer_store: dict = None) -> dict:
+    """Find duplicate or near-duplicate features in a layer."""
+    from shapely.geometry import shape as shapely_shape
+
+    layer_name = params.get("layer_name")
+    if not layer_name:
+        return {"error": "layer_name is required"}
+
+    threshold_m = params.get("threshold_m", 1.0)
+    try:
+        threshold_m = float(threshold_m)
+    except (ValueError, TypeError):
+        return {"error": "threshold_m must be a number"}
+
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
+
+    if len(features) < 2:
+        return {
+            "success": True,
+            "layer_name": layer_name,
+            "duplicate_groups": [],
+            "total_duplicates": 0,
+            "description": f"Layer '{layer_name}' has fewer than 2 features, no duplicates possible",
+        }
+
+    # Parse geometries
+    geometries = []
+    for i, f in enumerate(features):
+        geom = f.get("geometry")
+        if geom:
+            try:
+                geometries.append((i, shapely_shape(geom)))
+            except Exception:
+                geometries.append((i, None))
+        else:
+            geometries.append((i, None))
+
+    # Find exact and near duplicates
+    # Track which features are already in a group
+    grouped = set()
+    duplicate_groups = []
+
+    for i_idx in range(len(geometries)):
+        if i_idx in grouped:
+            continue
+        idx_i, geom_i = geometries[i_idx]
+        if geom_i is None:
+            continue
+
+        group = []
+        for j_idx in range(i_idx + 1, len(geometries)):
+            if j_idx in grouped:
+                continue
+            idx_j, geom_j = geometries[j_idx]
+            if geom_j is None:
+                continue
+
+            # Check exact match
+            try:
+                if geom_i.equals(geom_j):
+                    group.append({"index": idx_j, "type": "exact"})
+                    grouped.add(j_idx)
+                    continue
+            except Exception:
+                pass
+
+            # Check near match (centroid distance)
+            if threshold_m > 0:
+                try:
+                    c_i = geom_i.centroid
+                    c_j = geom_j.centroid
+                    dist = geodesic_distance(
+                        ValidatedPoint(lat=c_i.y, lon=c_i.x),
+                        ValidatedPoint(lat=c_j.y, lon=c_j.x),
+                    )
+                    if dist <= threshold_m:
+                        group.append({"index": idx_j, "type": "near", "distance_m": round(dist, 2)})
+                        grouped.add(j_idx)
+                except Exception:
+                    pass
+
+        if group:
+            grouped.add(i_idx)
+            duplicate_groups.append({
+                "reference_index": idx_i,
+                "duplicates": group,
+            })
+
+    total_duplicates = sum(len(g["duplicates"]) for g in duplicate_groups)
+
+    return {
+        "success": True,
+        "layer_name": layer_name,
+        "duplicate_groups": duplicate_groups,
+        "total_duplicates": total_duplicates,
+        "threshold_m": threshold_m,
+        "description": (
+            f"Found {total_duplicates} duplicates in {len(duplicate_groups)} groups "
+            f"in layer '{layer_name}' (threshold: {threshold_m}m)"
+        ),
+    }
+
+
+def handle_clean_layer(params: dict, layer_store: dict = None) -> dict:
+    """Remove null geometries, fix encoding, normalize attributes."""
+    layer_name = params.get("layer_name")
+    if not layer_name:
+        return {"error": "layer_name is required"}
+
+    output_name = params.get("output_name", f"{layer_name}_cleaned")
+
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
+
+    original_count = len(features)
+    if original_count == 0:
+        return {"error": f"Layer '{layer_name}' has no features to clean"}
+
+    # Step 1: Remove features with null/empty geometry
+    cleaned = []
+    null_geom_removed = 0
+    for f in features:
+        geom = f.get("geometry")
+        if not geom or not geom.get("coordinates"):
+            null_geom_removed += 1
+            continue
+        cleaned.append(f)
+
+    # Step 2: Find all-null attributes (across remaining features)
+    all_keys = set()
+    for f in cleaned:
+        props = f.get("properties") or {}
+        all_keys.update(props.keys())
+
+    all_null_keys = set()
+    for key in all_keys:
+        all_null = all(
+            (f.get("properties") or {}).get(key) is None
+            for f in cleaned
+        )
+        if all_null:
+            all_null_keys.add(key)
+
+    # Step 3: Strip whitespace from string properties + remove all-null attrs
+    whitespace_trimmed = 0
+    for f in cleaned:
+        props = f.get("properties")
+        if not props:
+            continue
+        # Remove all-null keys
+        for key in all_null_keys:
+            props.pop(key, None)
+        # Strip whitespace
+        for key, val in list(props.items()):
+            if isinstance(val, str):
+                stripped = val.strip()
+                if stripped != val:
+                    props[key] = stripped
+                    whitespace_trimmed += 1
+
+    geojson = {"type": "FeatureCollection", "features": cleaned}
+
+    if layer_store is not None:
+        try:
+            from state import layer_lock as _lk
+        except ImportError:
+            _lk = None
+        if _lk:
+            with _lk:
+                layer_store[output_name] = geojson
+        else:
+            layer_store[output_name] = geojson
+
+    report = {
+        "original_count": original_count,
+        "cleaned_count": len(cleaned),
+        "null_geometries_removed": null_geom_removed,
+        "all_null_attributes_removed": sorted(all_null_keys),
+        "whitespace_values_trimmed": whitespace_trimmed,
+    }
+
+    return {
+        "geojson": geojson,
+        "layer_name": output_name,
+        "report": report,
+        "description": (
+            f"Cleaned '{layer_name}' -> '{output_name}': "
+            f"removed {null_geom_removed} null geometries, "
+            f"{len(all_null_keys)} all-null attributes, "
+            f"trimmed {whitespace_trimmed} whitespace values. "
+            f"{len(cleaned)}/{original_count} features remain."
+        ),
+    }

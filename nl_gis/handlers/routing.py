@@ -626,3 +626,181 @@ def handle_heatmap(params: dict, layer_store: dict = None) -> dict:
         "point_count": len(points),
         "description": f"Heatmap of {len(points)} points from {layer_name}",
     }
+
+
+def handle_service_area(params: dict, layer_store: dict = None) -> dict:
+    """Compute multi-facility reachability zones.
+
+    Accepts either a facility_layer (point layer) or a list of facility
+    coordinates. For each facility, computes an isochrone polygon using
+    Valhalla (or buffer fallback), then unions all isochrones into a
+    single coverage polygon. Optionally computes gap areas (unreachable
+    zones within the bounding box of all facilities).
+    """
+    from services.valhalla_client import get_isochrone
+    from shapely.ops import unary_union
+    from shapely.geometry import box as shapely_box
+
+    facility_layer = params.get("facility_layer")
+    facilities = params.get("facilities", [])
+    time_minutes = params.get("time_minutes")
+    distance_m = params.get("distance_m")
+    profile = params.get("profile", "auto")
+    output_name = params.get("output_name", "service_area")
+    show_gaps = params.get("show_gaps", False)
+
+    if not time_minutes and not distance_m:
+        return {"error": "Provide time_minutes or distance_m"}
+
+    # Collect facility points
+    facility_points = []  # list of ValidatedPoint
+
+    if facility_layer:
+        features, err = _get_layer_snapshot(layer_store, facility_layer)
+        if err:
+            return {"error": err}
+        if not features:
+            return {"error": f"Layer '{facility_layer}' has no features"}
+
+        for feat in features:
+            geom = feat.get("geometry")
+            if not geom:
+                continue
+            try:
+                shapely_geom = geojson_to_shapely(geom)
+                centroid = shapely_geom.centroid
+                vp = ValidatedPoint(lat=centroid.y, lon=centroid.x)
+                facility_points.append(vp)
+            except Exception:
+                continue
+
+    if facilities:
+        for i, fac in enumerate(facilities):
+            lat = fac.get("lat")
+            lon = fac.get("lon")
+            if lat is None or lon is None:
+                return {"error": f"Facility {i + 1} must have lat and lon"}
+            try:
+                vp = ValidatedPoint(lat=float(lat), lon=float(lon))
+                facility_points.append(vp)
+            except (ValueError, TypeError) as e:
+                return {"error": f"Invalid coordinates for facility {i + 1}: {e}"}
+
+    if not facility_points:
+        return {"error": "No valid facility locations. Provide facility_layer or facilities array."}
+
+    if len(facility_points) > 50:
+        return {"error": f"Too many facilities ({len(facility_points)}). Maximum is 50."}
+
+    # Map profile names for Valhalla
+    profile_map = {"driving": "driving", "auto": "driving",
+                   "pedestrian": "walking", "walking": "walking",
+                   "bicycle": "cycling", "cycling": "cycling"}
+    valhalla_profile = profile_map.get(profile, "driving")
+
+    # Compute isochrone for each facility
+    distance_km = distance_m / 1000 if distance_m else None
+    iso_polygons = []
+    failed_count = 0
+
+    for vp in facility_points:
+        iso_data = get_isochrone(
+            vp.lon, vp.lat,
+            time_minutes=time_minutes,
+            distance_km=distance_km,
+            profile=valhalla_profile,
+        )
+
+        if iso_data is not None:
+            # Extract polygon geometries from the isochrone response
+            for feat in iso_data.get("features", []):
+                geom_type = feat.get("geometry", {}).get("type", "")
+                if geom_type in ("Polygon", "MultiPolygon"):
+                    try:
+                        shapely_geom = shape(feat["geometry"])
+                        if not shapely_geom.is_empty:
+                            iso_polygons.append(shapely_geom)
+                    except Exception:
+                        continue
+        else:
+            # Fallback: buffer-based estimation
+            PROFILE_SPEEDS = {"driving": 13.9, "walking": 1.4, "cycling": 4.2}
+            if time_minutes:
+                speed = PROFILE_SPEEDS.get(valhalla_profile, PROFILE_SPEEDS["driving"])
+                radius_m = time_minutes * 60 * speed
+            else:
+                radius_m = distance_m
+
+            from shapely.geometry import Point as ShapelyPoint
+            center = ShapelyPoint(vp.lon, vp.lat)
+            buffered = buffer_geometry(center, radius_m)
+            if not buffered.is_empty:
+                iso_polygons.append(buffered)
+            else:
+                failed_count += 1
+
+    if not iso_polygons:
+        return {"error": "Could not compute isochrones for any facility. Routing service may be unavailable."}
+
+    # Union all isochrone polygons into coverage
+    coverage = unary_union(iso_polygons)
+    if not coverage.is_valid:
+        coverage = coverage.buffer(0)
+
+    result_features = [{
+        "type": "Feature",
+        "geometry": shapely_to_geojson(coverage),
+        "properties": {
+            "type": "coverage",
+            "facility_count": len(facility_points),
+            "profile": profile,
+            "time_minutes": time_minutes,
+            "distance_m": distance_m,
+        },
+    }]
+
+    # Optionally compute gap areas
+    gap_area_sq_km = None
+    if show_gaps:
+        # Compute bounding box of all facility points with buffer
+        all_lons = [vp.lon for vp in facility_points]
+        all_lats = [vp.lat for vp in facility_points]
+        # Extend bbox by the isochrone radius
+        lon_buffer = 0.05  # ~5km at equator
+        lat_buffer = 0.05
+        bbox = shapely_box(
+            min(all_lons) - lon_buffer, min(all_lats) - lat_buffer,
+            max(all_lons) + lon_buffer, max(all_lats) + lat_buffer,
+        )
+        gaps = bbox.difference(coverage)
+        if not gaps.is_empty:
+            gap_area_sq_km = round(geodesic_area(gaps) / 1e6, 2)
+            result_features.append({
+                "type": "Feature",
+                "geometry": shapely_to_geojson(gaps),
+                "properties": {
+                    "type": "gap",
+                    "gap_area_sq_km": gap_area_sq_km,
+                },
+            })
+
+    coverage_area_sq_km = round(geodesic_area(coverage) / 1e6, 2)
+
+    result_geojson = {
+        "type": "FeatureCollection",
+        "features": result_features,
+    }
+
+    result = {
+        "geojson": result_geojson,
+        "layer_name": output_name,
+        "feature_count": len(result_features),
+        "facility_count": len(facility_points),
+        "coverage_area_sq_km": coverage_area_sq_km,
+        "profile": profile,
+        "failed_facilities": failed_count,
+    }
+    if gap_area_sq_km is not None:
+        result["gap_area_sq_km"] = gap_area_sq_km
+
+    return result

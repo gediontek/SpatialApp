@@ -22,13 +22,15 @@ logger = logging.getLogger(__name__)
 LAYER_PRODUCING_TOOLS = {
     "search_nearby", "buffer", "spatial_query",
     "filter_layer", "fetch_osm", "merge_layers",
-    "import_layer", "import_csv", "import_wkt",
+    "import_layer", "import_csv", "import_wkt", "import_kml",
+    "import_geoparquet", "clean_layer",
     "find_route", "isochrone", "closest_facility", "optimize_route",
     "classify_landcover", "intersection", "difference",
     "symmetric_difference", "convex_hull", "centroid", "simplify",
     "bounding_box", "dissolve", "clip", "voronoi", "batch_geocode",
     "point_in_polygon", "attribute_join", "spatial_statistics",
     "hot_spot_analysis", "execute_code",
+    "interpolate", "repair_topology", "service_area",
 }
 
 # Reuse OSM feature mappings from app.py
@@ -367,6 +369,12 @@ from nl_gis.handlers.analysis import (  # noqa: E402,F401
     handle_spatial_statistics,
     handle_hot_spot_analysis,
     handle_execute_code,
+    handle_interpolate,
+    handle_validate_topology,
+    handle_repair_topology,
+    handle_describe_layer,
+    handle_detect_duplicates,
+    handle_clean_layer,
 )
 from nl_gis.handlers.layers import (  # noqa: E402,F401
     handle_style_layer,
@@ -377,6 +385,9 @@ from nl_gis.handlers.layers import (  # noqa: E402,F401
     handle_import_csv,
     handle_import_wkt,
     handle_export_layer,
+    handle_import_kml,
+    handle_import_geoparquet,
+    handle_export_geoparquet,
 )
 from nl_gis.handlers.annotations import (  # noqa: E402,F401
     handle_add_annotation,
@@ -391,6 +402,7 @@ from nl_gis.handlers.routing import (  # noqa: E402,F401
     handle_heatmap,
     handle_closest_facility,
     handle_optimize_route,
+    handle_service_area,
 )
 
 
@@ -462,6 +474,18 @@ def dispatch_tool(tool_name: str, params: dict, layer_store: dict = None) -> dic
         "spatial_statistics": lambda p: handle_spatial_statistics(p, layer_store),
         "hot_spot_analysis": lambda p: handle_hot_spot_analysis(p, layer_store),
         "execute_code": lambda p: handle_execute_code(p, layer_store),
+        # Spatial analysis depth (Milestone 1)
+        "interpolate": lambda p: handle_interpolate(p, layer_store),
+        "validate_topology": lambda p: handle_validate_topology(p, layer_store),
+        "repair_topology": lambda p: handle_repair_topology(p, layer_store),
+        "service_area": lambda p: handle_service_area(p, layer_store),
+        # Data pipeline & formats (Milestone 2)
+        "import_kml": lambda p: handle_import_kml(p, layer_store),
+        "import_geoparquet": lambda p: handle_import_geoparquet(p, layer_store),
+        "export_geoparquet": lambda p: handle_export_geoparquet(p, layer_store),
+        "describe_layer": lambda p: handle_describe_layer(p, layer_store),
+        "detect_duplicates": lambda p: handle_detect_duplicates(p, layer_store),
+        "clean_layer": lambda p: handle_clean_layer(p, layer_store),
     }
 
     if tool_name not in handlers:
