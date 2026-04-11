@@ -572,6 +572,73 @@ def get_tool_definitions() -> list:
                 "required": ["layer_name"]
             }
         },
+        # ---- Data Import/Export Tools ----
+        {
+            "name": "import_csv",
+            "description": "Import CSV data with latitude/longitude columns as a point layer on the map. Use when the user pastes CSV content or wants to plot tabular data with coordinates. Skips rows with missing or invalid lat/lon values.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "csv_data": {
+                        "type": "string",
+                        "description": "CSV content as a string (header row + data rows)"
+                    },
+                    "lat_column": {
+                        "type": "string",
+                        "description": "Name of the latitude column (default: 'lat')",
+                        "default": "lat"
+                    },
+                    "lon_column": {
+                        "type": "string",
+                        "description": "Name of the longitude column (default: 'lon')",
+                        "default": "lon"
+                    },
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name for the imported layer (default: 'csv_import')"
+                    }
+                },
+                "required": ["csv_data"]
+            }
+        },
+        {
+            "name": "import_wkt",
+            "description": "Import a Well-Known Text (WKT) geometry string as a layer on the map. Supports all WKT geometry types: POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, MULTIPOLYGON, GEOMETRYCOLLECTION.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "wkt": {
+                        "type": "string",
+                        "description": "WKT geometry string (e.g., 'POLYGON((...))', 'POINT(lon lat)')"
+                    },
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name for the imported layer (default: 'wkt_import')"
+                    }
+                },
+                "required": ["wkt"]
+            }
+        },
+        {
+            "name": "export_layer",
+            "description": "Export an existing map layer to a file format. Returns GeoJSON as a string, or a file path for Shapefile/GeoPackage. Use when the user asks to download, export, or save layer data.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name of the layer to export"
+                    },
+                    "format": {
+                        "type": "string",
+                        "description": "Export format",
+                        "enum": ["geojson", "shapefile", "geopackage"],
+                        "default": "geojson"
+                    }
+                },
+                "required": ["layer_name"]
+            }
+        },
         # ---- Phase 4: Routing Tools ----
         {
             "name": "find_route",
@@ -677,6 +744,85 @@ def get_tool_definitions() -> list:
                     }
                 },
                 "required": ["layer_name"]
+            }
+        },
+        # ---- Network Analysis Tools ----
+        {
+            "name": "closest_facility",
+            "description": "Find the nearest N features of a given type from a point. Searches using Overpass API, calculates geodesic distance from the center point to each result, and returns the closest ones sorted by distance. Each feature includes distance_m in its properties. Use for 'find the 3 nearest hospitals', 'closest pharmacies to my location'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "lat": {
+                        "type": "number",
+                        "description": "Center latitude"
+                    },
+                    "lon": {
+                        "type": "number",
+                        "description": "Center longitude"
+                    },
+                    "location": {
+                        "type": "string",
+                        "description": "Center location name (geocoded to get lat/lon if not provided)"
+                    },
+                    "feature_type": {
+                        "type": "string",
+                        "description": "OSM feature type to search for (e.g., 'hospital', 'pharmacy', 'restaurant')"
+                    },
+                    "count": {
+                        "type": "integer",
+                        "description": "Number of nearest features to return (default 5, max 20)",
+                        "default": 5,
+                        "minimum": 1,
+                        "maximum": 20
+                    },
+                    "max_radius_m": {
+                        "type": "integer",
+                        "description": "Maximum search radius in meters (default 5000, max 50000)",
+                        "default": 5000,
+                        "minimum": 1,
+                        "maximum": 50000
+                    },
+                    "osm_key": {
+                        "type": "string",
+                        "description": "OSM tag key for custom queries"
+                    },
+                    "osm_value": {
+                        "type": "string",
+                        "description": "OSM tag value for custom queries"
+                    }
+                },
+                "required": ["feature_type"]
+            }
+        },
+        {
+            "name": "optimize_route",
+            "description": "Optimize the visiting order of multiple locations (traveling salesman). Takes 3-20 locations and returns the most efficient route order. Returns a GeoJSON layer with the optimized route line and ordered markers, plus distance/time savings compared to the original order. Use for 'what's the best order to visit these places', 'optimize my delivery route'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "locations": {
+                        "type": "array",
+                        "description": "List of locations to visit. Each item has lat/lon coordinates or a location name to geocode.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "lat": {"type": "number"},
+                                "lon": {"type": "number"},
+                                "location": {"type": "string"}
+                            }
+                        },
+                        "minItems": 3,
+                        "maxItems": 20
+                    },
+                    "profile": {
+                        "type": "string",
+                        "description": "Routing profile",
+                        "enum": ["auto", "pedestrian", "bicycle"],
+                        "default": "auto"
+                    }
+                },
+                "required": ["locations"]
             }
         },
         # ---- Overlay Operations ----

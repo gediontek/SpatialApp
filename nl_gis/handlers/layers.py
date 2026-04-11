@@ -192,3 +192,162 @@ def handle_import_layer(params: dict, layer_store: dict = None) -> dict:
         "description": "To import a file, use the upload button or drag-and-drop a GeoJSON, Shapefile (.zip), or GeoPackage (.gpkg) file onto the map.",
         "upload_url": "/api/import",
     }
+
+
+def handle_import_csv(params: dict, layer_store: dict = None) -> dict:
+    """Import CSV data with lat/lon columns as a point layer."""
+    import csv
+    import io
+
+    csv_data = params.get("csv_data")
+    if not csv_data or not csv_data.strip():
+        return {"error": "csv_data is required and must not be empty"}
+
+    lat_col = params.get("lat_column", "lat")
+    lon_col = params.get("lon_column", "lon")
+    layer_name = params.get("layer_name", "csv_import")
+
+    try:
+        reader = csv.DictReader(io.StringIO(csv_data))
+        fieldnames = reader.fieldnames or []
+    except Exception:
+        return {"error": "Failed to parse CSV data"}
+
+    if lat_col not in fieldnames:
+        return {"error": f"Column '{lat_col}' not found in CSV. Available columns: {', '.join(fieldnames)}"}
+    if lon_col not in fieldnames:
+        return {"error": f"Column '{lon_col}' not found in CSV. Available columns: {', '.join(fieldnames)}"}
+
+    features = []
+    for row in reader:
+        try:
+            lat = float(row[lat_col])
+            lon = float(row[lon_col])
+            props = {k: v for k, v in row.items() if k not in (lat_col, lon_col)}
+            features.append({
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                "properties": props,
+            })
+        except (KeyError, ValueError):
+            continue
+
+    if not features:
+        return {"error": "No valid rows found. Ensure lat/lon columns contain numeric values."}
+
+    geojson = {"type": "FeatureCollection", "features": features}
+
+    if layer_store is not None:
+        try:
+            from state import layer_lock as _lk
+        except ImportError:
+            _lk = None
+        if _lk:
+            with _lk:
+                layer_store[layer_name] = geojson
+        else:
+            layer_store[layer_name] = geojson
+
+    return {"geojson": geojson, "layer_name": layer_name, "imported": len(features)}
+
+
+def handle_import_wkt(params: dict, layer_store: dict = None) -> dict:
+    """Import a WKT string as a geometry layer."""
+    from shapely import wkt as shapely_wkt
+    from shapely.geometry import mapping
+
+    wkt_str = params.get("wkt")
+    if not wkt_str or not wkt_str.strip():
+        return {"error": "wkt is required and must not be empty"}
+
+    layer_name = params.get("layer_name", "wkt_import")
+
+    try:
+        geom = shapely_wkt.loads(wkt_str)
+    except Exception:
+        return {"error": "Invalid WKT string. Could not parse geometry."}
+
+    if geom.is_empty:
+        return {"error": "WKT string produced an empty geometry."}
+
+    geojson = {
+        "type": "FeatureCollection",
+        "features": [{"type": "Feature", "geometry": mapping(geom), "properties": {}}],
+    }
+
+    if layer_store is not None:
+        try:
+            from state import layer_lock as _lk
+        except ImportError:
+            _lk = None
+        if _lk:
+            with _lk:
+                layer_store[layer_name] = geojson
+        else:
+            layer_store[layer_name] = geojson
+
+    return {"geojson": geojson, "layer_name": layer_name}
+
+
+def handle_export_layer(params: dict, layer_store: dict = None) -> dict:
+    """Export a named layer as GeoJSON, Shapefile, or GeoPackage."""
+    import json as json_mod
+
+    layer_name = params.get("layer_name")
+    if not layer_name:
+        return {"error": "layer_name is required"}
+
+    export_format = params.get("format", "geojson")
+    valid_formats = ["geojson", "shapefile", "geopackage"]
+    if export_format not in valid_formats:
+        return {"error": f"Invalid format. Choose from: {', '.join(valid_formats)}"}
+
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
+
+    if not features:
+        return {"error": f"Layer '{layer_name}' has no features to export"}
+
+    geojson_data = {"type": "FeatureCollection", "features": features}
+
+    if export_format == "geojson":
+        return {
+            "success": True,
+            "format": "geojson",
+            "layer_name": layer_name,
+            "feature_count": len(features),
+            "geojson_string": json_mod.dumps(geojson_data),
+            "description": f"Exported {len(features)} features from '{layer_name}' as GeoJSON",
+        }
+
+    # For shapefile/geopackage, use GeoPandas
+    import geopandas as gpd_mod
+    import tempfile
+    import os
+
+    try:
+        gdf = gpd_mod.GeoDataFrame.from_features(features)
+        if gdf.crs is None:
+            gdf.set_crs(epsg=4326, inplace=True)
+
+        export_dir = tempfile.mkdtemp(prefix="spatialapp_export_")
+
+        if export_format == "shapefile":
+            out_path = os.path.join(export_dir, f"{layer_name}.shp")
+            gdf.to_file(out_path, driver="ESRI Shapefile")
+        else:  # geopackage
+            out_path = os.path.join(export_dir, f"{layer_name}.gpkg")
+            gdf.to_file(out_path, driver="GPKG")
+
+        return {
+            "success": True,
+            "format": export_format,
+            "layer_name": layer_name,
+            "feature_count": len(features),
+            "file_path": out_path,
+            "description": f"Exported {len(features)} features from '{layer_name}' as {export_format}",
+        }
+    except Exception as e:
+        logger.error(f"Export error: {e}", exc_info=True)
+        return {"error": f"Export to {export_format} failed"}

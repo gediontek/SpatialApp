@@ -22,7 +22,8 @@ logger = logging.getLogger(__name__)
 LAYER_PRODUCING_TOOLS = {
     "geocode", "search_nearby", "buffer", "spatial_query",
     "aggregate", "filter_layer", "fetch_osm", "merge_layers",
-    "import_layer", "find_route", "isochrone", "heatmap",
+    "import_layer", "import_csv", "import_wkt",
+    "find_route", "isochrone", "heatmap", "closest_facility", "optimize_route",
     "classify_landcover", "intersection", "difference",
     "symmetric_difference", "convex_hull", "centroid", "simplify",
     "bounding_box", "dissolve", "clip", "voronoi", "batch_geocode",
@@ -366,6 +367,9 @@ from nl_gis.handlers.layers import (  # noqa: E402,F401
     handle_highlight_features,
     handle_merge_layers,
     handle_import_layer,
+    handle_import_csv,
+    handle_import_wkt,
+    handle_export_layer,
 )
 from nl_gis.handlers.annotations import (  # noqa: E402,F401
     handle_add_annotation,
@@ -378,6 +382,8 @@ from nl_gis.handlers.routing import (  # noqa: E402,F401
     handle_find_route,
     handle_isochrone,
     handle_heatmap,
+    handle_closest_facility,
+    handle_optimize_route,
 )
 
 
@@ -421,11 +427,16 @@ def dispatch_tool(tool_name: str, params: dict, layer_store: dict = None) -> dic
         "export_annotations": handle_export_annotations,
         "get_annotations": handle_get_annotations,
         "import_layer": lambda p: handle_import_layer(p, layer_store),
+        "import_csv": lambda p: handle_import_csv(p, layer_store),
+        "import_wkt": lambda p: handle_import_wkt(p, layer_store),
+        "export_layer": lambda p: handle_export_layer(p, layer_store),
         "merge_layers": lambda p: handle_merge_layers(p, layer_store),
         # Phase 4
         "find_route": handle_find_route,
         "isochrone": handle_isochrone,
         "heatmap": lambda p: handle_heatmap(p, layer_store),
+        "closest_facility": lambda p: handle_closest_facility(p, layer_store),
+        "optimize_route": lambda p: handle_optimize_route(p, layer_store),
         # Overlay operations
         "intersection": lambda p: handle_intersection(p, layer_store),
         "difference": lambda p: handle_difference(p, layer_store),
