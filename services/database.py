@@ -9,6 +9,7 @@ import logging
 import os
 import sqlite3
 import datetime
+import threading
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -16,15 +17,51 @@ logger = logging.getLogger(__name__)
 DB_PATH = os.environ.get("DATABASE_PATH",
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "spatialapp.db"))
 
+_local = threading.local()
+
 
 def get_connection() -> sqlite3.Connection:
-    """Get a SQLite connection with row factory."""
+    """Get or create a thread-local SQLite connection.
+
+    Reuses the same connection within a thread to avoid excessive
+    connection churn. Call close_connection() at request end to release.
+    """
+    conn = getattr(_local, 'conn', None)
+    db_path = getattr(_local, 'db_path', None)
+    if conn is not None and db_path == DB_PATH:
+        try:
+            # Verify the connection is still usable
+            conn.execute("SELECT 1")
+            return conn
+        except Exception:
+            _local.conn = None
+            _local.db_path = None
+    elif conn is not None:
+        # DB_PATH changed (e.g. tests), close old connection
+        try:
+            conn.close()
+        except Exception:
+            pass
+        _local.conn = None
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.row_factory = sqlite3.Row
+    _local.conn = conn
+    _local.db_path = DB_PATH
     return conn
+
+
+def close_connection():
+    """Close the thread-local connection (call at request end)."""
+    conn = getattr(_local, 'conn', None)
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            logger.debug("Error closing thread-local connection", exc_info=True)
+        _local.conn = None
 
 
 def init_db():
@@ -36,104 +73,101 @@ def init_db():
     - Layers table keeps original PK on existing DBs
     """
     conn = get_connection()
-    try:
-        # Create tables individually to handle existing DBs gracefully
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                user_id TEXT PRIMARY KEY,
-                username TEXT NOT NULL,
-                api_token TEXT UNIQUE NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+    # Create tables individually to handle existing DBs gracefully
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id TEXT PRIMARY KEY,
+            username TEXT NOT NULL,
+            api_token TEXT UNIQUE NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
 
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS annotations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT DEFAULT 'anonymous',
-                category_name TEXT NOT NULL,
-                color TEXT DEFAULT '#3388ff',
-                source TEXT DEFAULT 'manual',
-                geometry_json TEXT NOT NULL,
-                properties_json TEXT DEFAULT '{}',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS annotations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT DEFAULT 'anonymous',
+            category_name TEXT NOT NULL,
+            color TEXT DEFAULT '#3388ff',
+            source TEXT DEFAULT 'manual',
+            geometry_json TEXT NOT NULL,
+            properties_json TEXT DEFAULT '{}',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
 
-        # Layers table: on fresh DBs use composite PK (name, user_id).
-        # On existing DBs, the table already exists with name TEXT PRIMARY KEY
-        # and user_id gets added via migration below.
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS layers (
-                name TEXT NOT NULL,
-                user_id TEXT DEFAULT 'anonymous',
-                geojson TEXT NOT NULL,
-                feature_count INTEGER DEFAULT 0,
-                style_json TEXT DEFAULT '{}',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (name, user_id)
-            )
-        """)
+    # Layers table: on fresh DBs use composite PK (name, user_id).
+    # On existing DBs, the table already exists with name TEXT PRIMARY KEY
+    # and user_id gets added via migration below.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS layers (
+            name TEXT NOT NULL,
+            user_id TEXT DEFAULT 'anonymous',
+            geojson TEXT NOT NULL,
+            feature_count INTEGER DEFAULT 0,
+            style_json TEXT DEFAULT '{}',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (name, user_id)
+        )
+    """)
 
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS chat_sessions (
-                session_id TEXT PRIMARY KEY,
-                user_id TEXT DEFAULT 'anonymous',
-                messages_json TEXT DEFAULT '[]',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS chat_sessions (
+            session_id TEXT PRIMARY KEY,
+            user_id TEXT DEFAULT 'anonymous',
+            messages_json TEXT DEFAULT '[]',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
 
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS query_metrics (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT DEFAULT 'anonymous',
-                session_id TEXT,
-                message TEXT,
-                tool_calls INTEGER DEFAULT 0,
-                input_tokens INTEGER DEFAULT 0,
-                output_tokens INTEGER DEFAULT 0,
-                duration_ms INTEGER DEFAULT 0,
-                error INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS query_metrics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT DEFAULT 'anonymous',
+            session_id TEXT,
+            message TEXT,
+            tool_calls INTEGER DEFAULT 0,
+            input_tokens INTEGER DEFAULT 0,
+            output_tokens INTEGER DEFAULT 0,
+            duration_ms INTEGER DEFAULT 0,
+            error INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
 
-        # Create indexes (IF NOT EXISTS handles idempotency)
-        for idx_sql in [
-            "CREATE INDEX IF NOT EXISTS idx_annotations_category ON annotations(category_name)",
-            "CREATE INDEX IF NOT EXISTS idx_annotations_source ON annotations(source)",
-            "CREATE INDEX IF NOT EXISTS idx_metrics_created ON query_metrics(created_at)",
-        ]:
-            conn.execute(idx_sql)
+    # Create indexes (IF NOT EXISTS handles idempotency)
+    for idx_sql in [
+        "CREATE INDEX IF NOT EXISTS idx_annotations_category ON annotations(category_name)",
+        "CREATE INDEX IF NOT EXISTS idx_annotations_source ON annotations(source)",
+        "CREATE INDEX IF NOT EXISTS idx_metrics_created ON query_metrics(created_at)",
+    ]:
+        conn.execute(idx_sql)
 
-        # Migration: add user_id columns to existing tables if missing
-        _migrate_add_column(conn, "annotations", "user_id", "TEXT DEFAULT 'anonymous'")
-        _migrate_add_column(conn, "layers", "user_id", "TEXT DEFAULT 'anonymous'")
-        _migrate_add_column(conn, "chat_sessions", "user_id", "TEXT DEFAULT 'anonymous'")
+    # Migration: add user_id columns to existing tables if missing
+    _migrate_add_column(conn, "annotations", "user_id", "TEXT DEFAULT 'anonymous'")
+    _migrate_add_column(conn, "layers", "user_id", "TEXT DEFAULT 'anonymous'")
+    _migrate_add_column(conn, "chat_sessions", "user_id", "TEXT DEFAULT 'anonymous'")
 
-        # Create user_id indexes (only after migration ensures columns exist)
-        for idx_sql in [
-            "CREATE INDEX IF NOT EXISTS idx_annotations_user ON annotations(user_id)",
-            "CREATE INDEX IF NOT EXISTS idx_sessions_user ON chat_sessions(user_id)",
-            "CREATE INDEX IF NOT EXISTS idx_metrics_user ON query_metrics(user_id)",
-        ]:
-            try:
-                conn.execute(idx_sql)
-            except Exception:
-                logger.debug("Index creation skipped (column may not exist): %s", idx_sql, exc_info=True)
-
-        # layers.user_id index — only if column was added successfully
+    # Create user_id indexes (only after migration ensures columns exist)
+    for idx_sql in [
+        "CREATE INDEX IF NOT EXISTS idx_annotations_user ON annotations(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_sessions_user ON chat_sessions(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_metrics_user ON query_metrics(user_id)",
+    ]:
         try:
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_layers_user ON layers(user_id)")
+            conn.execute(idx_sql)
         except Exception:
-            logger.debug("layers.user_id index creation skipped", exc_info=True)
+            logger.debug("Index creation skipped (column may not exist): %s", idx_sql, exc_info=True)
 
-        conn.commit()
-        logger.info("Database initialized at %s", DB_PATH)
-    finally:
-        conn.close()
+    # layers.user_id index — only if column was added successfully
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_layers_user ON layers(user_id)")
+    except Exception:
+        logger.debug("layers.user_id index creation skipped", exc_info=True)
+
+    conn.commit()
+    logger.info("Database initialized at %s", DB_PATH)
 
 
 _ALLOWED_TABLES = {"users", "annotations", "layers", "chat_sessions", "query_metrics"}
@@ -191,43 +225,35 @@ def create_user(username: str, api_token: str = None) -> dict:
         )
         conn.commit()
         return {"user_id": user_id, "username": username, "api_token": api_token, "token_prefix": token_prefix}
-    finally:
-        conn.close()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def get_user_by_token(api_token: str) -> Optional[dict]:
     """Look up a user by API token hash. Returns dict or None."""
     token_hash = _hash_token(api_token)
     conn = get_connection()
-    try:
-        row = conn.execute("SELECT user_id, username, created_at FROM users WHERE api_token = ?", (token_hash,)).fetchone()
-        if not row:
-            return None
-        return {"user_id": row["user_id"], "username": row["username"], "created_at": row["created_at"]}
-    finally:
-        conn.close()
+    row = conn.execute("SELECT user_id, username, created_at FROM users WHERE api_token = ?", (token_hash,)).fetchone()
+    if not row:
+        return None
+    return {"user_id": row["user_id"], "username": row["username"], "created_at": row["created_at"]}
 
 
 def get_user_by_id(user_id: str) -> Optional[dict]:
     """Look up a user by ID. Does not return the token hash."""
     conn = get_connection()
-    try:
-        row = conn.execute("SELECT user_id, username, created_at FROM users WHERE user_id = ?", (user_id,)).fetchone()
-        if not row:
-            return None
-        return {"user_id": row["user_id"], "username": row["username"], "created_at": row["created_at"]}
-    finally:
-        conn.close()
+    row = conn.execute("SELECT user_id, username, created_at FROM users WHERE user_id = ?", (user_id,)).fetchone()
+    if not row:
+        return None
+    return {"user_id": row["user_id"], "username": row["username"], "created_at": row["created_at"]}
 
 
 def list_users() -> list:
     """List all users (without tokens)."""
     conn = get_connection()
-    try:
-        rows = conn.execute("SELECT user_id, username, created_at FROM users ORDER BY created_at").fetchall()
-        return [{"user_id": r["user_id"], "username": r["username"], "created_at": r["created_at"]} for r in rows]
-    finally:
-        conn.close()
+    rows = conn.execute("SELECT user_id, username, created_at FROM users ORDER BY created_at").fetchall()
+    return [{"user_id": r["user_id"], "username": r["username"], "created_at": r["created_at"]} for r in rows]
 
 
 # ============================================================
@@ -246,60 +272,55 @@ def save_annotation(category_name: str, geometry: dict, color: str = "#3388ff",
         )
         conn.commit()
         return cursor.lastrowid
-    finally:
-        conn.close()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def get_all_annotations(user_id: str = None, limit: int = None, offset: int = 0) -> list:
     """Get annotations as GeoJSON features. Supports pagination and user filtering."""
     conn = get_connection()
-    try:
-        query = "SELECT * FROM annotations"
-        params = []
-        if user_id:
-            query += " WHERE user_id = ?"
-            params.append(user_id)
-        query += " ORDER BY id"
-        if limit:
-            query += " LIMIT ? OFFSET ?"
-            params.extend([limit, offset])
-        rows = conn.execute(query, params).fetchall()
-        features = []
-        for row in rows:
-            try:
-                geom = json.loads(row["geometry_json"])
-                props = json.loads(row["properties_json"]) if row["properties_json"] else {}
-            except (json.JSONDecodeError, TypeError):
-                logger.warning(f"Skipping corrupt annotation id={row['id']}")
-                continue
-            features.append({
-                "type": "Feature",
-                "id": row["id"],
-                "geometry": geom,
-                "properties": {
-                    "category_name": row["category_name"],
-                    "color": row["color"],
-                    "source": row["source"],
-                    "created_at": row["created_at"],
-                    **props,
-                },
-            })
-        return features
-    finally:
-        conn.close()
+    query = "SELECT * FROM annotations"
+    params = []
+    if user_id:
+        query += " WHERE user_id = ?"
+        params.append(user_id)
+    query += " ORDER BY id"
+    if limit:
+        query += " LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+    rows = conn.execute(query, params).fetchall()
+    features = []
+    for row in rows:
+        try:
+            geom = json.loads(row["geometry_json"])
+            props = json.loads(row["properties_json"]) if row["properties_json"] else {}
+        except (json.JSONDecodeError, TypeError):
+            logger.warning(f"Skipping corrupt annotation id={row['id']}")
+            continue
+        features.append({
+            "type": "Feature",
+            "id": row["id"],
+            "geometry": geom,
+            "properties": {
+                "category_name": row["category_name"],
+                "color": row["color"],
+                "source": row["source"],
+                "created_at": row["created_at"],
+                **props,
+            },
+        })
+    return features
 
 
 def get_annotation_count(user_id: str = None) -> int:
     """Get annotation count, optionally filtered by user."""
     conn = get_connection()
-    try:
-        if user_id:
-            row = conn.execute("SELECT COUNT(*) as cnt FROM annotations WHERE user_id = ?", (user_id,)).fetchone()
-        else:
-            row = conn.execute("SELECT COUNT(*) as cnt FROM annotations").fetchone()
-        return row["cnt"]
-    finally:
-        conn.close()
+    if user_id:
+        row = conn.execute("SELECT COUNT(*) as cnt FROM annotations WHERE user_id = ?", (user_id,)).fetchone()
+    else:
+        row = conn.execute("SELECT COUNT(*) as cnt FROM annotations").fetchone()
+    return row["cnt"]
 
 
 def clear_annotations(user_id: str = None):
@@ -311,8 +332,9 @@ def clear_annotations(user_id: str = None):
         else:
             conn.execute("DELETE FROM annotations")
         conn.commit()
-    finally:
-        conn.close()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 # ============================================================
@@ -329,40 +351,35 @@ def save_layer(name: str, geojson: dict, style: dict = None, user_id: str = "ano
             (name, user_id, json.dumps(geojson), feature_count, json.dumps(style or {}), datetime.datetime.now().isoformat())
         )
         conn.commit()
-    finally:
-        conn.close()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def get_layer(name: str, user_id: str = None) -> Optional[dict]:
     """Get a layer by name. Returns GeoJSON dict or None."""
     conn = get_connection()
+    if user_id:
+        row = conn.execute("SELECT geojson FROM layers WHERE name = ? AND user_id = ?", (name, user_id)).fetchone()
+    else:
+        row = conn.execute("SELECT geojson FROM layers WHERE name = ?", (name,)).fetchone()
+    if not row:
+        return None
     try:
-        if user_id:
-            row = conn.execute("SELECT geojson FROM layers WHERE name = ? AND user_id = ?", (name, user_id)).fetchone()
-        else:
-            row = conn.execute("SELECT geojson FROM layers WHERE name = ?", (name,)).fetchone()
-        if not row:
-            return None
-        try:
-            return json.loads(row["geojson"])
-        except (json.JSONDecodeError, TypeError):
-            logger.warning(f"Corrupt layer data for '{name}'")
-            return None
-    finally:
-        conn.close()
+        return json.loads(row["geojson"])
+    except (json.JSONDecodeError, TypeError):
+        logger.warning(f"Corrupt layer data for '{name}'")
+        return None
 
 
 def get_all_layers(user_id: str = None) -> list:
     """Get layer metadata, optionally filtered by user."""
     conn = get_connection()
-    try:
-        if user_id:
-            rows = conn.execute("SELECT name, feature_count, created_at FROM layers WHERE user_id = ? ORDER BY created_at DESC", (user_id,)).fetchall()
-        else:
-            rows = conn.execute("SELECT name, feature_count, created_at FROM layers ORDER BY created_at DESC").fetchall()
-        return [{"name": r["name"], "feature_count": r["feature_count"], "created_at": r["created_at"]} for r in rows]
-    finally:
-        conn.close()
+    if user_id:
+        rows = conn.execute("SELECT name, feature_count, created_at FROM layers WHERE user_id = ? ORDER BY created_at DESC", (user_id,)).fetchall()
+    else:
+        rows = conn.execute("SELECT name, feature_count, created_at FROM layers ORDER BY created_at DESC").fetchall()
+    return [{"name": r["name"], "feature_count": r["feature_count"], "created_at": r["created_at"]} for r in rows]
 
 
 def delete_layer(name: str, user_id: str = None) -> bool:
@@ -375,8 +392,9 @@ def delete_layer(name: str, user_id: str = None) -> bool:
             cursor = conn.execute("DELETE FROM layers WHERE name = ?", (name,))
         conn.commit()
         return cursor.rowcount > 0
-    finally:
-        conn.close()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 # ============================================================
@@ -392,18 +410,16 @@ def save_chat_session(session_id: str, messages: list, user_id: str = "anonymous
             (session_id, user_id, json.dumps(messages, default=str), datetime.datetime.now().isoformat())
         )
         conn.commit()
-    finally:
-        conn.close()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def get_chat_session(session_id: str) -> Optional[list]:
     """Get chat session messages. Returns list or None."""
     conn = get_connection()
-    try:
-        row = conn.execute("SELECT messages_json FROM chat_sessions WHERE session_id = ?", (session_id,)).fetchone()
-        return json.loads(row["messages_json"]) if row else None
-    finally:
-        conn.close()
+    row = conn.execute("SELECT messages_json FROM chat_sessions WHERE session_id = ?", (session_id,)).fetchone()
+    return json.loads(row["messages_json"]) if row else None
 
 
 def delete_chat_session(session_id: str):
@@ -412,8 +428,9 @@ def delete_chat_session(session_id: str):
     try:
         conn.execute("DELETE FROM chat_sessions WHERE session_id = ?", (session_id,))
         conn.commit()
-    finally:
-        conn.close()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 # ============================================================
@@ -432,8 +449,9 @@ def log_query_metric(user_id: str = "anonymous", session_id: str = None,
             (user_id, session_id, message[:200], tool_calls, input_tokens, output_tokens, duration_ms, 1 if error else 0)
         )
         conn.commit()
-    finally:
-        conn.close()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def cleanup_old_metrics(days: int = 180):
@@ -449,8 +467,9 @@ def cleanup_old_metrics(days: int = 180):
         if deleted > 0:
             logger.info(f"Cleaned up {deleted} query metrics older than {days} days")
         return deleted
-    finally:
-        conn.close()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def verify_db_integrity() -> bool:
@@ -463,7 +482,6 @@ def verify_db_integrity() -> bool:
         tables = [r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
         ).fetchall()]
-        conn.close()
         expected = {"users", "annotations", "layers", "chat_sessions", "query_metrics"}
         missing = expected - set(tables)
         if missing:
@@ -478,32 +496,29 @@ def verify_db_integrity() -> bool:
 def get_metrics_summary(user_id: str = None) -> dict:
     """Get aggregated metrics. Optionally filter by user."""
     conn = get_connection()
-    try:
-        where = "WHERE user_id = ?" if user_id else ""
-        params = (user_id,) if user_id else ()
+    where = "WHERE user_id = ?" if user_id else ""
+    params = (user_id,) if user_id else ()
 
-        row = conn.execute(f"""
-            SELECT
-                COUNT(*) as total_queries,
-                SUM(tool_calls) as total_tool_calls,
-                SUM(input_tokens) as total_input_tokens,
-                SUM(output_tokens) as total_output_tokens,
-                AVG(duration_ms) as avg_duration_ms,
-                SUM(error) as total_errors,
-                MAX(created_at) as last_query_at
-            FROM query_metrics {where}
-        """, params).fetchone()
+    row = conn.execute(f"""
+        SELECT
+            COUNT(*) as total_queries,
+            SUM(tool_calls) as total_tool_calls,
+            SUM(input_tokens) as total_input_tokens,
+            SUM(output_tokens) as total_output_tokens,
+            AVG(duration_ms) as avg_duration_ms,
+            SUM(error) as total_errors,
+            MAX(created_at) as last_query_at
+        FROM query_metrics {where}
+    """, params).fetchone()
 
-        total = row["total_queries"] or 0
-        return {
-            "total_queries": total,
-            "total_tool_calls": row["total_tool_calls"] or 0,
-            "total_input_tokens": row["total_input_tokens"] or 0,
-            "total_output_tokens": row["total_output_tokens"] or 0,
-            "avg_duration_ms": round(row["avg_duration_ms"] or 0, 1),
-            "total_errors": row["total_errors"] or 0,
-            "error_rate": round((row["total_errors"] or 0) / total * 100, 1) if total > 0 else 0,
-            "last_query_at": row["last_query_at"],
-        }
-    finally:
-        conn.close()
+    total = row["total_queries"] or 0
+    return {
+        "total_queries": total,
+        "total_tool_calls": row["total_tool_calls"] or 0,
+        "total_input_tokens": row["total_input_tokens"] or 0,
+        "total_output_tokens": row["total_output_tokens"] or 0,
+        "avg_duration_ms": round(row["avg_duration_ms"] or 0, 1),
+        "total_errors": row["total_errors"] or 0,
+        "error_rate": round((row["total_errors"] or 0) / total * 100, 1) if total > 0 else 0,
+        "last_query_at": row["last_query_at"],
+    }

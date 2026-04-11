@@ -7,6 +7,8 @@ FOSSGIS public demo at valhalla1.openstreetmap.de.
 
 import logging
 import socket
+import threading
+import time as _time
 from typing import Optional
 
 import polyline
@@ -34,6 +36,7 @@ COSTING_MAP = {
 _detected_url = None
 _detected_at = 0.0
 _DETECTION_TTL = 300  # Re-probe every 5 minutes
+_detection_lock = threading.Lock()
 
 
 def _probe_port(host: str, port: int, timeout: float = 1.0) -> bool:
@@ -48,8 +51,9 @@ def _probe_port(host: str, port: int, timeout: float = 1.0) -> bool:
 def reset_detection():
     """Force re-probe on next call. Call after connection failure."""
     global _detected_url, _detected_at
-    _detected_url = None
-    _detected_at = 0.0
+    with _detection_lock:
+        _detected_url = None
+        _detected_at = 0.0
 
 
 def detect_valhalla_url() -> str:
@@ -61,18 +65,63 @@ def detect_valhalla_url() -> str:
     import time
     global _detected_url, _detected_at
 
-    if _detected_url is not None and (time.time() - _detected_at) < _DETECTION_TTL:
+    with _detection_lock:
+        if _detected_url is not None and (time.time() - _detected_at) < _DETECTION_TTL:
+            return _detected_url
+
+        if _probe_port("localhost", 8002):
+            logger.info("Using local Valhalla instance on port 8002")
+            _detected_url = LOCAL_VALHALLA
+        else:
+            logger.info("Using public Valhalla demo server (rate-limited)")
+            _detected_url = PUBLIC_VALHALLA
+
+        _detected_at = time.time()
         return _detected_url
 
-    if _probe_port("localhost", 8002):
-        logger.info("Using local Valhalla instance on port 8002")
-        _detected_url = LOCAL_VALHALLA
-    else:
-        logger.info("Using public Valhalla demo server (rate-limited)")
-        _detected_url = PUBLIC_VALHALLA
 
-    _detected_at = time.time()
-    return _detected_url
+def _request_with_retry(url, json_data, timeout, max_retries=2):
+    """Make HTTP POST with exponential backoff retry for transient errors.
+
+    Retries on ConnectionError, Timeout, and HTTP 5xx responses.
+    Does NOT retry on 4xx client errors.
+
+    Args:
+        url: Request URL.
+        json_data: JSON payload dict.
+        timeout: Request timeout in seconds.
+        max_retries: Maximum number of retries (default 2).
+
+    Returns:
+        requests.Response on success, None after all retries exhausted.
+    """
+    delays = [0.5, 1.0]
+    for attempt in range(1 + max_retries):
+        try:
+            response = requests.post(url, json=json_data, timeout=timeout)
+            status = response.status_code
+            if isinstance(status, int) and status >= 500 and attempt < max_retries:
+                logger.warning(
+                    "Valhalla returned %d on attempt %d/%d, retrying",
+                    response.status_code, attempt + 1, 1 + max_retries,
+                )
+                _time.sleep(delays[attempt] if attempt < len(delays) else delays[-1])
+                continue
+            return response
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            if attempt < max_retries:
+                logger.warning(
+                    "Valhalla request failed on attempt %d/%d (%s), retrying",
+                    attempt + 1, 1 + max_retries, type(e).__name__,
+                )
+                _time.sleep(delays[attempt] if attempt < len(delays) else delays[-1])
+            else:
+                logger.warning(
+                    "Valhalla request failed after %d attempts: %s",
+                    1 + max_retries, e,
+                )
+                return None
+    return None
 
 
 def _decode_polyline6(encoded: str) -> list:
@@ -136,9 +185,12 @@ def get_route(
     }
 
     try:
-        response = requests.post(
-            f"{base_url}/route", json=payload, timeout=timeout
+        response = _request_with_retry(
+            f"{base_url}/route", json_data=payload, timeout=timeout
         )
+        if response is None:
+            reset_detection()
+            return None
         response.raise_for_status()
         data = response.json()
 
@@ -190,10 +242,6 @@ def get_route(
         valhalla_cache.set(cache_key, result)
         return result
 
-    except requests.Timeout:
-        logger.error("Valhalla route request timed out")
-        reset_detection()
-        return None
     except requests.RequestException as e:
         logger.error(f"Valhalla route request failed: {e}")
         reset_detection()
@@ -230,10 +278,16 @@ def get_isochrone(
     costing = COSTING_MAP.get(profile, "auto")
 
     # Build contour specification
-    if time_minutes:
+    if time_minutes is not None:
+        if time_minutes <= 0:
+            logger.warning("Isochrone time_minutes must be positive, got %s", time_minutes)
+            return None
         contour = {"time": time_minutes}
         cache_key = f"iso:{lon:.5f},{lat:.5f}:t{time_minutes}:{costing}"
-    elif distance_km:
+    elif distance_km is not None:
+        if distance_km <= 0:
+            logger.warning("Isochrone distance_km must be positive, got %s", distance_km)
+            return None
         contour = {"distance": distance_km}
         cache_key = f"iso:{lon:.5f},{lat:.5f}:d{distance_km}:{costing}"
     else:
@@ -259,9 +313,13 @@ def get_isochrone(
     }
 
     try:
-        response = requests.post(
-            f"{base_url}/isochrone", json=payload, timeout=timeout
+        response = _request_with_retry(
+            f"{base_url}/isochrone", json_data=payload, timeout=timeout,
+            max_retries=1
         )
+        if response is None:
+            reset_detection()
+            return None
         response.raise_for_status()
         data = response.json()
 
@@ -273,10 +331,6 @@ def get_isochrone(
         valhalla_cache.set(cache_key, data)
         return data
 
-    except requests.Timeout:
-        logger.error("Valhalla isochrone request timed out")
-        reset_detection()
-        return None
     except requests.RequestException as e:
         logger.error(f"Valhalla isochrone request failed: {e}")
         reset_detection()

@@ -20,8 +20,10 @@ var LayerManager = (function() {
         }
 
         style = style || {};
+        // Sanitize color at input time to prevent injection via style properties
+        var safeColor = (style.color || '#3388ff').replace(/[^#a-fA-F0-9]/g, '');
         var defaultStyle = {
-            color: style.color || '#3388ff',
+            color: safeColor,
             weight: style.weight || 2,
             fillOpacity: style.fillOpacity || 0.3
         };
@@ -135,9 +137,13 @@ var LayerManager = (function() {
     function fitToLayer(name) {
         if (!layers[name] || !layers[name].leafletLayer) return;
 
-        var bounds = layers[name].leafletLayer.getBounds();
-        if (bounds.isValid()) {
-            map.fitBounds(bounds);
+        try {
+            var bounds = layers[name].leafletLayer.getBounds();
+            if (bounds.isValid()) {
+                map.fitBounds(bounds);
+            }
+        } catch (e) {
+            console.warn('fitToLayer: could not get bounds for "' + name + '":', e.message);
         }
     }
 
@@ -149,13 +155,35 @@ var LayerManager = (function() {
         return Object.keys(layers).length;
     }
 
+    var MAX_RECURSION_DEPTH = 10;
+
+    /**
+     * Recursively iterate all feature layers, handling markerClusterGroups
+     * and nested layer groups to reach individual feature layers.
+     * Depth parameter guards against infinite recursion on circular references.
+     */
+    function eachFeatureLayer(layer, callback, depth) {
+        depth = depth || 0;
+        if (depth > MAX_RECURSION_DEPTH) return;
+
+        if (layer.feature) {
+            // This is an individual feature layer
+            callback(layer);
+        } else if (typeof layer.eachLayer === 'function') {
+            // This is a group (markerClusterGroup, GeoJSON group, etc.) — recurse
+            layer.eachLayer(function(child) {
+                eachFeatureLayer(child, callback, depth + 1);
+            });
+        }
+    }
+
     function styleLayer(name, style) {
         if (!layers[name] || !layers[name].leafletLayer) return;
         var leafletLayer = layers[name].leafletLayer;
-        if (typeof leafletLayer.setStyle === 'function') {
+        if (typeof leafletLayer.setStyle === 'function' && !layers[name].clustered) {
             leafletLayer.setStyle(style);
         } else {
-            leafletLayer.eachLayer(function(featureLayer) {
+            eachFeatureLayer(leafletLayer, function(featureLayer) {
                 if (typeof featureLayer.setStyle === 'function') {
                     featureLayer.setStyle(style);
                 }
@@ -169,7 +197,7 @@ var LayerManager = (function() {
         if (!layers[layerName]) return;
 
         var leafletLayer = layers[layerName].leafletLayer;
-        leafletLayer.eachLayer(function(featureLayer) {
+        eachFeatureLayer(leafletLayer, function(featureLayer) {
             var props = featureLayer.feature ? featureLayer.feature.properties || {} : {};
             var tags = props.osm_tags || {};
             if (String(props[attribute]) === String(value) || String(tags[attribute]) === String(value)) {
@@ -198,13 +226,13 @@ var LayerManager = (function() {
             var visClass = layer.visible ? '' : ' layer-hidden';
             var eyeIcon = layer.visible ? '👁' : '👁‍🗨';
 
-            var html = '<div class="layer-item' + visClass + '">' +
+            var html = '<div class="layer-item' + visClass + '" tabindex="0">' +
                        '<span class="layer-color" style="background-color:' + (layer.style.color || '#3388ff').replace(/[^#a-fA-F0-9]/g, '') + '"></span>' +
                        '<span class="layer-name" data-name="' + escapeAttr(name) + '">' + escapeHtml(name) + '</span>' +
                        '<span class="layer-count">' + layer.featureCount + '</span>' +
-                       '<button class="layer-toggle-btn" data-name="' + escapeAttr(name) + '" title="Toggle visibility">' + eyeIcon + '</button>' +
-                       '<button class="layer-fit-btn" data-name="' + escapeAttr(name) + '" title="Zoom to layer">⊡</button>' +
-                       '<button class="layer-delete-btn" data-name="' + escapeAttr(name) + '" title="Remove layer">×</button>' +
+                       '<button class="layer-toggle-btn" data-name="' + escapeAttr(name) + '" title="Toggle visibility" aria-label="Toggle layer visibility" aria-pressed="' + (layer.visible ? 'true' : 'false') + '">' + eyeIcon + '</button>' +
+                       '<button class="layer-fit-btn" data-name="' + escapeAttr(name) + '" title="Zoom to layer" aria-label="Fit map to layer">⊡</button>' +
+                       '<button class="layer-delete-btn" data-name="' + escapeAttr(name) + '" title="Remove layer" aria-label="Remove layer">×</button>' +
                        '</div>';
             container.append(html);
         });

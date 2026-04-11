@@ -27,19 +27,39 @@ class RateLimiter:
 
     def wait(self):
         """Block until it's safe to make a request."""
+        sleep_time = 0
         with self._lock:
             now = time.time()
             elapsed = now - self.last_request_time
             if elapsed < self.min_interval:
                 sleep_time = self.min_interval - elapsed
-                logger.debug(f"Rate limiter [{self.name}]: waiting {sleep_time:.2f}s")
-                time.sleep(sleep_time)
-            self.last_request_time = time.time()
+                # Set last_request_time to the future target so other threads
+                # compute their own wait relative to this reserved slot.
+                self.last_request_time = now + sleep_time
+            else:
+                self.last_request_time = now
+        if sleep_time > 0:
+            logger.debug(f"Rate limiter [{self.name}]: waiting {sleep_time:.2f}s")
+            time.sleep(sleep_time)
 
-    def can_proceed(self) -> bool:
-        """Check if a request can proceed without blocking."""
+    def would_wait(self) -> bool:
+        """Check if a call to wait() would block. Informational only — not a reservation.
+
+        WARNING: This is subject to TOCTOU races. Between calling would_wait()
+        and calling wait(), another thread may have taken the slot. Do NOT use
+        this as a guarantee that wait() won't block. Use it only for
+        informational purposes (e.g., returning 429 to clients).
+        """
         with self._lock:
-            return (time.time() - self.last_request_time) >= self.min_interval
+            return (time.time() - self.last_request_time) < self.min_interval
+
+    # Backward-compatible alias
+    def can_proceed(self) -> bool:
+        """Check if a request can proceed without blocking.
+
+        Informational only — subject to TOCTOU races. See would_wait().
+        """
+        return not self.would_wait()
 
 
 # Pre-configured limiters

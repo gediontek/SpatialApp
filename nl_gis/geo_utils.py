@@ -1,11 +1,24 @@
 """Geospatial utilities: validated coordinates, CRS projection, spatial ops."""
 
+import functools
 from dataclasses import dataclass
 from typing import Optional
 
 import pyproj
 from shapely.geometry import shape, mapping
+from shapely.geometry.polygon import orient
 from shapely.ops import transform as shapely_transform
+
+# Module-level cached pyproj objects to avoid per-call construction overhead
+_WGS84_GEOD = pyproj.Geod(ellps="WGS84")
+
+
+@functools.lru_cache(maxsize=32)
+def _get_transformer(from_crs: int, to_crs: int):
+    """Return a cached pyproj Transformer for the given CRS pair."""
+    return pyproj.Transformer.from_crs(
+        f"EPSG:{from_crs}", f"EPSG:{to_crs}", always_xy=True
+    )
 
 
 @dataclass(frozen=True)
@@ -104,6 +117,7 @@ def estimate_utm_epsg(lon: float, lat: float) -> int:
         return 32761  # UPS South (EPSG:32761)
 
     zone_number = int((lon + 180) / 6) + 1
+    zone_number = min(zone_number, 60)
     if lat >= 0:
         return 32600 + zone_number  # Northern hemisphere UTM
     else:
@@ -121,9 +135,7 @@ def project_geometry(geometry, from_crs: int, to_crs: int):
     Returns:
         Projected Shapely geometry.
     """
-    transformer = pyproj.Transformer.from_crs(
-        f"EPSG:{from_crs}", f"EPSG:{to_crs}", always_xy=True
-    )
+    transformer = _get_transformer(from_crs, to_crs)
     return shapely_transform(transformer.transform, geometry)
 
 
@@ -173,6 +185,8 @@ def buffer_geometry(geometry, distance_m: float):
     Returns:
         Buffered Shapely geometry in WGS84 (always valid).
     """
+    if geometry.is_empty:
+        return geometry
     projected, utm_epsg = project_to_utm(geometry)
     buffered = projected.buffer(distance_m)
     result = project_to_wgs84(buffered, utm_epsg)
@@ -195,8 +209,14 @@ def geodesic_area(geometry) -> float:
     Returns:
         Area in square meters (absolute value).
     """
-    geod = pyproj.Geod(ellps="WGS84")
-    area, _ = geod.geometry_area_perimeter(geometry)
+    # Normalize winding order (exterior CCW, holes CW) so pyproj
+    # correctly subtracts hole area instead of adding it.
+    if geometry.geom_type == "Polygon":
+        geometry = orient(geometry, sign=1.0)
+    elif geometry.geom_type == "MultiPolygon":
+        from shapely.geometry import MultiPolygon
+        geometry = MultiPolygon([orient(p, sign=1.0) for p in geometry.geoms])
+    area, _ = _WGS84_GEOD.geometry_area_perimeter(geometry)
     return abs(area)
 
 
@@ -210,8 +230,7 @@ def geodesic_distance(point_a: ValidatedPoint, point_b: ValidatedPoint) -> float
     Returns:
         Distance in meters.
     """
-    geod = pyproj.Geod(ellps="WGS84")
-    _, _, distance = geod.inv(point_a.lon, point_a.lat, point_b.lon, point_b.lat)
+    _, _, distance = _WGS84_GEOD.inv(point_a.lon, point_a.lat, point_b.lon, point_b.lat)
     return abs(distance)
 
 

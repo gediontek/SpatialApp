@@ -1,10 +1,32 @@
 """Unified configuration for SpatialApp."""
 
+import logging
 import os
 from dotenv import load_dotenv
 
 # Load .env file if present
 load_dotenv()
+
+_config_logger = logging.getLogger(__name__)
+
+
+def _int_env(key: str, default: int) -> int:
+    """Read an integer from an environment variable with safe fallback.
+
+    If the env var is set to a non-numeric string, logs a warning and
+    returns the default value instead of crashing at import time.
+    """
+    raw = os.environ.get(key)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        _config_logger.warning(
+            f"Environment variable {key}={raw!r} is not a valid integer, "
+            f"using default {default}"
+        )
+        return default
 
 
 class Config:
@@ -29,10 +51,10 @@ class Config:
     LOG_FOLDER = os.environ.get('LOG_FOLDER', 'logs')
 
     # Upload limits
-    MAX_CONTENT_LENGTH = int(os.environ.get('MAX_UPLOAD_SIZE', 50 * 1024 * 1024))  # 50 MB
+    MAX_CONTENT_LENGTH = _int_env('MAX_UPLOAD_SIZE', 50 * 1024 * 1024)  # 50 MB
 
     # OSM / Overpass API
-    OSM_REQUEST_TIMEOUT = int(os.environ.get('OSM_REQUEST_TIMEOUT', 30))
+    OSM_REQUEST_TIMEOUT = _int_env('OSM_REQUEST_TIMEOUT', 30)
 
     # NL-to-GIS (LLM provider)
     LLM_PROVIDER = os.environ.get('LLM_PROVIDER', 'anthropic')  # anthropic, gemini, openai
@@ -41,9 +63,9 @@ class Config:
     GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
     OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
     OPENAI_BASE_URL = os.environ.get('OPENAI_BASE_URL', '')  # For compatible APIs
-    CLAUDE_MODEL = os.environ.get('CLAUDE_MODEL', 'claude-sonnet-4-20250514')  # Legacy compat
-    MAX_TOOL_CALLS_PER_MESSAGE = int(os.environ.get('MAX_TOOL_CALLS', 10))
-    MAX_FEATURES_PER_LAYER = int(os.environ.get('MAX_FEATURES_PER_LAYER', 5000))
+    CLAUDE_MODEL = os.environ.get('CLAUDE_MODEL', '')  # Legacy compat; empty = use DEFAULT_MODELS
+    MAX_TOOL_CALLS_PER_MESSAGE = _int_env('MAX_TOOL_CALLS', 10)
+    MAX_FEATURES_PER_LAYER = _int_env('MAX_FEATURES_PER_LAYER', 5000)
 
     @staticmethod
     def get_llm_api_key():
@@ -72,12 +94,12 @@ class Config:
     CHAT_API_TOKEN = os.environ.get('CHAT_API_TOKEN', '')
 
     # Session and memory limits
-    MAX_ANNOTATIONS_STARTUP = int(os.environ.get('MAX_ANNOTATIONS_STARTUP', 10000))
-    SESSION_TTL_SECONDS = int(os.environ.get('SESSION_TTL_SECONDS', 3600))
-    MAX_LAYERS_IN_MEMORY = int(os.environ.get('MAX_LAYERS_IN_MEMORY', 100))
+    MAX_ANNOTATIONS_STARTUP = _int_env('MAX_ANNOTATIONS_STARTUP', 10000)
+    SESSION_TTL_SECONDS = _int_env('SESSION_TTL_SECONDS', 3600)
+    MAX_LAYERS_IN_MEMORY = _int_env('MAX_LAYERS_IN_MEMORY', 100)
 
     # LLM cost budget
-    MAX_TOKENS_PER_SESSION = int(os.environ.get('MAX_TOKENS_PER_SESSION', 100000))
+    MAX_TOKENS_PER_SESSION = _int_env('MAX_TOKENS_PER_SESSION', 100000)
 
     # Database
     DATABASE_PATH = os.environ.get('DATABASE_PATH',

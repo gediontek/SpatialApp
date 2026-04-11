@@ -3,17 +3,69 @@
  * Connects to /api/chat via SSE and renders results on the Leaflet map.
  */
 var ChatPanel = (function() {
+    var MAX_LAYERS = 50;
     var eventSource = null;
-    var sessionId = 'session_' + Date.now();
+    var sessionId = (function() {
+        var stored = sessionStorage.getItem('chatSessionId');
+        if (stored) return stored;
+        var id;
+        if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+            id = 'session_' + crypto.randomUUID();
+        } else {
+            var arr = new Uint8Array(16);
+            crypto.getRandomValues(arr);
+            id = 'session_' + Array.from(arr, function(b) { return b.toString(16).padStart(2, '0'); }).join('');
+        }
+        sessionStorage.setItem('chatSessionId', id);
+        return id;
+    })();
+    var currentAbortController = null;
     var _layerManager = null;
+    var toolStepCounter = 0;
+    var _lastToolStepId = null;
 
     function init(map, layerManager) {
         _layerManager = layerManager;
         bindEvents(map, layerManager);
+        initNetworkStatusMonitor();
+    }
+
+    /**
+     * Monitor online/offline events and show a banner when the network drops.
+     */
+    function initNetworkStatusMonitor() {
+        window.addEventListener('offline', function() {
+            showNetworkBanner(true);
+        });
+        window.addEventListener('online', function() {
+            showNetworkBanner(false);
+        });
+    }
+
+    function showNetworkBanner(isOffline) {
+        var existing = document.getElementById('network-status-banner');
+        if (isOffline) {
+            if (!existing) {
+                var banner = document.createElement('div');
+                banner.id = 'network-status-banner';
+                banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#e74c3c;color:#fff;text-align:center;padding:8px;z-index:10000;font-weight:bold;';
+                banner.textContent = 'You are offline. Some features may not work.';
+                document.body.appendChild(banner);
+            }
+        } else {
+            if (existing) {
+                existing.parentNode.removeChild(existing);
+            }
+        }
     }
 
     function bindEvents(map, layerManager) {
         $('#chatSendBtn').on('click', function() {
+            if (currentAbortController && $(this).text() === 'Stop') {
+                currentAbortController.abort();
+                currentAbortController = null;
+                return;
+            }
             sendMessage(map, layerManager);
         });
 
@@ -44,9 +96,15 @@ var ChatPanel = (function() {
         input.val('');
         input.focus();
 
-        // Disable input while processing
+        // Disable input while processing; transform send button to stop button
         input.prop('disabled', true);
-        $('#chatSendBtn').prop('disabled', true);
+        $('#chatSendBtn').text('Stop');
+
+        // Abort any in-flight request
+        if (currentAbortController) {
+            currentAbortController.abort();
+        }
+        currentAbortController = new AbortController();
 
         // Build map context
         var bounds = map.getBounds();
@@ -65,9 +123,14 @@ var ChatPanel = (function() {
         var typingId = showTyping();
 
         // Send via fetch + SSE
+        var csrfToken = document.querySelector('meta[name="csrf-token"]');
         fetch('/api/chat', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': csrfToken ? csrfToken.getAttribute('content') : ''
+            },
+            signal: currentAbortController.signal,
             body: JSON.stringify({
                 message: message,
                 session_id: sessionId,
@@ -79,6 +142,8 @@ var ChatPanel = (function() {
             }
             return response.body.getReader();
         }).then(function(reader) {
+            // Connection succeeded — reset retry counter
+            sendMessage._retryCount = 0;
             var decoder = new TextDecoder();
             var buffer = '';
 
@@ -108,16 +173,14 @@ var ChatPanel = (function() {
                                 var data = JSON.parse(dataStr);
                                 handleEvent(currentEvent || data.type, data, map, layerManager);
                             } catch (e) {
-                                // Could be incomplete JSON split across chunks — buffer remaining lines
-                                var remaining = lines.slice(i).join('\n');
-                                if (remaining.length < 10000) {
-                                    buffer = remaining;
+                                if (i === lines.length - 1) {
+                                    // Last line in chunk — likely incomplete, buffer it
+                                    buffer = lines[i];
+                                    break;
                                 } else {
-                                    // Too large to be a split — malformed event, discard and continue
-                                    console.warn('Discarding malformed SSE event:', dataStr.substring(0, 200));
-                                    buffer = '';
+                                    // Mid-chunk parse failure — malformed event, skip and continue
+                                    console.warn('Skipping malformed SSE event:', dataStr.substring(0, 200));
                                 }
-                                break;
                             }
                             currentEvent = null;
                         } else if (line === '') {
@@ -136,24 +199,53 @@ var ChatPanel = (function() {
 
             return processStream();
         }).catch(function(err) {
-            removeTyping(typingId);
-            enableInput();
-            appendMessage('error', 'Connection error: ' + err.message);
+            if (err.name === 'AbortError') {
+                removeTyping(typingId);
+                enableInput();
+                currentAbortController = null;
+                appendMessage('error', 'Request cancelled.');
+                return;
+            }
+
+            // Retry with exponential backoff for connection errors
+            var retryAttempt = (typeof sendMessage._retryCount === 'number') ? sendMessage._retryCount : 0;
+            var MAX_RETRIES = 3;
+            if (retryAttempt < MAX_RETRIES) {
+                sendMessage._retryCount = retryAttempt + 1;
+                var delay = Math.pow(2, retryAttempt) * 1000; // 1s, 2s, 4s
+                appendMessage('error', 'Connection lost. Retrying in ' + (delay / 1000) + 's... (attempt ' + (retryAttempt + 1) + '/' + MAX_RETRIES + ')');
+                setTimeout(function() {
+                    // Re-send with same message by restoring input temporarily
+                    input.val(message);
+                    sendMessage(map, layerManager);
+                }, delay);
+            } else {
+                sendMessage._retryCount = 0;
+                removeTyping(typingId);
+                enableInput();
+                currentAbortController = null;
+                appendMessage('error', 'Connection lost. Please try again.');
+            }
         });
     }
 
     function handleEvent(type, data, map, layerManager) {
         switch (type) {
             case 'tool_start':
-                appendToolStep(data.tool, 'Running ' + data.tool + '...', 'loading');
+                _lastToolStepId = appendToolStep(data.tool, 'Running ' + data.tool + '...', 'loading');
                 break;
 
             case 'tool_result':
-                updateToolStep(data.tool, formatToolResult(data.tool, data.result), 'done');
+                updateToolStep(_lastToolStepId, formatToolResult(data.tool, data.result), 'done');
                 break;
 
             case 'layer_add':
                 if (layerManager && data.geojson) {
+                    // Enforce client-side layer count limit
+                    if (layerManager.getLayerCount() >= MAX_LAYERS) {
+                        appendMessage('error', 'Maximum ' + MAX_LAYERS + ' layers reached. Remove some layers first.');
+                        break;
+                    }
                     // For classified data with per-category colors
                     if (data.colors) {
                         layerManager.addLayer(data.name, data.geojson, {
@@ -191,8 +283,18 @@ var ChatPanel = (function() {
 
             case 'heatmap':
                 if (window.L && window.L.heatLayer && data.points) {
+                    var heatName = data.layer_name || 'Heatmap';
                     var heatLayer = L.heatLayer(data.points, data.options || {});
                     heatLayer.addTo(map);
+                    if (layerManager) {
+                        // Register with LayerManager: create entry with empty GeoJSON, then swap leaflet layer
+                        var entry = layerManager.addLayer(heatName, { type: 'FeatureCollection', features: [] }, {});
+                        if (entry) {
+                            map.removeLayer(entry.leafletLayer);
+                            entry.leafletLayer = heatLayer;
+                            entry.featureCount = data.points.length;
+                        }
+                    }
                 }
                 break;
 
@@ -207,6 +309,9 @@ var ChatPanel = (function() {
                 break;
 
             case 'message':
+                // Note: removeTyping() is called without an ID here because the server-sent
+                // 'message' event does not include the typingId. This removes ALL typing
+                // indicators, which is acceptable since the UI processes one request at a time.
                 removeTyping();
                 appendMessage('assistant', data.text);
                 if (data.done) {
@@ -215,6 +320,7 @@ var ChatPanel = (function() {
                 break;
 
             case 'error':
+                // See 'message' case comment — same rationale for removing all typing indicators.
                 removeTyping();
                 appendMessage('error', data.text);
                 enableInput();
@@ -362,7 +468,7 @@ var ChatPanel = (function() {
 
     function appendToolStep(toolName, text, status) {
         var safeName = toolName.replace(/[^a-z0-9_]/gi, '');
-        var id = 'tool-' + safeName;
+        var id = 'tool-' + safeName + '-' + (toolStepCounter++);
         var statusClass = status === 'loading' ? 'tool-loading' : 'tool-done';
         var html = '<div class="chat-tool-step ' + statusClass + '" id="' + escapeHtml(id) + '">' +
                    '<span class="tool-icon">' + (status === 'loading' ? '⟳' : '✓') + '</span> ' +
@@ -370,11 +476,12 @@ var ChatPanel = (function() {
                    '</div>';
         $('#chatMessages').append(html);
         scrollToBottom();
+        return id;
     }
 
-    function updateToolStep(toolName, text, status) {
-        var id = '#tool-' + toolName.replace(/[^a-z0-9]/g, '');
-        var el = $(id);
+    function updateToolStep(stepId, text, status) {
+        if (!stepId) return;
+        var el = $('#' + stepId);
         if (el.length) {
             el.removeClass('tool-loading').addClass('tool-done');
             el.find('.tool-icon').text('✓');
@@ -403,8 +510,9 @@ var ChatPanel = (function() {
     }
 
     function enableInput() {
+        currentAbortController = null;
         $('#chatInput').prop('disabled', false);
-        $('#chatSendBtn').prop('disabled', false);
+        $('#chatSendBtn').prop('disabled', false).text('Send');
         $('#chatInput').focus();
     }
 

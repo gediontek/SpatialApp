@@ -11,16 +11,25 @@ $(document).ready(function() {
         }
     });
 
+    // HTML escaping to prevent XSS
+    function escapeHtml(str) {
+        if (typeof str !== 'string') return '';
+        return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+    }
+
     // Toast notification system
     function showToast(message, type) {
         type = type || 'info';
-        var toast = $('<div class="toast ' + type + '">' + message + '</div>');
-        $('#toast-container').append(toast);
+        var toast = document.createElement('div');
+        toast.className = 'toast ' + type;
+        toast.textContent = message;
+        var $toast = $(toast);
+        $('#toast-container').append($toast);
 
         setTimeout(function() {
-            toast.addClass('fade-out');
+            $toast.addClass('fade-out');
             setTimeout(function() {
-                toast.remove();
+                $toast.remove();
             }, 300);
         }, 4000);
     }
@@ -351,9 +360,9 @@ $(document).ready(function() {
                         },
                         onEachFeature: function(feature, layer) {
                             var props = feature.properties || {};
-                            var popup = '<b>' + (props.category_name || 'Feature') + '</b>';
+                            var popup = '<b>' + escapeHtml(props.category_name || 'Feature') + '</b>';
                             if (props.osm_id) {
-                                popup += '<br>OSM ID: ' + props.osm_id;
+                                popup += '<br>OSM ID: ' + escapeHtml(String(props.osm_id));
                             }
                             layer.bindPopup(popup);
                         }
@@ -518,9 +527,9 @@ $(document).ready(function() {
             },
             onEachFeature: function(feature, layer) {
                 var props = feature.properties || {};
-                var popup = '<b>' + (props.classname || 'Unknown') + '</b>';
+                var popup = '<b>' + escapeHtml(props.classname || 'Unknown') + '</b>';
                 if (props.landuse) {
-                    popup += '<br>Original: ' + props.landuse;
+                    popup += '<br>Original: ' + escapeHtml(props.landuse);
                 }
                 layer.bindPopup(popup);
             }

@@ -8,14 +8,9 @@ from typing import Generator
 
 from config import Config
 from nl_gis.tools import get_tool_definitions
-from nl_gis.tool_handlers import dispatch_tool
+from nl_gis.tool_handlers import dispatch_tool, LAYER_PRODUCING_TOOLS
 from nl_gis.llm_provider import create_provider, DEFAULT_MODELS
 
-try:
-    from app import layer_lock as _layer_lock
-except ImportError:
-    import threading as _threading
-    _layer_lock = _threading.Lock()
 
 logger = logging.getLogger(__name__)
 
@@ -75,12 +70,14 @@ Tools handle lat/lon ↔ GeoJSON conversion automatically. You don't need to wor
 class ChatSession:
     """Manages a conversation with Claude for NL-to-GIS operations."""
 
-    def __init__(self, layer_store: dict = None):
+    def __init__(self, layer_store: dict = None, layer_lock=None):
         """Initialize a chat session.
 
         Args:
             layer_store: Server-side layer store for cross-tool references.
+            layer_lock: Threading lock for layer_store access. If None, creates a local lock.
         """
+        self._layer_lock = layer_lock or threading.Lock()
         self.messages = []
         self.max_history = 50  # Keep last 50 messages to prevent memory leak
         self.layer_store = layer_store or {}
@@ -169,10 +166,42 @@ class ChatSession:
         raise last_exception
 
     def _trim_history(self):
-        """Keep message history within bounds to prevent memory leaks."""
+        """Keep message history within bounds to prevent memory leaks.
+
+        Ensures trim boundary never splits a tool_use/tool_result pair.
+        """
         if len(self.messages) > self.max_history:
             # Keep first message (context) + last N messages
-            self.messages = [self.messages[0]] + self.messages[-(self.max_history - 1):]
+            keep_from = len(self.messages) - (self.max_history - 1)
+
+            # If the message at the trim boundary is a user message with
+            # tool_result content, it's orphaned from its preceding assistant
+            # tool_use message. Move the boundary one earlier to include both.
+            if keep_from > 1:
+                boundary_msg = self.messages[keep_from]
+                if (boundary_msg.get("role") == "user"
+                        and isinstance(boundary_msg.get("content"), list)
+                        and any(
+                            (isinstance(b, dict) and b.get("type") == "tool_result")
+                            for b in boundary_msg["content"]
+                        )):
+                    keep_from -= 1
+
+            trimmed = [self.messages[0]] + self.messages[keep_from:]
+
+            # If the last message is an assistant with tool_use blocks (its
+            # tool_result was trimmed), remove it to maintain the invariant.
+            if len(trimmed) > 1:
+                last = trimmed[-1]
+                if (last.get("role") == "assistant"
+                        and isinstance(last.get("content"), list)
+                        and any(
+                            (isinstance(b, dict) and b.get("type") == "tool_use")
+                            for b in last["content"]
+                        )):
+                    trimmed = trimmed[:-1]
+
+            self.messages = trimmed
 
     @staticmethod
     def _serialize_content(content):
@@ -266,13 +295,22 @@ class ChatSession:
             if "zoom" in map_context:
                 state_parts.append(f"Zoom level: {map_context['zoom']}")
 
-        # Layer metadata (names + feature counts)
-        if self.layer_store:
+        # Layer metadata (names + feature counts), limited to 10 most recent
+        with self._layer_lock:
+            layer_snapshot = dict(self.layer_store)
+        if layer_snapshot:
             layer_info = []
-            for name, geojson in self.layer_store.items():
+            # Take the last 10 items (most recently added/used)
+            layer_items = list(layer_snapshot.items())
+            total_layers = len(layer_items)
+            recent_items = layer_items[-10:]
+            for name, geojson in recent_items:
                 count = len(geojson.get("features", [])) if isinstance(geojson, dict) else 0
                 layer_info.append(f"{name} ({count} features)")
-            state_parts.append(f"Active layers: {', '.join(layer_info)}")
+            summary = f"Active layers: {', '.join(layer_info)}"
+            if total_layers > 10:
+                summary += f" ({total_layers} layers total, showing 10 most recent)"
+            state_parts.append(summary)
         else:
             state_parts.append("Active layers: none")
 
@@ -345,34 +383,45 @@ class ChatSession:
                 # Check if we need to handle tool use
                 if response.stop_reason == "tool_use":
                     tool_results = []
+                    processed_ids = set()  # Track dispatched tool_use IDs (H1b fix)
+                    tool_calls_this_iteration = 0  # Guard for M2
 
                     for block in assistant_content:
                         if getattr(block, "type", None) == "tool_use":
                             tool_call_count += 1
 
-                            if tool_call_count >= max_tool_calls:
+                            if tool_call_count > max_tool_calls:  # H1a: changed >= to >
                                 yield {"type": "error", "text": f"Tool call limit ({max_tool_calls}) reached. Returning partial results."}
-                                # Add empty tool_result for ALL remaining tool_use blocks
-                                # to prevent message history corruption
-                                remaining_results = []
+                                # H1b: Only create "limit reached" results for
+                                # tool_use blocks NOT already processed
+                                remaining_results = list(tool_results)  # keep already-executed results
                                 for remaining in assistant_content:
-                                    if getattr(remaining, "type", None) == "tool_use":
+                                    if (getattr(remaining, "type", None) == "tool_use"
+                                            and remaining.id not in processed_ids):
                                         remaining_results.append({
                                             "type": "tool_result",
                                             "tool_use_id": remaining.id,
                                             "content": "Tool call limit reached.",
                                         })
+                                # H2: Merge remaining results + summarization into
+                                # a single user message to avoid consecutive user messages
                                 if remaining_results:
+                                    remaining_results.append({
+                                        "type": "text",
+                                        "text": "Tool call limit reached. Please summarize what you've found so far.",
+                                    })
                                     self.messages.append({"role": "user", "content": remaining_results})
-                                # Force a text response
-                                self.messages.append({
-                                    "role": "user",
-                                    "content": "Tool call limit reached. Please summarize what you've found so far."
-                                })
+                                else:
+                                    self.messages.append({
+                                        "role": "user",
+                                        "content": "Tool call limit reached. Please summarize what you've found so far."
+                                    })
                                 break
 
                             tool_name = block.name
                             tool_input = block.input
+                            processed_ids.add(block.id)
+                            tool_calls_this_iteration += 1
 
                             yield {"type": "tool_start", "tool": tool_name, "input": tool_input}
 
@@ -396,10 +445,9 @@ class ChatSession:
 
                             # Handle special tool results
                             # Tools that produce layers
-                            layer_tools = {"fetch_osm", "buffer", "spatial_query", "search_nearby", "classify_landcover", "find_route", "isochrone", "import_layer", "merge_layers", "filter_layer"}
-                            if tool_name in layer_tools and "geojson" in result:
+                            if tool_name in LAYER_PRODUCING_TOOLS and "geojson" in result:
                                 layer_name = result.get("layer_name", f"layer_{tool_call_count}")
-                                with _layer_lock:
+                                with self._layer_lock:
                                     self.layer_store[layer_name] = result["geojson"]
 
                                 # Pick style based on tool
@@ -451,11 +499,24 @@ class ChatSession:
                                 "content": json.dumps(result),
                             })
 
-                    if tool_call_count >= max_tool_calls:
+                    if tool_call_count > max_tool_calls:  # H1a: changed >= to >
                         break
 
-                    # Send tool results back to the LLM
-                    self.messages.append({"role": "user", "content": tool_results})
+                    # M2: Guard against infinite loop — stop_reason was tool_use
+                    # but no tool_use blocks were found in content
+                    if tool_calls_this_iteration == 0:
+                        logger.warning(
+                            "LLM returned stop_reason=tool_use but no tool_use "
+                            "blocks found in content. Breaking to prevent infinite loop."
+                        )
+                        break
+
+                    # M3: Only append tool_results if non-empty
+                    if tool_results:
+                        self.messages.append({"role": "user", "content": tool_results})
+                    else:
+                        logger.warning("No tool results to append despite tool_use stop_reason.")
+                        break
                     continue  # Loop to get LLM's next response
 
                 else:
@@ -499,11 +560,21 @@ class ChatSession:
                     place = place[:zoom_match.start()].strip().rstrip(",")
                 if place:
                     yield {"type": "tool_start", "tool": "geocode", "input": {"query": place}}
-                    result = dispatch_tool("geocode", {"query": place})
+                    try:
+                        result = dispatch_tool("geocode", {"query": place}, layer_store=self.layer_store)
+                    except Exception as e:
+                        logger.error("Fallback dispatch_tool failed for geocode", exc_info=True)
+                        yield {"type": "error", "error": "Tool execution failed"}
+                        return
                     yield {"type": "tool_result", "tool": "geocode", "result": result}
                     if "error" not in result:
                         cmd = {"action": "pan_and_zoom", "lat": result["lat"], "lon": result["lon"], "zoom": zoom}
-                        map_result = dispatch_tool("map_command", cmd)
+                        try:
+                            map_result = dispatch_tool("map_command", cmd, layer_store=self.layer_store)
+                        except Exception as e:
+                            logger.error("Fallback dispatch_tool failed for map_command", exc_info=True)
+                            yield {"type": "error", "error": "Tool execution failed"}
+                            return
                         yield {"type": "map_command", **map_result}
                         yield {"type": "message", "text": f"Panned to **{result['display_name']}** (zoom {zoom})", "done": True}
                     else:
@@ -524,14 +595,24 @@ class ChatSession:
         zoom_match = re.match(r'(?:set\s+)?zoom\s*(?:level\s*)?(\d+)', msg)
         if zoom_match:
             zoom = int(zoom_match.group(1))
-            result = dispatch_tool("map_command", {"action": "zoom", "zoom": zoom})
+            try:
+                result = dispatch_tool("map_command", {"action": "zoom", "zoom": zoom}, layer_store=self.layer_store)
+            except Exception as e:
+                logger.error("Fallback dispatch_tool failed for map_command", exc_info=True)
+                yield {"type": "error", "error": "Tool execution failed"}
+                return
             yield {"type": "map_command", **result}
             yield {"type": "message", "text": f"Zoom set to **{zoom}**.", "done": True}
             return
 
         # Basemap: satellite
         if "satellite" in msg:
-            result = dispatch_tool("map_command", {"action": "change_basemap", "basemap": "satellite"})
+            try:
+                result = dispatch_tool("map_command", {"action": "change_basemap", "basemap": "satellite"}, layer_store=self.layer_store)
+            except Exception as e:
+                logger.error("Fallback dispatch_tool failed for map_command", exc_info=True)
+                yield {"type": "error", "error": "Tool execution failed"}
+                return
             yield {"type": "map_command", **result}
             yield {"type": "message", "text": "Switched to satellite view.", "done": True}
             return
@@ -539,7 +620,12 @@ class ChatSession:
         # Basemap: OSM/street
         if "osm" in msg or "street" in msg:
             if any(w in msg for w in ["view", "map", "basemap", "street", "switch"]):
-                result = dispatch_tool("map_command", {"action": "change_basemap", "basemap": "osm"})
+                try:
+                    result = dispatch_tool("map_command", {"action": "change_basemap", "basemap": "osm"}, layer_store=self.layer_store)
+                except Exception as e:
+                    logger.error("Fallback dispatch_tool failed for map_command", exc_info=True)
+                    yield {"type": "error", "error": "Tool execution failed"}
+                    return
                 yield {"type": "map_command", **result}
                 yield {"type": "message", "text": "Switched to OpenStreetMap view.", "done": True}
                 return

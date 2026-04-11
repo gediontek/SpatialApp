@@ -28,6 +28,11 @@
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <!-- Custom JS -->
     <script>
+        function escapeHtml(str) {
+            if (typeof str !== 'string') return '';
+            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+        }
+
         $(document).ready(function() {
             var map = L.map('map').setView([0, 0], 2);
 
@@ -40,14 +45,15 @@
                 if (data.features && data.features.length > 0) {
                     var geoJsonLayer = L.geoJson(data, {
                         style: function (feature) {
+                            var safeColor = (feature.properties.color || '#3388ff').replace(/[^#a-fA-F0-9]/g, '');
                             return {
-                                color: feature.properties.color || '#3388ff',
+                                color: safeColor,
                                 weight: 2
                             };
                         },
                         onEachFeature: function (feature, layer) {
                             if (feature.properties && feature.properties.category_name) {
-                                layer.bindPopup(`<strong>Category:</strong> ${feature.properties.category_name}`);
+                                layer.bindPopup('<strong>Category:</strong> ' + escapeHtml(feature.properties.category_name));
                             }
                         }
                     }).addTo(map);

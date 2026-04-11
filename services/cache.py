@@ -20,15 +20,21 @@ class FileCache:
     Metadata (timestamp, TTL) stored alongside the data.
     """
 
-    def __init__(self, namespace: str, ttl_seconds: int = 3600, cache_dir: str = None):
+    def __init__(self, namespace: str, ttl_seconds: int = 3600, cache_dir: str = None,
+                 max_entries: int = 10000):
         """Initialize file cache.
 
         Args:
             namespace: Cache namespace (subdirectory name).
             ttl_seconds: Time-to-live in seconds (default: 1 hour).
             cache_dir: Override cache directory.
+            max_entries: Maximum number of cache entries (default: 10000).
+                Eviction check runs every 100 writes to avoid filesystem scan overhead.
         """
         self.ttl = ttl_seconds
+        self.max_entries = max_entries
+        self._write_count = 0
+        self._EVICTION_CHECK_INTERVAL = 100
         self.cache_path = os.path.join(cache_dir or CACHE_DIR, namespace)
         os.makedirs(self.cache_path, exist_ok=True)
 
@@ -51,6 +57,12 @@ class FileCache:
             # Check TTL
             if time.time() - entry.get("timestamp", 0) > self.ttl:
                 os.remove(path)
+                return None
+
+            # Verify full key to detect hash collisions (truncated SHA-256)
+            stored_key = entry.get("key")
+            if stored_key is not None and stored_key != key:
+                logger.debug("Cache hash collision detected: requested key differs from stored key")
                 return None
 
             return entry.get("data")
@@ -78,6 +90,27 @@ class FileCache:
                 raise
         except (IOError, OSError) as e:
             logger.warning(f"Cache write failed: {e}")
+            return
+
+        self._write_count += 1
+        if self._write_count % self._EVICTION_CHECK_INTERVAL == 0:
+            self._evict_if_needed()
+
+    def _evict_if_needed(self):
+        """Delete oldest cache files if entry count exceeds max_entries."""
+        import glob
+        files = glob.glob(os.path.join(self.cache_path, "*.json"))
+        if len(files) <= self.max_entries:
+            return
+        # Sort by modification time (oldest first)
+        files.sort(key=lambda f: os.path.getmtime(f))
+        to_delete = len(files) - self.max_entries
+        for f in files[:to_delete]:
+            try:
+                os.remove(f)
+            except IOError:
+                pass
+        logger.info("Cache eviction: removed %d entries from %s", to_delete, self.cache_path)
 
     def clear(self):
         """Clear all cached entries in this namespace."""

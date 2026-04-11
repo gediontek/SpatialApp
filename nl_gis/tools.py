@@ -119,7 +119,8 @@ def get_tool_definitions() -> list:
                         "properties": {
                             "lat": {"type": "number"},
                             "lon": {"type": "number"}
-                        }
+                        },
+                        "required": ["lat", "lon"]
                     },
                     "to_point": {
                         "type": "object",
@@ -127,7 +128,8 @@ def get_tool_definitions() -> list:
                         "properties": {
                             "lat": {"type": "number"},
                             "lon": {"type": "number"}
-                        }
+                        },
+                        "required": ["lat", "lon"]
                     },
                     "from_location": {
                         "type": "string",
@@ -338,8 +340,8 @@ def get_tool_definitions() -> list:
                     },
                     "operator": {
                         "type": "string",
-                        "description": "Comparison operator",
-                        "enum": ["equals", "not_equals", "contains", "starts_with"]
+                        "description": "Comparison operator. Numeric operators: greater_than, less_than, greater_equal, less_equal, between (value as 'min,max').",
+                        "enum": ["equals", "not_equals", "contains", "starts_with", "greater_than", "less_than", "greater_equal", "less_equal", "between"]
                     },
                     "value": {
                         "type": "string",
@@ -439,7 +441,8 @@ def get_tool_definitions() -> list:
                             "south": {"type": "number"},
                             "east": {"type": "number"},
                             "west": {"type": "number"}
-                        }
+                        },
+                        "required": ["north", "south", "east", "west"]
                     },
                     "classes": {
                         "type": "array",
@@ -536,12 +539,14 @@ def get_tool_definitions() -> list:
                     "from_point": {
                         "type": "object",
                         "description": "Origin as {lat, lon}",
-                        "properties": {"lat": {"type": "number"}, "lon": {"type": "number"}}
+                        "properties": {"lat": {"type": "number"}, "lon": {"type": "number"}},
+                        "required": ["lat", "lon"]
                     },
                     "to_point": {
                         "type": "object",
                         "description": "Destination as {lat, lon}",
-                        "properties": {"lat": {"type": "number"}, "lon": {"type": "number"}}
+                        "properties": {"lat": {"type": "number"}, "lon": {"type": "number"}},
+                        "required": ["lat", "lon"]
                     },
                     "profile": {
                         "type": "string",
