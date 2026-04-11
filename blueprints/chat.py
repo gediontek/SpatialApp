@@ -171,7 +171,36 @@ def api_chat():
                             state.layer_store[layer_name] = geojson
                             _evict_layers_if_needed()
 
-                yield f"event: {event_type}\ndata: {json.dumps(event)}\n\n"
+                # Chunked delivery for large layers (500+ features)
+                if event_type == 'layer_add':
+                    features = geojson.get('features', []) if geojson else []
+                    CHUNK_SIZE = 500
+                    if len(features) > CHUNK_SIZE:
+                        # Send layer_init event first (no features, just metadata)
+                        init_event = {
+                            "type": "layer_init",
+                            "name": layer_name,
+                            "total_features": len(features),
+                            "chunks": (len(features) + CHUNK_SIZE - 1) // CHUNK_SIZE,
+                            "style": event.get('style'),
+                        }
+                        yield f"event: layer_init\ndata: {json.dumps(init_event)}\n\n"
+
+                        # Send features in chunks
+                        for i in range(0, len(features), CHUNK_SIZE):
+                            chunk = features[i:i + CHUNK_SIZE]
+                            chunk_event = {
+                                "type": "layer_chunk",
+                                "name": layer_name,
+                                "chunk_index": i // CHUNK_SIZE,
+                                "geojson": {"type": "FeatureCollection", "features": chunk},
+                            }
+                            yield f"event: layer_chunk\ndata: {json.dumps(chunk_event)}\n\n"
+                    else:
+                        # Small layer — send as single event (existing behavior)
+                        yield f"event: {event_type}\ndata: {json.dumps(event)}\n\n"
+                else:
+                    yield f"event: {event_type}\ndata: {json.dumps(event)}\n\n"
 
             # Persist chat session after stream completes
             _persist_chat_session(session_id, session, user_id=user_id)

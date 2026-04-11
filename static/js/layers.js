@@ -91,6 +91,65 @@ var LayerManager = (function() {
         return layers[name];
     }
 
+    /**
+     * Initialize an empty layer for chunked delivery.
+     * Creates the layer entry so subsequent appendFeatures calls can add data.
+     */
+    function initLayer(name, style, totalFeatures) {
+        // Remove existing layer with same name
+        if (layers[name]) {
+            removeLayer(name);
+        }
+
+        style = style || {};
+        var safeColor = (style.color || '#3388ff').replace(/[^#a-fA-F0-9]/g, '');
+        var defaultStyle = {
+            color: safeColor,
+            weight: style.weight || 2,
+            fillOpacity: style.fillOpacity || 0.3
+        };
+
+        var geoJsonLayer = L.geoJSON(null, {
+            style: function() { return defaultStyle; },
+            onEachFeature: function(feature, layer) {
+                var props = feature.properties || {};
+                var popup = '<b>' + escapeHtml(props.category_name || props.classname || 'Feature') + '</b>';
+                if (props.osm_id) popup += '<br>OSM ID: ' + escapeHtml(String(props.osm_id));
+                if (props.feature_type) popup += '<br>Type: ' + escapeHtml(String(props.feature_type));
+                layer.bindPopup(popup);
+            }
+        });
+
+        geoJsonLayer.addTo(map);
+
+        layers[name] = {
+            leafletLayer: geoJsonLayer,
+            visible: true,
+            featureCount: 0,
+            totalExpected: totalFeatures || 0,
+            style: defaultStyle,
+            clustered: false,
+            _isChunked: true
+        };
+
+        refreshUI();
+        return layers[name];
+    }
+
+    /**
+     * Append features from a chunk to an existing layer created by initLayer.
+     */
+    function appendFeatures(name, geojson) {
+        if (!layers[name] || !layers[name].leafletLayer) return;
+
+        var leafletLayer = layers[name].leafletLayer;
+        if (typeof leafletLayer.addData === 'function' && geojson && geojson.features) {
+            leafletLayer.addData(geojson);
+            layers[name].featureCount += geojson.features.length;
+            refreshUI();
+        }
+    }
+
     function removeLayer(name) {
         if (layers[name]) {
             map.removeLayer(layers[name].leafletLayer);
@@ -268,6 +327,8 @@ var LayerManager = (function() {
     return {
         init: init,
         addLayer: addLayer,
+        initLayer: initLayer,
+        appendFeatures: appendFeatures,
         removeLayer: removeLayer,
         toggleLayer: toggleLayer,
         showLayer: showLayer,

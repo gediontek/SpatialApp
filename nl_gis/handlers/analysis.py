@@ -1,7 +1,10 @@
 """Spatial analysis handlers: buffer, spatial query, aggregate, area, distance, filter, geometry, advanced analysis."""
 
+import hashlib
+import json
 import logging
 import math
+import time
 
 from shapely.ops import unary_union
 
@@ -27,6 +30,43 @@ from nl_gis.handlers import (
 logger = logging.getLogger(__name__)
 
 MAX_BUFFER_DISTANCE_M = 100000  # 100 km max
+
+# ---------------------------------------------------------------------------
+# Spatial query result cache
+# ---------------------------------------------------------------------------
+_spatial_cache = {}  # key -> (result, timestamp)
+_SPATIAL_CACHE_TTL = 300  # 5 minutes
+_SPATIAL_CACHE_MAX = 100  # max entries
+
+
+def _spatial_query_cache_key(source_features, target_geojson, predicate, distance_m):
+    """Generate cache key from query parameters."""
+    key_data = json.dumps({
+        "source_count": len(source_features),
+        "source_hash": hashlib.md5(
+            json.dumps(source_features, sort_keys=True).encode()
+        ).hexdigest()[:8],
+        "target": target_geojson,
+        "predicate": predicate,
+        "distance_m": distance_m,
+    }, sort_keys=True)
+    return hashlib.md5(key_data.encode()).hexdigest()
+
+
+def _get_cached_spatial_result(key):
+    """Return cached result if present and not expired."""
+    entry = _spatial_cache.get(key)
+    if entry and (time.time() - entry[1]) < _SPATIAL_CACHE_TTL:
+        return entry[0]
+    return None
+
+
+def _set_cached_spatial_result(key, result):
+    """Store result in cache, evicting oldest entry if at capacity."""
+    if len(_spatial_cache) >= _SPATIAL_CACHE_MAX:
+        oldest_key = min(_spatial_cache, key=lambda k: _spatial_cache[k][1])
+        del _spatial_cache[oldest_key]
+    _spatial_cache[key] = (result, time.time())
 
 
 def handle_calculate_area(params: dict, layer_store: dict = None) -> dict:
@@ -174,6 +214,25 @@ def handle_spatial_query(params: dict, layer_store: dict = None) -> dict:
     if err:
         return {"error": f"Source: {err}"}
 
+    # Get target geometry specification for cache key
+    target_geojson_for_cache = None
+    if target_layer:
+        target_geojson_for_cache = {"target_layer": target_layer}
+    elif target_geometry:
+        target_geojson_for_cache = target_geometry
+
+    # Get original features from source layer for cache key computation.
+    source_features, _ = _get_layer_snapshot(layer_store, source_layer)
+    source_features = source_features or []
+
+    # Check cache before doing expensive spatial operations
+    cache_key = _spatial_query_cache_key(
+        source_features, target_geojson_for_cache, predicate, distance_m
+    )
+    cached = _get_cached_spatial_result(cache_key)
+    if cached:
+        return cached
+
     # Get target geometry
     if target_layer:
         target_geoms, err = _get_layer_geometries(layer_store, target_layer)
@@ -194,11 +253,9 @@ def handle_spatial_query(params: dict, layer_store: dict = None) -> dict:
             return {"error": "within_distance requires positive distance_m"}
         target_geom = buffer_geometry(target_geom, distance_m)
 
-    # Get original features from source layer, aligned with source_geoms.
+    # Filter to features with valid geometry, aligned with source_geoms.
     # _get_layer_geometries filters out features with invalid/missing geometry,
     # so we must apply the same filter to keep indices aligned.
-    source_features, _ = _get_layer_snapshot(layer_store, source_layer)
-    source_features = source_features or []
     valid_source_features = []
     for f in source_features:
         geom = f.get("geometry")
@@ -233,13 +290,16 @@ def handle_spatial_query(params: dict, layer_store: dict = None) -> dict:
 
     result_name = f"{predicate}_{source_layer}"
 
-    return {
+    result = {
         "geojson": result_geojson,
         "layer_name": result_name,
         "feature_count": len(matching_features),
         "source_total": len(source_geoms),
         "match_percentage": round(len(matching_features) / max(len(source_geoms), 1) * 100, 1),
     }
+
+    _set_cached_spatial_result(cache_key, result)
+    return result
 
 
 def handle_aggregate(params: dict, layer_store: dict = None) -> dict:

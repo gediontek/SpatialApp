@@ -362,6 +362,24 @@ var ChatPanel = (function() {
                 }
                 break;
 
+            case 'layer_init':
+                // Create empty layer placeholder for chunked delivery
+                if (layerManager) {
+                    if (layerManager.getLayerCount() >= MAX_LAYERS) {
+                        appendMessage('error', 'Maximum ' + MAX_LAYERS + ' layers reached. Remove some layers first.');
+                        break;
+                    }
+                    layerManager.initLayer(data.name, data.style, data.total_features);
+                }
+                break;
+
+            case 'layer_chunk':
+                // Append features to an existing chunked layer
+                if (layerManager && data.geojson) {
+                    layerManager.appendFeatures(data.name, data.geojson);
+                }
+                break;
+
             case 'layer_command':
                 if (layerManager && data.layer_name) {
                     if (data.action === 'show') layerManager.showLayer(data.layer_name);
