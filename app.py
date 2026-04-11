@@ -163,11 +163,32 @@ def create_app(testing=False):
         return jsonify(message='An internal error occurred.'), 500
 
     # ------------------------------------------------------------------
+    # Prometheus metrics endpoint
+    # ------------------------------------------------------------------
+    @app.route('/metrics')
+    def prometheus_metrics():
+        """Expose Prometheus-compatible metrics."""
+        from services.metrics import metrics as _metrics
+        # Update session gauge on each scrape
+        with state.session_lock:
+            _metrics.set_gauge("active_sessions", len(state.chat_sessions))
+        with state.layer_lock:
+            _metrics.set_gauge("active_layers", len(state.layer_store))
+        return _metrics.format_prometheus(), 200, {'Content-Type': 'text/plain; charset=utf-8'}
+
+    # ------------------------------------------------------------------
     # CORS: restrict to same-origin only
     # ------------------------------------------------------------------
     @app.after_request
     def add_cors_headers(response):
         """Set CORS headers restricting access to same-origin requests."""
+        from services.metrics import metrics as _metrics
+        # Record HTTP request metrics (skip the /metrics endpoint itself)
+        if request.path != '/metrics':
+            _metrics.inc("http_requests_total", {
+                "method": request.method,
+                "status": str(response.status_code),
+            })
         origin = request.headers.get('Origin')
         if origin:
             request_host = request.host

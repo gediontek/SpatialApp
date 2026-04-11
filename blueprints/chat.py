@@ -140,6 +140,7 @@ def api_chat():
         return jsonify(error='Session belongs to another user'), 403
 
     def generate():
+        from services.metrics import metrics as _prom
         start_time = _time.time()
         tool_count = 0
         had_error = False
@@ -150,6 +151,8 @@ def api_chat():
 
                 if event_type == 'tool_result':
                     tool_count += 1
+                    tool_name = event.get('tool', 'unknown')
+                    _prom.inc("tool_calls_total", {"tool": tool_name})
                 if event_type == 'error':
                     had_error = True
                 # Capture tool metrics from final message event
@@ -203,6 +206,9 @@ def api_chat():
                         yield f"event: {event_type}\ndata: {json.dumps(event)}\n\n"
                 else:
                     yield f"event: {event_type}\ndata: {json.dumps(event)}\n\n"
+
+            # Record request duration
+            _prom.observe("chat_request_duration_seconds", _time.time() - start_time)
 
             # Persist chat session after stream completes
             _persist_chat_session(session_id, session, user_id=user_id)

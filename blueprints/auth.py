@@ -31,6 +31,7 @@ def require_api_token(f):
     """
     @wraps(f)
     def decorated(*args, **kwargs):
+        from services.metrics import metrics as _prom
         g.user_id = 'anonymous'
 
         auth = request.headers.get('Authorization', '')
@@ -42,17 +43,21 @@ def require_api_token(f):
                 user = state.db.get_user_by_token(token)
                 if user:
                     g.user_id = user['user_id']
+                    _prom.inc("auth_requests_total", {"status": "success"})
                     return f(*args, **kwargs)
 
             # Fall back to shared token check
             if Config.CHAT_API_TOKEN and hmac.compare_digest(token, Config.CHAT_API_TOKEN):
+                _prom.inc("auth_requests_total", {"status": "success"})
                 return f(*args, **kwargs)
 
             # Token provided but invalid
+            _prom.inc("auth_requests_total", {"status": "failure"})
             return jsonify(error='Unauthorized'), 401
 
         elif Config.CHAT_API_TOKEN:
             # Token required but not provided
+            _prom.inc("auth_requests_total", {"status": "failure"})
             return jsonify(error='Unauthorized'), 401
 
         # No token required -- open access

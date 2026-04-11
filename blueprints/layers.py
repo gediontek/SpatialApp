@@ -33,16 +33,58 @@ def _evict_layers_if_needed():
 @layers_bp.route('/api/layers')
 @require_api_token
 def api_get_layers():
-    """Get list of named layers."""
+    """Get list of named layers with optional pagination.
+
+    Query parameters
+    ----------------
+    page : int, optional
+        1-based page number (default: 1).  When omitted the full list is
+        returned for backward compatibility.
+    per_page : int, optional
+        Items per page, clamped to [1, 500] (default: 100).
+    """
+    # Build full list under the lock
     with state.layer_lock:
-        layers = []
+        all_layers = []
         for name, geojson in state.layer_store.items():
             feature_count = len(geojson.get('features', [])) if isinstance(geojson, dict) else 0
-            layers.append({
+            all_layers.append({
                 'name': name,
                 'feature_count': feature_count,
             })
-    return jsonify(layers=layers)
+
+    total = len(all_layers)
+
+    # Check for pagination params
+    page_param = request.args.get('page')
+    per_page_param = request.args.get('per_page')
+
+    if page_param is None and per_page_param is None:
+        # No pagination requested — return full list (backward compatible)
+        return jsonify(layers=all_layers)
+
+    # Parse and clamp pagination values
+    try:
+        page = max(1, int(page_param or 1))
+    except (ValueError, TypeError):
+        page = 1
+    try:
+        per_page = min(500, max(1, int(per_page_param or 100)))
+    except (ValueError, TypeError):
+        per_page = 100
+
+    start = (page - 1) * per_page
+    end = start + per_page
+    page_layers = all_layers[start:end]
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    return jsonify(
+        layers=page_layers,
+        total=total,
+        page=page,
+        per_page=per_page,
+        total_pages=total_pages,
+    )
 
 
 @layers_bp.route('/api/layers/<layer_name>', methods=['DELETE'])
