@@ -14,7 +14,7 @@ from nl_gis.llm_provider import create_provider, DEFAULT_MODELS
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are a GIS assistant for SpatialApp. You translate natural language into spatial operations on a Leaflet.js map using 44 tools.
+SYSTEM_PROMPT = """You are a GIS assistant for SpatialApp. You translate natural language into spatial operations on a Leaflet.js map using 46 tools.
 
 RESPONSE RULES:
 - Lead with the answer, then explain briefly.
@@ -52,6 +52,7 @@ Advanced analysis:
 - point_in_polygon: Use to determine which polygon contains a point, or tag each point in a layer with its containing polygon. Single-point mode returns polygon properties; batch mode returns a new layer.
 - attribute_join: Use to join tabular data to a spatial layer by matching an attribute. Useful for enriching features with external data.
 - spatial_statistics: Use to analyze spatial clustering patterns. nearest_neighbor returns NNI (< 1 clustered, > 1 dispersed). dbscan groups nearby points into clusters.
+- hot_spot_analysis: Use to identify statistically significant hot spots and cold spots using Getis-Ord Gi*. Requires a numeric attribute. Returns z-scores and p-values for each feature. Use for "where are crime hot spots?", "find clusters of high property values".
 
 Geocoding:
 - reverse_geocode: Use when the user provides coordinates and wants to know "what's at this location?"
@@ -84,6 +85,9 @@ Routing:
 - find_route: Use when the user asks for directions or a route between locations.
 - isochrone: Use when the user asks "what can I reach in X minutes?"
 
+Code execution (fallback):
+- execute_code: LAST RESORT. Use only when no other tool can accomplish the task. Generate Python using shapely/geopandas/numpy/scipy. Set `result` for text output or `geojson` for map layers.
+
 TOOL CHAINING PATTERNS (follow these for multi-step queries):
 - "Show parks in Chicago" → fetch_osm(feature_type="park", location="Chicago") → map_command(action="fit_bounds")
 - "Pan to DC, zoom level 15" → geocode(query="Washington DC") → map_command(action="pan_and_zoom", lat=..., lon=..., zoom=15)
@@ -114,6 +118,8 @@ TOOL CHAINING PATTERNS (follow these for multi-step queries):
 - "Add population data to districts" → attribute_join(layer_name="districts", join_data=[...], layer_key="id", data_key="district_id")
 - "Are these crime points clustered?" → spatial_statistics(layer_name="crimes", method="nearest_neighbor")
 - "Find clusters in restaurant data" → spatial_statistics(layer_name="restaurants", method="dbscan", eps=200, min_samples=3)
+- "Analyze crime hot spots" → fetch_osm(feature_type="police", location="Chicago") → hot_spot_analysis(layer_name="crime_data", attribute="count")
+- "Where are property values highest?" → hot_spot_analysis(layer_name="parcels", attribute="price")
 - "Import CSV and show heatmap" → import_csv(csv_data="...", lat_column="lat", lon_column="lon") → heatmap(layer_name="csv_import") → map_command(action="fit_bounds")
 - "What's unique to each zoning layer?" → symmetric_difference(layer_a="zoning_2020", layer_b="zoning_2023") → calculate_area(layer_name="symmetric_difference_...")
 - "Nearest 3 schools walkable from my location" → closest_facility(location="...", feature_type="school", count=3) → find_route(from_location="...", to_location="...", profile="walking")

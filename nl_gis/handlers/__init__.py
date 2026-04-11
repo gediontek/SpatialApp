@@ -28,6 +28,7 @@ LAYER_PRODUCING_TOOLS = {
     "symmetric_difference", "convex_hull", "centroid", "simplify",
     "bounding_box", "dissolve", "clip", "voronoi", "batch_geocode",
     "point_in_polygon", "attribute_join", "spatial_statistics",
+    "hot_spot_analysis", "execute_code",
 }
 
 # Reuse OSM feature mappings from app.py
@@ -364,6 +365,8 @@ from nl_gis.handlers.analysis import (  # noqa: E402,F401
     handle_point_in_polygon,
     handle_attribute_join,
     handle_spatial_statistics,
+    handle_hot_spot_analysis,
+    handle_execute_code,
 )
 from nl_gis.handlers.layers import (  # noqa: E402,F401
     handle_style_layer,
@@ -457,6 +460,8 @@ def dispatch_tool(tool_name: str, params: dict, layer_store: dict = None) -> dic
         "point_in_polygon": lambda p: handle_point_in_polygon(p, layer_store),
         "attribute_join": lambda p: handle_attribute_join(p, layer_store),
         "spatial_statistics": lambda p: handle_spatial_statistics(p, layer_store),
+        "hot_spot_analysis": lambda p: handle_hot_spot_analysis(p, layer_store),
+        "execute_code": lambda p: handle_execute_code(p, layer_store),
     }
 
     if tool_name not in handlers:

@@ -1126,5 +1126,50 @@ def get_tool_definitions() -> list:
                 },
                 "required": ["layer_name"]
             }
+        },
+        {
+            "name": "hot_spot_analysis",
+            "description": "Perform Getis-Ord Gi* hot spot analysis on a spatial layer. Identifies statistically significant spatial clusters of high values (hot spots) and low values (cold spots) for a numeric attribute. Returns a layer with z-scores, p-values, and hotspot classification (hot/cold/not_significant). Use for 'find crime hot spots', 'where are the highest property values clustered?', 'analyze spatial patterns of population density'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name of the layer to analyze. Example: 'crime_data', 'census_tracts'"
+                    },
+                    "attribute": {
+                        "type": "string",
+                        "description": "Numeric attribute to analyze for clustering. Example: 'count', 'population', 'price'"
+                    },
+                    "output_name": {
+                        "type": "string",
+                        "description": "Name for the output layer (default: hotspot_<layer_name>). Example: 'crime_hotspots'"
+                    }
+                },
+                "required": ["layer_name", "attribute"]
+            }
+        },
+        # ---- Code Execution (Fallback) ----
+        {
+            "name": "execute_code",
+            "description": "Execute Python code for spatial analysis operations not covered by other tools. Use as a LAST RESORT when no specific tool matches. Available libraries: shapely, geopandas, pandas, numpy, scipy, pyproj. Set a variable named 'result' (for text/data) or 'geojson' (for map layers) to return output. Input layer data is available via _input_data['layer'].",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "Python code to execute"
+                    },
+                    "input_layer": {
+                        "type": "string",
+                        "description": "Optional: layer name to pass as input data"
+                    },
+                    "output_layer": {
+                        "type": "string",
+                        "description": "Optional: name for output layer if code produces GeoJSON"
+                    }
+                },
+                "required": ["code"]
+            }
         }
     ]

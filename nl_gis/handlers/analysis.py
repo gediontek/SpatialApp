@@ -1232,3 +1232,204 @@ def handle_spatial_statistics(params: dict, layer_store: dict = None) -> dict:
 
     else:
         return {"error": f"Unknown method: {method}. Valid: nearest_neighbor, dbscan"}
+
+
+def handle_hot_spot_analysis(params: dict, layer_store: dict = None) -> dict:
+    """Perform Getis-Ord Gi* hot spot analysis on a point or polygon layer.
+
+    Requires a numeric attribute to analyze (e.g., population, crime count, price).
+    Returns a GeoJSON layer with z-scores and p-values for each feature,
+    colored by significance (hot=red, cold=blue, not significant=gray).
+    """
+    layer_name = params.get("layer_name")
+    attribute = params.get("attribute")
+    output_name = params.get("output_name", f"hotspot_{layer_name}")
+
+    if not layer_name:
+        return {"error": "layer_name is required"}
+    if not attribute:
+        return {"error": "attribute is required — specify the numeric field to analyze"}
+
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
+    if not features:
+        return {"error": f"Layer '{layer_name}' not found or empty"}
+
+    # Extract values and coordinates
+    try:
+        import numpy as np
+        from scipy.spatial import cKDTree
+
+        points = []
+        values = []
+        valid_features = []
+
+        for feat in features:
+            geom = feat.get("geometry")
+            props = feat.get("properties", {})
+            val = props.get(attribute)
+
+            if geom is None or val is None:
+                continue
+
+            try:
+                val = float(val)
+            except (ValueError, TypeError):
+                continue
+
+            # Get centroid for point extraction
+            shapely_geom = _safe_geojson_to_shapely(geom)
+            if shapely_geom is None or shapely_geom.is_empty:
+                continue
+
+            centroid = shapely_geom.centroid
+            points.append([centroid.x, centroid.y])
+            values.append(val)
+            valid_features.append(feat)
+
+        if len(points) < 3:
+            return {"error": f"Need at least 3 features with valid '{attribute}' values"}
+
+        points = np.array(points)
+        values = np.array(values, dtype=float)
+
+        # Project to UTM for distance-based weights
+        from nl_gis.geo_utils import estimate_utm_epsg, project_geometry
+        from shapely.geometry import MultiPoint
+
+        avg_lat = np.mean(points[:, 1])
+        avg_lon = np.mean(points[:, 0])
+        epsg = estimate_utm_epsg(avg_lat, avg_lon)
+
+        # Transform points to projected coordinates
+        mp = MultiPoint([(p[0], p[1]) for p in points])
+        mp_proj = project_geometry(mp, 4326, epsg)
+        proj_points = np.array([(p.x, p.y) for p in mp_proj.geoms])
+
+        # Build spatial weights using KD-tree
+        tree = cKDTree(proj_points)
+
+        # Adaptive bandwidth: use k nearest neighbors
+        k = min(8, len(points) - 1)
+        distances, indices = tree.query(proj_points, k=k + 1)  # +1 for self
+        bandwidth = np.median(distances[:, -1])  # median distance to kth neighbor
+
+        # Compute Gi* statistic for each feature
+        n = len(values)
+        x_mean = np.mean(values)
+        s = np.std(values)
+
+        z_scores = np.zeros(n)
+        p_values = np.ones(n)
+
+        if s > 0:
+            from scipy.stats import norm
+
+            for i in range(n):
+                # Get neighbors within bandwidth (includes self for Gi*)
+                neighbor_idx = tree.query_ball_point(proj_points[i], bandwidth)
+
+                wij_sum = len(neighbor_idx)
+                wij_xj_sum = sum(values[j] for j in neighbor_idx)
+                wij_sq_sum = wij_sum  # binary weights (1 if neighbor, 0 if not)
+
+                numerator = wij_xj_sum - x_mean * wij_sum
+                denominator = s * np.sqrt(
+                    (n * wij_sq_sum - wij_sum ** 2) / (n - 1)
+                )
+
+                if denominator > 0:
+                    z_scores[i] = numerator / denominator
+                    # Two-tailed p-value from z-score
+                    p_values[i] = 2 * (1 - norm.cdf(abs(z_scores[i])))
+
+        # Build result GeoJSON with z-scores, p-values, and colors
+        result_features = []
+        hot_count = 0
+        cold_count = 0
+        not_sig_count = 0
+
+        for i, feat in enumerate(valid_features):
+            props = dict(feat.get("properties", {}))
+            props["gi_z_score"] = round(float(z_scores[i]), 4)
+            props["gi_p_value"] = round(float(p_values[i]), 6)
+
+            if p_values[i] < 0.05 and z_scores[i] > 0:
+                props["hotspot_class"] = "hot"
+                hot_count += 1
+            elif p_values[i] < 0.05 and z_scores[i] < 0:
+                props["hotspot_class"] = "cold"
+                cold_count += 1
+            else:
+                props["hotspot_class"] = "not_significant"
+                not_sig_count += 1
+
+            result_features.append({
+                "type": "Feature",
+                "geometry": feat["geometry"],
+                "properties": props,
+            })
+
+        geojson = {"type": "FeatureCollection", "features": result_features}
+
+        return {
+            "geojson": geojson,
+            "layer_name": output_name,
+            "analysis": {
+                "total_features": len(result_features),
+                "hot_spots": hot_count,
+                "cold_spots": cold_count,
+                "not_significant": not_sig_count,
+                "attribute": attribute,
+                "bandwidth_m": round(float(bandwidth), 1),
+                "significance_level": 0.05,
+            },
+            "colors": {
+                "hot": "#ff0000",
+                "cold": "#0000ff",
+                "not_significant": "#808080",
+            },
+        }
+
+    except ImportError as e:
+        return {"error": f"Required library not available: {e}"}
+    except Exception:
+        logger.error("Hot spot analysis failed", exc_info=True)
+        return {"error": "Hot spot analysis failed"}
+
+
+def handle_execute_code(params: dict, layer_store: dict = None) -> dict:
+    """Execute sandboxed Python code for spatial analysis.
+
+    Used as a fallback when no existing tool matches the user's request.
+    """
+    from services.code_executor import execute_safely
+
+    code = params.get("code", "")
+    if not code.strip():
+        return {"error": "No code provided"}
+
+    # Provide layer data as input
+    input_data = {}
+    input_layer = params.get("input_layer")
+    if input_layer and layer_store:
+        snapshot, err = _get_layer_snapshot(layer_store, input_layer)
+        if snapshot:
+            input_data["layer"] = {"type": "FeatureCollection", "features": snapshot}
+
+    result = execute_safely(code, input_data=input_data, timeout=15)
+
+    if not result["success"]:
+        return {"error": result["error"]}
+
+    response = {"success": True}
+    if result.get("stdout"):
+        response["output"] = result["stdout"]
+    if result.get("result"):
+        response["result"] = result["result"]
+    if result.get("geojson"):
+        response["geojson"] = result["geojson"]
+        response["layer_name"] = params.get("output_layer", "code_result")
+
+    return response
