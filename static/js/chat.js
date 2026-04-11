@@ -23,6 +23,8 @@ var ChatPanel = (function() {
     var _layerManager = null;
     var toolStepCounter = 0;
     var _lastToolStepId = null;
+    var _pendingPlan = null;  // Stores plan steps awaiting user approval
+    var _map = null;  // Reference to map for plan execution
 
     // WebSocket state
     var _socket = null;
@@ -33,6 +35,7 @@ var ChatPanel = (function() {
 
     function init(map, layerManager) {
         _layerManager = layerManager;
+        _map = map;
         bindEvents(map, layerManager);
         initNetworkStatusMonitor();
         initWebSocket(map, layerManager);
@@ -423,6 +426,12 @@ var ChatPanel = (function() {
                 executeMapCommand(data, map);
                 break;
 
+            case 'plan':
+                removeTyping();
+                displayPlan(data.plan, data.summary);
+                enableInput();
+                break;
+
             case 'message':
                 // Note: removeTyping() is called without an ID here because the server-sent
                 // 'message' event does not include the typingId. This removes ALL typing
@@ -642,6 +651,144 @@ var ChatPanel = (function() {
         var div = document.createElement('div');
         div.appendChild(document.createTextNode(text));
         return div.innerHTML;
+    }
+
+    function displayPlan(steps, summary) {
+        _pendingPlan = steps;
+        var container = document.createElement('div');
+        container.className = 'chat-msg chat-msg-assistant';
+
+        var content = document.createElement('div');
+        content.className = 'chat-msg-content chat-plan';
+
+        var summaryP = document.createElement('p');
+        summaryP.innerHTML = '<strong>Plan:</strong> ' + escapeHtml(summary || '');
+        content.appendChild(summaryP);
+
+        var ol = document.createElement('ol');
+        for (var i = 0; i < steps.length; i++) {
+            var li = document.createElement('li');
+            li.textContent = steps[i].tool + ': ' + (steps[i].reason || '');
+            ol.appendChild(li);
+        }
+        content.appendChild(ol);
+
+        var btnContainer = document.createElement('div');
+        btnContainer.style.cssText = 'margin-top:8px;display:flex;gap:8px;';
+
+        var approveBtn = document.createElement('button');
+        approveBtn.className = 'plan-approve';
+        approveBtn.textContent = 'Execute Plan';
+        approveBtn.style.cssText = 'padding:6px 16px;background:#27ae60;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:bold;';
+        approveBtn.addEventListener('click', function() {
+            btnContainer.remove();
+            executePlan();
+        });
+
+        var rejectBtn = document.createElement('button');
+        rejectBtn.className = 'plan-reject';
+        rejectBtn.textContent = 'Cancel';
+        rejectBtn.style.cssText = 'padding:6px 16px;background:#e74c3c;color:#fff;border:none;border-radius:4px;cursor:pointer;';
+        rejectBtn.addEventListener('click', function() {
+            btnContainer.remove();
+            rejectPlan();
+        });
+
+        btnContainer.appendChild(approveBtn);
+        btnContainer.appendChild(rejectBtn);
+        content.appendChild(btnContainer);
+        container.appendChild(content);
+        document.getElementById('chatMessages').appendChild(container);
+        scrollToBottom();
+    }
+
+    function executePlan() {
+        if (!_pendingPlan || _pendingPlan.length === 0) {
+            appendMessage('error', 'No plan to execute.');
+            return;
+        }
+
+        var planSteps = _pendingPlan;
+        _pendingPlan = null;
+
+        // Disable input while executing
+        $('#chatInput').prop('disabled', true);
+        $('#chatSendBtn').text('Stop');
+
+        var typingId = showTyping();
+        var csrfToken = document.querySelector('meta[name="csrf-token"]');
+
+        fetch('/api/chat/execute-plan', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': csrfToken ? csrfToken.getAttribute('content') : ''
+            },
+            body: JSON.stringify({
+                plan_steps: planSteps,
+                session_id: sessionId
+            })
+        }).then(function(response) {
+            if (!response.ok) {
+                throw new Error('Plan execution request failed: ' + response.status);
+            }
+            return response.body.getReader();
+        }).then(function(reader) {
+            var decoder = new TextDecoder();
+            var buffer = '';
+
+            function processStream() {
+                return reader.read().then(function(result) {
+                    if (result.done) {
+                        removeTyping(typingId);
+                        enableInput();
+                        return;
+                    }
+
+                    buffer += decoder.decode(result.value, { stream: true });
+                    var lines = buffer.split('\n');
+                    buffer = '';
+
+                    var currentEvent = null;
+                    for (var i = 0; i < lines.length; i++) {
+                        var line = lines[i];
+                        if (line.startsWith('event: ')) {
+                            currentEvent = line.substring(7).trim();
+                        } else if (line.startsWith('data: ')) {
+                            var dataStr = line.substring(6);
+                            try {
+                                var data = JSON.parse(dataStr);
+                                handleEvent(currentEvent || data.type, data, _map, _layerManager);
+                            } catch (e) {
+                                if (i === lines.length - 1) {
+                                    buffer = lines[i];
+                                    break;
+                                }
+                            }
+                            currentEvent = null;
+                        } else if (line === '') {
+                            currentEvent = null;
+                        } else {
+                            buffer = lines.slice(i).join('\n');
+                            break;
+                        }
+                    }
+
+                    return processStream();
+                });
+            }
+
+            return processStream();
+        }).catch(function(err) {
+            removeTyping(typingId);
+            enableInput();
+            appendMessage('error', 'Plan execution failed: ' + err.message);
+        });
+    }
+
+    function rejectPlan() {
+        _pendingPlan = null;
+        appendMessage('assistant', 'Plan cancelled.');
     }
 
     return { init: init };

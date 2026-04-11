@@ -14,6 +14,21 @@ from nl_gis.llm_provider import create_provider, DEFAULT_MODELS
 
 logger = logging.getLogger(__name__)
 
+PLAN_PROMPT_SUFFIX = """
+
+For this query, OUTPUT A PLAN instead of executing tools. Format as JSON:
+{
+    "plan": [
+        {"step": 1, "tool": "geocode", "params": {"query": "Chicago"}, "reason": "Find Chicago coordinates"},
+        {"step": 2, "tool": "fetch_osm", "params": {"feature_type": "park", "location": "Chicago"}, "reason": "Get parks in the area"},
+        {"step": 3, "tool": "style_layer", "params": {"layer_name": "parks_...", "color": "#00ff00"}, "reason": "Color parks green"}
+    ],
+    "estimated_steps": 3,
+    "summary": "Find and display parks in Chicago, colored green"
+}
+
+Do NOT execute any tools. Only output the plan as a JSON code block."""
+
 SYSTEM_PROMPT = """You are a GIS assistant for SpatialApp. You translate natural language into spatial operations on a Leaflet.js map using 46 tools.
 
 RESPONSE RULES:
@@ -370,7 +385,7 @@ class ChatSession:
             except Exception:
                 logger.debug("Failed to update context for tool %s", tool_name, exc_info=True)
 
-    def process_message(self, message: str, map_context: dict = None) -> Generator[dict, None, None]:
+    def process_message(self, message: str, map_context: dict = None, plan_mode: bool = False) -> Generator[dict, None, None]:
         """Process a user message and yield events.
 
         Yields events:
@@ -378,12 +393,14 @@ class ChatSession:
             {"type": "tool_result", "tool": str, "result": dict}
             {"type": "layer_add", "name": str, "geojson": dict, "style": dict}
             {"type": "map_command", ...command params...}
+            {"type": "plan", "plan": list, "summary": str, "estimated_steps": int}
             {"type": "message", "text": str, "done": bool}
             {"type": "error", "text": str}
 
         Args:
             message: User's natural language input.
             map_context: Current map state (bounds, zoom, layers).
+            plan_mode: If True, generate a plan instead of executing tools.
 
         Yields:
             Event dicts for SSE streaming.
@@ -393,9 +410,250 @@ class ChatSession:
             return
 
         try:
-            yield from self._process_message_inner(message, map_context)
+            if plan_mode:
+                yield from self._generate_plan(message, map_context)
+            else:
+                yield from self._process_message_inner(message, map_context)
         finally:
             self._lock.release()
+
+    def _generate_plan(self, message: str, map_context: dict = None) -> Generator[dict, None, None]:
+        """Generate a structured plan instead of executing tools (called under lock).
+
+        Appends PLAN_PROMPT_SUFFIX to the user message, calls the LLM with
+        no tools (text-only response), and yields a 'plan' event with the
+        parsed plan structure.
+        """
+        if not self.client:
+            yield {"type": "error", "text": "AI assistant unavailable (no API key configured). Plan mode requires an LLM."}
+            return
+
+        if self._budget_exceeded():
+            budget = Config.MAX_TOKENS_PER_SESSION
+            yield {
+                "type": "error",
+                "text": (
+                    f"Session token budget exhausted ({self.total_tokens:,} / {budget:,} tokens). "
+                    "Please start a new chat session to continue."
+                ),
+            }
+            return
+
+        # Build system prompt with map state (same as _process_message_inner)
+        system = SYSTEM_PROMPT
+        state_parts = []
+        if map_context:
+            if "bounds" in map_context:
+                b = map_context["bounds"]
+                state_parts.append(f"Map bounds: south={b.get('south')}, west={b.get('west')}, north={b.get('north')}, east={b.get('east')}")
+            if "zoom" in map_context:
+                state_parts.append(f"Zoom level: {map_context['zoom']}")
+
+        with self._layer_lock:
+            layer_snapshot = dict(self.layer_store)
+        if layer_snapshot:
+            layer_info = []
+            for name, geojson in list(layer_snapshot.items())[-5:]:
+                count = len(geojson.get("features", [])) if isinstance(geojson, dict) else 0
+                layer_info.append(f"{name} ({count} features)")
+            state_parts.append(f"Active layers: {', '.join(layer_info)}")
+        else:
+            state_parts.append("Active layers: none")
+
+        if state_parts:
+            system += "\n\nCURRENT MAP STATE:\n" + "\n".join(state_parts)
+
+        # Call LLM with plan prompt suffix appended, no tools
+        plan_message = message + PLAN_PROMPT_SUFFIX
+        plan_messages = [{"role": "user", "content": plan_message}]
+        model = Config.get_llm_model()
+
+        try:
+            response = self._call_llm_with_retry(
+                model=model,
+                max_tokens=2048,
+                system=system,
+                tools=[],
+                messages=plan_messages,
+            )
+
+            self.usage["total_input_tokens"] += response.input_tokens
+            self.usage["total_output_tokens"] += response.output_tokens
+            self.usage["api_calls"] += 1
+
+            # Extract text from response
+            text_parts = []
+            for block in response.content:
+                if hasattr(block, "text"):
+                    text_parts.append(block.text)
+            raw_text = "\n".join(text_parts)
+
+            # Parse JSON plan from response (may be wrapped in ```json ... ```)
+            plan_data = self._parse_plan_json(raw_text)
+            if plan_data and "plan" in plan_data:
+                yield {
+                    "type": "plan",
+                    "plan": plan_data["plan"],
+                    "summary": plan_data.get("summary", ""),
+                    "estimated_steps": plan_data.get("estimated_steps", len(plan_data["plan"])),
+                }
+            else:
+                # LLM didn't return valid plan JSON — return raw text as message
+                yield {"type": "message", "text": raw_text, "done": True}
+
+        except Exception as e:
+            logger.error(f"Plan generation error: {e}", exc_info=True)
+            error_type = type(e).__name__
+            yield {"type": "error", "text": f"AI service error ({error_type}). Could not generate plan."}
+
+    @staticmethod
+    def _parse_plan_json(text: str):
+        """Extract and parse a JSON plan from LLM response text.
+
+        Handles raw JSON, ```json fenced blocks, and ``` fenced blocks.
+        Returns None if no valid JSON plan is found.
+        """
+        import re
+
+        # Try to extract from ```json ... ``` or ``` ... ``` code blocks
+        code_block_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', text, re.DOTALL)
+        if code_block_match:
+            try:
+                return json.loads(code_block_match.group(1).strip())
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # Try to parse the entire text as JSON
+        try:
+            return json.loads(text.strip())
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        # Try to find a JSON object in the text
+        brace_match = re.search(r'\{.*\}', text, re.DOTALL)
+        if brace_match:
+            try:
+                return json.loads(brace_match.group(0))
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        return None
+
+    def execute_plan(self, plan_steps: list) -> Generator[dict, None, None]:
+        """Execute a previously generated plan step by step.
+
+        Args:
+            plan_steps: List of step dicts, each with 'tool', 'params', 'step', and 'reason'.
+
+        Yields:
+            Event dicts (tool_start, tool_result, layer_add, etc.) for SSE streaming.
+        """
+        if not self._lock.acquire(timeout=330):
+            yield {"type": "error", "text": "Session is busy processing another request. Please wait."}
+            return
+
+        try:
+            yield from self._execute_plan_inner(plan_steps)
+        finally:
+            self._lock.release()
+
+    def _execute_plan_inner(self, plan_steps: list) -> Generator[dict, None, None]:
+        """Internal plan execution (called under lock)."""
+        tool_metrics = []
+
+        for step in plan_steps:
+            tool_name = step.get("tool")
+            params = step.get("params", {})
+            step_num = step.get("step", 0)
+
+            if not tool_name:
+                yield {"type": "error", "text": f"Step {step_num}: missing tool name."}
+                continue
+
+            yield {"type": "tool_start", "tool": tool_name, "input": params, "step": step_num}
+
+            try:
+                result = dispatch_tool(tool_name, params, self.layer_store)
+            except ValueError as e:
+                result = {"error": str(e)}
+            except Exception as e:
+                logger.error(f"Plan execution: tool {tool_name} failed: {e}", exc_info=True)
+                result = {"error": f"Tool '{tool_name}' encountered an internal error."}
+
+            yield {"type": "tool_result", "tool": tool_name, "result": result, "step": step_num}
+
+            tool_metrics.append({
+                "tool": tool_name,
+                "success": "error" not in result,
+                "chain_position": step_num,
+                "retry": False,
+            })
+
+            if "error" not in result:
+                self._update_context(tool_name, params, result)
+
+            # Handle layer-producing tools
+            if tool_name in LAYER_PRODUCING_TOOLS and "geojson" in result:
+                layer_name = result.get("layer_name", f"layer_{step_num}")
+                with self._layer_lock:
+                    self.layer_store[layer_name] = result["geojson"]
+
+                style = {"color": "#3388ff", "weight": 2}
+                if tool_name == "buffer":
+                    style = {"color": "#ff7800", "weight": 2, "fillOpacity": 0.15}
+                elif tool_name == "spatial_query":
+                    style = {"color": "#e31a1c", "weight": 2}
+                elif tool_name == "classify_landcover":
+                    style = {"color": "#33a02c", "weight": 1, "fillOpacity": 0.6}
+                elif tool_name == "find_route":
+                    style = {"color": "#6610f2", "weight": 4, "fillOpacity": 0}
+                elif tool_name == "isochrone":
+                    style = {"color": "#20c997", "weight": 2, "fillOpacity": 0.2}
+
+                yield {
+                    "type": "layer_add",
+                    "name": layer_name,
+                    "geojson": result["geojson"],
+                    "style": style,
+                    "colors": result.get("colors"),
+                }
+
+            # Map navigation commands
+            if tool_name == "map_command" and result.get("success"):
+                yield {"type": "map_command", **result}
+
+            # Layer visibility commands
+            if tool_name in ("show_layer", "hide_layer", "remove_layer") and result.get("success"):
+                yield {"type": "layer_command", **result}
+
+            # Feature highlighting
+            if tool_name == "highlight_features" and result.get("success"):
+                yield {"type": "highlight", **result}
+
+            # Layer styling
+            if tool_name == "style_layer" and result.get("success"):
+                yield {"type": "layer_style", **result}
+
+            # Heatmap rendering
+            if tool_name == "heatmap" and result.get("success"):
+                yield {"type": "heatmap", **result}
+
+            # Stop on error to avoid cascading failures
+            if "error" in result:
+                yield {
+                    "type": "message",
+                    "text": f"Plan execution stopped at step {step_num} due to error: {result['error']}",
+                    "done": True,
+                    "tool_metrics": tool_metrics,
+                }
+                return
+
+        yield {
+            "type": "message",
+            "text": f"Plan executed successfully. Completed {len(plan_steps)} step(s).",
+            "done": True,
+            "tool_metrics": tool_metrics,
+        }
 
     def _process_message_inner(self, message: str, map_context: dict = None) -> Generator[dict, None, None]:
         """Internal message processing (called under lock)."""

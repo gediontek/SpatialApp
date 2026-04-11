@@ -133,6 +133,8 @@ def api_chat():
     map_context = data.get('context', {})
     user_id = getattr(g, 'user_id', 'anonymous')
 
+    plan_mode = data.get('plan_mode', False)
+
     session = _get_chat_session(session_id, user_id=user_id)
     if session is None:
         return jsonify(error='Session belongs to another user'), 403
@@ -143,7 +145,7 @@ def api_chat():
         had_error = False
         tool_metrics = []
         try:
-            for event in session.process_message(message, map_context):
+            for event in session.process_message(message, map_context, plan_mode=plan_mode):
                 event_type = event.get('type', 'message')
 
                 if event_type == 'tool_result':
@@ -224,6 +226,99 @@ def api_chat():
                     logging.debug("Failed to log query metrics for session %s", session_id, exc_info=True)
         except Exception as e:
             current_app.logger.error(f"SSE stream error: {e}", exc_info=True)
+            error_event = {"type": "error", "text": "An internal error occurred"}
+            yield f"event: error\ndata: {json.dumps(error_event)}\n\n"
+
+    return current_app.response_class(
+        generate(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
+        }
+    )
+
+
+@chat_bp.route('/api/chat/execute-plan', methods=['POST'])
+@require_api_token
+def api_execute_plan():
+    """Execute a previously generated plan step by step. Returns SSE event stream."""
+    from flask import current_app
+    import time as _time
+
+    data = request.get_json(silent=True)
+    if not data or 'plan_steps' not in data:
+        return jsonify(error='No plan_steps provided'), 400
+
+    plan_steps = data['plan_steps']
+    if not isinstance(plan_steps, list) or len(plan_steps) == 0:
+        return jsonify(error='plan_steps must be a non-empty array'), 400
+
+    if len(plan_steps) > 20:
+        return jsonify(error='Plan too large (max 20 steps)'), 400
+
+    session_id = data.get('session_id', 'default')
+    user_id = getattr(g, 'user_id', 'anonymous')
+
+    session = _get_chat_session(session_id, user_id=user_id)
+    if session is None:
+        return jsonify(error='Session belongs to another user'), 403
+
+    def generate():
+        start_time = _time.time()
+        tool_count = 0
+        had_error = False
+        tool_metrics = []
+        try:
+            for event in session.execute_plan(plan_steps):
+                event_type = event.get('type', 'message')
+
+                if event_type == 'tool_result':
+                    tool_count += 1
+                if event_type == 'error':
+                    had_error = True
+                if event_type == 'message' and event.get('done') and event.get('tool_metrics'):
+                    tool_metrics = event['tool_metrics']
+
+                # Store layer in server-side store (with lock)
+                if event_type == 'layer_add':
+                    layer_name = event.get('name')
+                    geojson = event.get('geojson')
+                    if layer_name and geojson:
+                        if state.db:
+                            try:
+                                state.db.save_layer(layer_name, geojson, event.get('style'), user_id=user_id)
+                            except Exception as db_err:
+                                current_app.logger.warning(f"DB save failed (layer): {db_err}")
+                        with state.layer_lock:
+                            state.layer_store[layer_name] = geojson
+                            _evict_layers_if_needed()
+
+                yield f"event: {event_type}\ndata: {json.dumps(event)}\n\n"
+
+            # Persist chat session after execution
+            _persist_chat_session(session_id, session, user_id=user_id)
+
+            # Log query metrics
+            if state.db:
+                try:
+                    duration_ms = int((_time.time() - start_time) * 1000)
+                    state.db.log_query_metric(
+                        user_id=user_id,
+                        session_id=session_id,
+                        message=f"[plan-execute] {len(plan_steps)} steps",
+                        tool_calls=tool_count,
+                        input_tokens=0,
+                        output_tokens=0,
+                        duration_ms=duration_ms,
+                        error=had_error,
+                        tool_details=tool_metrics,
+                    )
+                except Exception:
+                    logging.debug("Failed to log query metrics for plan execution", exc_info=True)
+        except Exception as e:
+            current_app.logger.error(f"SSE stream error (plan execute): {e}", exc_info=True)
             error_event = {"type": "error", "text": "An internal error occurred"}
             yield f"event: error\ndata: {json.dumps(error_event)}\n\n"
 
