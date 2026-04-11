@@ -1,4 +1,4 @@
-"""Spatial analysis handlers: buffer, spatial query, aggregate, area, distance, filter."""
+"""Spatial analysis handlers: buffer, spatial query, aggregate, area, distance, filter, geometry."""
 
 import logging
 
@@ -12,6 +12,8 @@ from nl_gis.geo_utils import (
     geojson_to_shapely,
     shapely_to_geojson,
     buffer_geometry,
+    project_to_utm,
+    project_to_wgs84,
 )
 from nl_gis.handlers import (
     _resolve_point_from_object,
@@ -474,3 +476,355 @@ def handle_difference(params: dict, layer_store: dict = None) -> dict:
 def handle_symmetric_difference(params: dict, layer_store: dict = None) -> dict:
     """Compute areas in either layer but not both."""
     return _overlay_operation(params, layer_store, "symmetric_difference")
+
+
+# ============================================================
+# Geometry Tools
+# ============================================================
+
+
+def handle_convex_hull(params: dict, layer_store: dict = None) -> dict:
+    """Compute the convex hull of a layer's features."""
+    layer_name = params.get("layer_name")
+    output_name = params.get("output_name", f"convex_hull_{layer_name}")
+
+    if not layer_name:
+        return {"error": "layer_name is required"}
+
+    geoms, err = _get_layer_geometries(layer_store, layer_name)
+    if err:
+        return {"error": err}
+    if not geoms:
+        return {"error": f"Layer '{layer_name}' has no valid geometries"}
+
+    hull = unary_union(geoms).convex_hull
+
+    if hull.is_empty:
+        return {
+            "geojson": {"type": "FeatureCollection", "features": []},
+            "layer_name": output_name,
+            "feature_count": 0,
+            "message": "Convex hull produced an empty result.",
+        }
+
+    result_geojson = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "geometry": shapely_to_geojson(hull),
+            "properties": {
+                "operation": "convex_hull",
+                "source_layer": layer_name,
+            }
+        }]
+    }
+
+    return {
+        "geojson": result_geojson,
+        "layer_name": output_name,
+        "feature_count": 1,
+    }
+
+
+def handle_centroid(params: dict, layer_store: dict = None) -> dict:
+    """Extract centroids of features as a point layer."""
+    layer_name = params.get("layer_name")
+    output_name = params.get("output_name", f"centroids_{layer_name}")
+
+    if not layer_name:
+        return {"error": "layer_name is required"}
+
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
+    if not features:
+        return {"error": f"Layer '{layer_name}' has no features"}
+
+    centroid_features = []
+    for f in features:
+        geom = f.get("geometry")
+        if not geom:
+            continue
+        shapely_geom = _safe_geojson_to_shapely(geom)
+        if not shapely_geom:
+            continue
+        centroid = shapely_geom.centroid
+        centroid_features.append({
+            "type": "Feature",
+            "geometry": shapely_to_geojson(centroid),
+            "properties": dict(f.get("properties", {})),
+        })
+
+    result_geojson = {
+        "type": "FeatureCollection",
+        "features": centroid_features,
+    }
+
+    return {
+        "geojson": result_geojson,
+        "layer_name": output_name,
+        "feature_count": len(centroid_features),
+    }
+
+
+def handle_simplify(params: dict, layer_store: dict = None) -> dict:
+    """Simplify geometries to reduce vertex count."""
+    layer_name = params.get("layer_name")
+    try:
+        tolerance = float(params.get("tolerance", 10))
+    except (TypeError, ValueError):
+        return {"error": "tolerance must be a number"}
+    if tolerance <= 0:
+        return {"error": "tolerance must be a positive number"}
+
+    output_name = params.get("output_name", f"simplified_{layer_name}")
+
+    if not layer_name:
+        return {"error": "layer_name is required"}
+
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
+    if not features:
+        return {"error": f"Layer '{layer_name}' has no features"}
+
+    simplified_features = []
+    for f in features:
+        geom = f.get("geometry")
+        if not geom:
+            continue
+        shapely_geom = _safe_geojson_to_shapely(geom)
+        if not shapely_geom:
+            continue
+
+        # Project to UTM, simplify in meters, project back
+        projected, utm_epsg = project_to_utm(shapely_geom)
+        simplified = projected.simplify(tolerance, preserve_topology=True)
+        result_geom = project_to_wgs84(simplified, utm_epsg)
+
+        if result_geom.is_empty:
+            continue
+
+        simplified_features.append({
+            "type": "Feature",
+            "geometry": shapely_to_geojson(result_geom),
+            "properties": dict(f.get("properties", {})),
+        })
+
+    result_geojson = {
+        "type": "FeatureCollection",
+        "features": simplified_features,
+    }
+
+    return {
+        "geojson": result_geojson,
+        "layer_name": output_name,
+        "feature_count": len(simplified_features),
+        "tolerance_m": tolerance,
+    }
+
+
+def handle_bounding_box(params: dict, layer_store: dict = None) -> dict:
+    """Create a bounding box polygon from layer extent."""
+    layer_name = params.get("layer_name")
+    output_name = params.get("output_name", f"bbox_{layer_name}")
+
+    if not layer_name:
+        return {"error": "layer_name is required"}
+
+    geoms, err = _get_layer_geometries(layer_store, layer_name)
+    if err:
+        return {"error": err}
+    if not geoms:
+        return {"error": f"Layer '{layer_name}' has no valid geometries"}
+
+    envelope = unary_union(geoms).envelope
+
+    if envelope.is_empty:
+        return {
+            "geojson": {"type": "FeatureCollection", "features": []},
+            "layer_name": output_name,
+            "feature_count": 0,
+            "message": "Bounding box produced an empty result.",
+        }
+
+    result_geojson = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "geometry": shapely_to_geojson(envelope),
+            "properties": {
+                "operation": "bounding_box",
+                "source_layer": layer_name,
+            }
+        }]
+    }
+
+    return {
+        "geojson": result_geojson,
+        "layer_name": output_name,
+        "feature_count": 1,
+    }
+
+
+def handle_dissolve(params: dict, layer_store: dict = None) -> dict:
+    """Merge features by attribute value using GeoPandas dissolve."""
+    import geopandas as gpd_mod
+
+    layer_name = params.get("layer_name")
+    by_attr = params.get("by")
+    output_name = params.get("output_name", f"dissolved_{layer_name}")
+
+    if not layer_name:
+        return {"error": "layer_name is required"}
+    if not by_attr:
+        return {"error": "'by' attribute name is required"}
+
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
+    if not features:
+        return {"error": f"Layer '{layer_name}' has no features"}
+
+    # Build a GeoJSON FeatureCollection for GeoPandas
+    fc = {"type": "FeatureCollection", "features": features}
+    try:
+        gdf = gpd_mod.GeoDataFrame.from_features(fc, crs="EPSG:4326")
+    except Exception as exc:
+        logger.error("Failed to create GeoDataFrame for dissolve", exc_info=True)
+        return {"error": "Failed to parse layer features for dissolve"}
+
+    if by_attr not in gdf.columns:
+        return {"error": f"Attribute '{by_attr}' not found in layer properties. Available: {', '.join(c for c in gdf.columns if c != 'geometry')}"}
+
+    try:
+        dissolved = gdf.dissolve(by=by_attr).reset_index()
+    except Exception as exc:
+        logger.error("Dissolve operation failed", exc_info=True)
+        return {"error": "Dissolve operation failed"}
+
+    import json
+    result_geojson = json.loads(dissolved.to_json())
+
+    return {
+        "geojson": result_geojson,
+        "layer_name": output_name,
+        "feature_count": len(result_geojson.get("features", [])),
+        "dissolved_by": by_attr,
+    }
+
+
+def handle_clip(params: dict, layer_store: dict = None) -> dict:
+    """Clip one layer by another's boundary."""
+    clip_layer = params.get("clip_layer")
+    mask_layer = params.get("mask_layer")
+    output_name = params.get("output_name", f"clipped_{clip_layer}")
+
+    if not clip_layer:
+        return {"error": "clip_layer is required"}
+    if not mask_layer:
+        return {"error": "mask_layer is required"}
+
+    # Get clip features (need original features for properties)
+    clip_features, err = _get_layer_snapshot(layer_store, clip_layer)
+    if err:
+        return {"error": f"clip_layer: {err}"}
+    if not clip_features:
+        return {"error": f"Layer '{clip_layer}' has no features"}
+
+    # Get mask geometries and union them
+    mask_geoms, err = _get_layer_geometries(layer_store, mask_layer)
+    if err:
+        return {"error": f"mask_layer: {err}"}
+    if not mask_geoms:
+        return {"error": f"Layer '{mask_layer}' has no valid geometries"}
+
+    mask_union = unary_union(mask_geoms)
+
+    clipped_features = []
+    for f in clip_features:
+        geom = f.get("geometry")
+        if not geom:
+            continue
+        shapely_geom = _safe_geojson_to_shapely(geom)
+        if not shapely_geom:
+            continue
+
+        clipped = shapely_geom.intersection(mask_union)
+        if clipped.is_empty:
+            continue
+
+        clipped_features.append({
+            "type": "Feature",
+            "geometry": shapely_to_geojson(clipped),
+            "properties": dict(f.get("properties", {})),
+        })
+
+    result_geojson = {
+        "type": "FeatureCollection",
+        "features": clipped_features,
+    }
+
+    return {
+        "geojson": result_geojson,
+        "layer_name": output_name,
+        "feature_count": len(clipped_features),
+    }
+
+
+def handle_voronoi(params: dict, layer_store: dict = None) -> dict:
+    """Generate Voronoi diagram from point features."""
+    from shapely.geometry import MultiPoint
+    from shapely.ops import voronoi_diagram
+
+    layer_name = params.get("layer_name")
+    output_name = params.get("output_name", f"voronoi_{layer_name}")
+
+    if not layer_name:
+        return {"error": "layer_name is required"}
+
+    geoms, err = _get_layer_geometries(layer_store, layer_name)
+    if err:
+        return {"error": err}
+    if not geoms:
+        return {"error": f"Layer '{layer_name}' has no valid geometries"}
+
+    # Extract point coordinates (use centroids for non-point geometries)
+    points = []
+    for g in geoms:
+        if g.geom_type == "Point":
+            points.append(g)
+        else:
+            points.append(g.centroid)
+
+    if len(points) < 2:
+        return {"error": "Voronoi diagram requires at least 2 points"}
+
+    multi_point = MultiPoint(points)
+    try:
+        regions = voronoi_diagram(multi_point)
+    except Exception as exc:
+        logger.error("Voronoi diagram generation failed", exc_info=True)
+        return {"error": "Voronoi diagram generation failed"}
+
+    voronoi_features = []
+    for geom in regions.geoms:
+        voronoi_features.append({
+            "type": "Feature",
+            "geometry": shapely_to_geojson(geom),
+            "properties": {
+                "operation": "voronoi",
+                "source_layer": layer_name,
+            }
+        })
+
+    result_geojson = {
+        "type": "FeatureCollection",
+        "features": voronoi_features,
+    }
+
+    return {
+        "geojson": result_geojson,
+        "layer_name": output_name,
+        "feature_count": len(voronoi_features),
+    }

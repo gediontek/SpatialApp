@@ -24,7 +24,8 @@ LAYER_PRODUCING_TOOLS = {
     "aggregate", "filter_layer", "fetch_osm", "merge_layers",
     "import_layer", "find_route", "isochrone", "heatmap",
     "classify_landcover", "intersection", "difference",
-    "symmetric_difference",
+    "symmetric_difference", "convex_hull", "centroid", "simplify",
+    "bounding_box", "dissolve", "clip", "voronoi", "batch_geocode",
 }
 
 # Reuse OSM feature mappings from app.py
@@ -338,6 +339,8 @@ from nl_gis.handlers.navigation import (  # noqa: E402,F401
     handle_fetch_osm,
     handle_map_command,
     handle_search_nearby,
+    handle_reverse_geocode,
+    handle_batch_geocode,
 )
 from nl_gis.handlers.analysis import (  # noqa: E402,F401
     handle_buffer,
@@ -349,6 +352,13 @@ from nl_gis.handlers.analysis import (  # noqa: E402,F401
     handle_intersection,
     handle_difference,
     handle_symmetric_difference,
+    handle_convex_hull,
+    handle_centroid,
+    handle_simplify,
+    handle_bounding_box,
+    handle_dissolve,
+    handle_clip,
+    handle_voronoi,
 )
 from nl_gis.handlers.layers import (  # noqa: E402,F401
     handle_style_layer,
@@ -388,6 +398,8 @@ def dispatch_tool(tool_name: str, params: dict, layer_store: dict = None) -> dic
     handlers = {
         # Phase 1
         "geocode": handle_geocode,
+        "reverse_geocode": handle_reverse_geocode,
+        "batch_geocode": lambda p: handle_batch_geocode(p, layer_store),
         "fetch_osm": handle_fetch_osm,
         "map_command": handle_map_command,
         "calculate_area": lambda p: handle_calculate_area(p, layer_store),
@@ -418,6 +430,14 @@ def dispatch_tool(tool_name: str, params: dict, layer_store: dict = None) -> dic
         "intersection": lambda p: handle_intersection(p, layer_store),
         "difference": lambda p: handle_difference(p, layer_store),
         "symmetric_difference": lambda p: handle_symmetric_difference(p, layer_store),
+        # Geometry tools
+        "convex_hull": lambda p: handle_convex_hull(p, layer_store),
+        "centroid": lambda p: handle_centroid(p, layer_store),
+        "simplify": lambda p: handle_simplify(p, layer_store),
+        "bounding_box": lambda p: handle_bounding_box(p, layer_store),
+        "dissolve": lambda p: handle_dissolve(p, layer_store),
+        "clip": lambda p: handle_clip(p, layer_store),
+        "voronoi": lambda p: handle_voronoi(p, layer_store),
     }
 
     if tool_name not in handlers:

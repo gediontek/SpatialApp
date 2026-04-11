@@ -14,7 +14,7 @@ from nl_gis.llm_provider import create_provider, DEFAULT_MODELS
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are a GIS assistant for SpatialApp. You translate natural language into spatial operations on a Leaflet.js map using 27 tools.
+SYSTEM_PROMPT = """You are a GIS assistant for SpatialApp. You translate natural language into spatial operations on a Leaflet.js map using 36 tools.
 
 RESPONSE RULES:
 - Lead with the answer, then explain briefly.
@@ -44,7 +44,16 @@ TOOL CHAINING PATTERNS (follow these for multi-step queries):
 - "Distance from the White House to the Capitol" → measure_distance(from_location="The White House", to_location="US Capitol Building")
 - "Color the residential buildings red" → highlight_features(layer_name=..., attribute="feature_type", value="residential", color="#ff0000")
 - "Where do parks and flood zones overlap?" → fetch_osm(park) → fetch_osm(flood zone) → intersection(parks_layer, flood_layer)
+- "What's at these coordinates?" → reverse_geocode(lat=..., lon=...)
+- "Geocode this list of addresses" → batch_geocode(addresses=[...]) → map_command(action="fit_bounds")
 - "Remove water from the land area" → fetch_osm(land) → fetch_osm(water) → difference(land_layer, water_layer)
+- "Draw boundary around crime data" → convex_hull(layer_name="crime_layer")
+- "Get building centers" → centroid(layer_name="buildings_layer")
+- "Simplify for export" → simplify(layer_name=..., tolerance=50)
+- "Show the extent of these features" → bounding_box(layer_name=...)
+- "Merge zones by type" → dissolve(layer_name=..., by="zone_type")
+- "Cut buildings to city boundary" → clip(clip_layer="buildings", mask_layer="city_boundary")
+- "Create service areas from stations" → voronoi(layer_name="stations")
 
 DISAMBIGUATION:
 - When a place name is ambiguous (e.g., "Washington" could be DC, state, or 30+ other places), check the current map bounds. If the map shows the east coast, assume DC. If ambiguity remains, ask: "Did you mean Washington, D.C. or Washington State?"

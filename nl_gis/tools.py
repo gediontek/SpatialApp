@@ -57,6 +57,43 @@ def get_tool_definitions() -> list:
             }
         },
         {
+            "name": "reverse_geocode",
+            "description": "Convert geographic coordinates (latitude, longitude) into a human-readable address or place name. Use when the user asks 'What's at these coordinates?' or 'What place is at lat/lon?'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "lat": {
+                        "type": "number",
+                        "description": "Latitude of the point to reverse geocode"
+                    },
+                    "lon": {
+                        "type": "number",
+                        "description": "Longitude of the point to reverse geocode"
+                    }
+                },
+                "required": ["lat", "lon"]
+            }
+        },
+        {
+            "name": "batch_geocode",
+            "description": "Geocode a list of addresses into a point layer on the map. Use when the user provides multiple addresses to plot. Returns a GeoJSON FeatureCollection with a point for each successfully geocoded address. Maximum 50 addresses per batch.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "addresses": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of addresses or place names to geocode (max 50)"
+                    },
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name for the output point layer (default: 'geocoded_points')"
+                    }
+                },
+                "required": ["addresses"]
+            }
+        },
+        {
             "name": "map_command",
             "description": "Control the map view: pan to coordinates, set zoom level, fit to bounding box, or change basemap. Use this to navigate the map based on user requests.",
             "input_schema": {
@@ -707,6 +744,147 @@ def get_tool_definitions() -> list:
                     }
                 },
                 "required": ["layer_a", "layer_b"]
+            }
+        },
+        # ---- Geometry Tools ----
+        {
+            "name": "convex_hull",
+            "description": "Compute the convex hull (smallest enclosing convex polygon) of all features in a layer. Useful for 'draw boundary around data', 'create an envelope around crime locations', or 'show the extent of these points'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name of the layer to compute convex hull for"
+                    },
+                    "output_name": {
+                        "type": "string",
+                        "description": "Name for the output layer (default: convex_hull_<layer_name>)"
+                    }
+                },
+                "required": ["layer_name"]
+            }
+        },
+        {
+            "name": "centroid",
+            "description": "Extract the centroid (center point) of each feature in a layer. Returns a new point layer preserving original properties. Useful for 'get building centers', 'find center of each polygon', or converting polygons to representative points.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name of the layer to extract centroids from"
+                    },
+                    "output_name": {
+                        "type": "string",
+                        "description": "Name for the output point layer (default: centroids_<layer_name>)"
+                    }
+                },
+                "required": ["layer_name"]
+            }
+        },
+        {
+            "name": "simplify",
+            "description": "Simplify geometries by reducing vertex count while preserving shape. Useful for 'simplify for export', 'reduce detail level', or preparing data for web display. Higher tolerance = more simplification.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name of the layer to simplify"
+                    },
+                    "tolerance": {
+                        "type": "number",
+                        "description": "Simplification tolerance in meters (default: 10). Higher values = more simplification.",
+                        "default": 10,
+                        "minimum": 0.1
+                    },
+                    "output_name": {
+                        "type": "string",
+                        "description": "Name for the output layer (default: simplified_<layer_name>)"
+                    }
+                },
+                "required": ["layer_name"]
+            }
+        },
+        {
+            "name": "bounding_box",
+            "description": "Create a bounding box (rectangular envelope) polygon from the extent of all features in a layer. Useful for 'show the extent of this data', 'create a rectangle around these features'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name of the layer to compute bounding box for"
+                    },
+                    "output_name": {
+                        "type": "string",
+                        "description": "Name for the output layer (default: bbox_<layer_name>)"
+                    }
+                },
+                "required": ["layer_name"]
+            }
+        },
+        {
+            "name": "dissolve",
+            "description": "Merge features by a shared attribute value. All features with the same attribute value are combined into a single geometry. Useful for 'merge polygons by district', 'combine zones by type', 'aggregate boundaries by category'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name of the layer to dissolve"
+                    },
+                    "by": {
+                        "type": "string",
+                        "description": "Attribute name to dissolve by (features with the same value are merged)"
+                    },
+                    "output_name": {
+                        "type": "string",
+                        "description": "Name for the output layer (default: dissolved_<layer_name>)"
+                    }
+                },
+                "required": ["layer_name", "by"]
+            }
+        },
+        {
+            "name": "clip",
+            "description": "Clip one layer by another layer's boundary. Features from the clip layer are cut to the extent of the mask layer. Useful for 'cut buildings to city boundary', 'crop features to study area', 'trim data to region'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "clip_layer": {
+                        "type": "string",
+                        "description": "Name of the layer to clip (features to cut)"
+                    },
+                    "mask_layer": {
+                        "type": "string",
+                        "description": "Name of the layer to use as the clipping boundary"
+                    },
+                    "output_name": {
+                        "type": "string",
+                        "description": "Name for the output layer (default: clipped_<clip_layer>)"
+                    }
+                },
+                "required": ["clip_layer", "mask_layer"]
+            }
+        },
+        {
+            "name": "voronoi",
+            "description": "Generate a Voronoi diagram (Thiessen polygons) from point features. Each polygon contains the area closest to its source point. Useful for 'create service areas', 'nearest-facility zones', 'Thiessen polygons from stations'. Non-point features use their centroids.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name of the point layer to generate Voronoi diagram from"
+                    },
+                    "output_name": {
+                        "type": "string",
+                        "description": "Name for the output polygon layer (default: voronoi_<layer_name>)"
+                    }
+                },
+                "required": ["layer_name"]
             }
         }
     ]
