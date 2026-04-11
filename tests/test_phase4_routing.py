@@ -48,7 +48,7 @@ class TestHandleFindRoute:
         result = handle_find_route({"from_location": "Seattle"})
         assert "error" in result
 
-    @patch("nl_gis.tool_handlers.handle_geocode")
+    @patch("nl_gis.handlers.navigation.handle_geocode")
     @patch("services.valhalla_client.requests.post")
     @patch("services.valhalla_client._probe_port", return_value=False)
     def test_route_with_locations(self, mock_probe, mock_post, mock_geocode):
@@ -96,7 +96,7 @@ class TestHandleFindRoute:
         assert len(result["geojson"]["features"]) == 3  # route + 2 markers
         vc._detected_url = None
 
-    @patch("nl_gis.tool_handlers.handle_geocode")
+    @patch("nl_gis.handlers.navigation.handle_geocode")
     @patch("services.valhalla_client.requests.post")
     @patch("services.valhalla_client._probe_port", return_value=False)
     def test_route_with_coords(self, mock_probe, mock_post, mock_geocode):
@@ -125,7 +125,7 @@ class TestHandleFindRoute:
         vc._detected_url = None
 
     @patch("services.valhalla_client.valhalla_cache")
-    @patch("nl_gis.tool_handlers.handle_geocode")
+    @patch("nl_gis.handlers.navigation.handle_geocode")
     @patch("services.valhalla_client.requests.post")
     @patch("services.valhalla_client._probe_port", return_value=False)
     def test_route_service_unavailable(self, mock_probe, mock_post, mock_geocode, mock_cache):
@@ -246,7 +246,7 @@ class TestHandleIsochrone:
             assert 1000 < result["radius_m"] < 1500
             vc._detected_url = None
 
-    @patch("nl_gis.tool_handlers.handle_geocode")
+    @patch("nl_gis.handlers.navigation.handle_geocode")
     @patch("services.valhalla_client.requests.post")
     @patch("services.valhalla_client._probe_port", return_value=False)
     def test_location_name(self, mock_probe, mock_post, mock_geocode):

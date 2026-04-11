@@ -68,18 +68,17 @@ class TestChatEndpoint:
         data = response.get_data(as_text=True)
         assert 'error' in data
 
-    @patch("nl_gis.tool_handlers.urllib.request.urlopen")
-    def test_fallback_zoom_to(self, mock_urlopen, client):
+    @patch("nl_gis.handlers.navigation.requests.get")
+    def test_fallback_zoom_to(self, mock_get, client):
         """Test rule-based geocode + pan."""
         mock_response = MagicMock()
-        mock_response.read.return_value = json.dumps([{
+        mock_response.json.return_value = [{
             "lat": "41.8781", "lon": "-87.6298",
             "display_name": "Chicago, IL, USA",
             "boundingbox": ["41.6", "42.0", "-87.9", "-87.5"]
-        }]).encode()
-        mock_response.__enter__ = lambda s: s
-        mock_response.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_response
+        }]
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
 
         response = client.post('/api/chat',
                                data=json.dumps({"message": "zoom to Chicago"}),

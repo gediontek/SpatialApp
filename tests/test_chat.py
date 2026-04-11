@@ -25,19 +25,18 @@ class TestChatSessionFallback:
             self.session = ChatSession()
             self.session.client = None  # Force fallback mode
 
-    @patch("nl_gis.tool_handlers.geocode_cache")
-    @patch("nl_gis.tool_handlers.urllib.request.urlopen")
-    def test_zoom_to_place(self, mock_urlopen, mock_cache):
+    @patch("nl_gis.handlers.navigation.geocode_cache")
+    @patch("nl_gis.handlers.navigation.requests.get")
+    def test_zoom_to_place(self, mock_get, mock_cache):
         mock_cache.get.return_value = None  # Bypass cache
         mock_response = MagicMock()
-        mock_response.read.return_value = json.dumps([{
+        mock_response.json.return_value = [{
             "lat": "47.6062", "lon": "-122.3321",
             "display_name": "Seattle, WA, USA",
             "boundingbox": ["47.4", "47.8", "-122.5", "-122.2"]
-        }]).encode()
-        mock_response.__enter__ = lambda s: s
-        mock_response.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_response
+        }]
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
 
         events = list(self.session.process_message("zoom to Seattle"))
         types = [e["type"] for e in events]
@@ -100,21 +99,20 @@ class TestChatSessionWithLLM:
         assert events[0]["type"] == "message"
         assert "GIS assistant" in events[0]["text"]
 
-    @patch("nl_gis.tool_handlers.geocode_cache")
-    @patch("nl_gis.tool_handlers.urllib.request.urlopen")
-    def test_geocode_tool_call(self, mock_urlopen, mock_cache):
+    @patch("nl_gis.handlers.navigation.geocode_cache")
+    @patch("nl_gis.handlers.navigation.requests.get")
+    def test_geocode_tool_call(self, mock_get, mock_cache):
         """Test LLM calling the geocode tool."""
         mock_cache.get.return_value = None  # Bypass cache
         # Mock geocoding response
         mock_geo_response = MagicMock()
-        mock_geo_response.read.return_value = json.dumps([{
+        mock_geo_response.json.return_value = [{
             "lat": "47.6062", "lon": "-122.3321",
             "display_name": "Seattle, WA",
             "boundingbox": ["47.4", "47.8", "-122.5", "-122.2"]
-        }]).encode()
-        mock_geo_response.__enter__ = lambda s: s
-        mock_geo_response.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_geo_response
+        }]
+        mock_geo_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_geo_response
 
         mock_provider = MagicMock()
         mock_provider.create_message.side_effect = [

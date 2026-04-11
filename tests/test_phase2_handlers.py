@@ -227,7 +227,7 @@ class TestHandleSearchNearby:
         })
         assert "error" in result
 
-    @patch("nl_gis.tool_handlers.requests.get")
+    @patch("nl_gis.handlers.navigation.requests.get")
     def test_successful_search(self, mock_get):
         mock_response = MagicMock()
         mock_response.json.return_value = {

@@ -26,7 +26,7 @@ class TestDispatchTool:
             dispatch_tool("nonexistent_tool", {})
 
     def test_dispatch_geocode(self):
-        with patch("nl_gis.tool_handlers.handle_geocode") as mock:
+        with patch("nl_gis.handlers.handle_geocode") as mock:
             mock.return_value = {"lat": 47.6, "lon": -122.3}
             result = dispatch_tool("geocode", {"query": "Seattle"})
             mock.assert_called_once_with({"query": "Seattle"})
@@ -47,20 +47,19 @@ class TestHandleGeocode:
         result = handle_geocode({})
         assert "error" in result
 
-    @patch("nl_gis.tool_handlers.geocode_cache")
-    @patch("nl_gis.tool_handlers.urllib.request.urlopen")
-    def test_successful_geocode(self, mock_urlopen, mock_cache):
+    @patch("nl_gis.handlers.navigation.geocode_cache")
+    @patch("nl_gis.handlers.navigation.requests.get")
+    def test_successful_geocode(self, mock_get, mock_cache):
         mock_cache.get.return_value = None  # Bypass cache
         mock_response = MagicMock()
-        mock_response.read.return_value = json.dumps([{
+        mock_response.json.return_value = [{
             "lat": "47.6062",
             "lon": "-122.3321",
             "display_name": "Seattle, King County, Washington, USA",
             "boundingbox": ["47.4", "47.8", "-122.5", "-122.2"]
-        }]).encode()
-        mock_response.__enter__ = lambda s: s
-        mock_response.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_response
+        }]
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
 
         result = handle_geocode({"query": "Seattle"})
         assert result["lat"] == 47.6062
@@ -68,13 +67,12 @@ class TestHandleGeocode:
         assert "Seattle" in result["display_name"]
         assert result["bbox"] is not None
 
-    @patch("nl_gis.tool_handlers.urllib.request.urlopen")
-    def test_location_not_found(self, mock_urlopen):
+    @patch("nl_gis.handlers.navigation.requests.get")
+    def test_location_not_found(self, mock_get):
         mock_response = MagicMock()
-        mock_response.read.return_value = b"[]"
-        mock_response.__enter__ = lambda s: s
-        mock_response.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_response
+        mock_response.json.return_value = []
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
 
         result = handle_geocode({"query": "xyznonexistent"})
         assert "error" in result
@@ -223,7 +221,7 @@ class TestHandleMeasureDistance:
         })
         assert "error" in result
 
-    @patch("nl_gis.tool_handlers.handle_geocode")
+    @patch("nl_gis.handlers.navigation.handle_geocode")
     def test_location_names(self, mock_geocode):
         """Measure distance using place names."""
         mock_geocode.side_effect = [
@@ -239,7 +237,7 @@ class TestHandleMeasureDistance:
         assert result["from_name"] == "Seattle, WA"
         assert result["to_name"] == "Portland, OR"
 
-    @patch("nl_gis.tool_handlers.handle_geocode")
+    @patch("nl_gis.handlers.navigation.handle_geocode")
     def test_geocode_failure(self, mock_geocode):
         mock_geocode.return_value = {"error": "Location not found"}
         result = handle_measure_distance({
@@ -268,7 +266,7 @@ class TestHandleFetchOSM:
         })
         assert "error" in result
 
-    @patch("nl_gis.tool_handlers.requests.get")
+    @patch("nl_gis.handlers.navigation.requests.get")
     def test_successful_fetch(self, mock_get):
         """Test with mocked Overpass response."""
         mock_response = MagicMock()
@@ -301,7 +299,7 @@ class TestHandleFetchOSM:
         assert geojson["type"] == "FeatureCollection"
         assert len(geojson["features"]) == 1
 
-    @patch("nl_gis.tool_handlers.requests.get")
+    @patch("nl_gis.handlers.navigation.requests.get")
     def test_timeout(self, mock_get):
         import requests as req
         from services.cache import overpass_cache
