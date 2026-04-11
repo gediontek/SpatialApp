@@ -50,11 +50,19 @@ def api_dashboard():
     # Stats
     stats = state.db.get_user_stats(user_id)
 
+    # Tool usage breakdown
+    try:
+        tool_stats = state.db.get_tool_stats(user_id if user_id != 'anonymous' else None)
+    except Exception:
+        logging.debug("Failed to get tool stats", exc_info=True)
+        tool_stats = {"most_used": [], "failure_rate": {}, "avg_chain_length": 0.0}
+
     return jsonify(
         user=user_info,
         sessions=sessions,
         layers=layers,
         stats=stats,
+        tool_stats=tool_stats,
     )
 
 

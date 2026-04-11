@@ -164,8 +164,14 @@ class DatabaseInterface(ABC):
     def log_query_metric(self, user_id: str = "anonymous", session_id: str = None,
                          message: str = "", tool_calls: int = 0,
                          input_tokens: int = 0, output_tokens: int = 0,
-                         duration_ms: int = 0, error: bool = False) -> None:
-        """Log a single query metric."""
+                         duration_ms: int = 0, error: bool = False,
+                         tool_details: list = None) -> None:
+        """Log a single query metric.
+
+        Args:
+            tool_details: Optional list of per-tool-call dicts with keys:
+                tool (str), success (bool), chain_position (int), retry (bool).
+        """
         ...
 
     @abstractmethod

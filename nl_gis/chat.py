@@ -14,7 +14,7 @@ from nl_gis.llm_provider import create_provider, DEFAULT_MODELS
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are a GIS assistant for SpatialApp. You translate natural language into spatial operations on a Leaflet.js map using 41 tools.
+SYSTEM_PROMPT = """You are a GIS assistant for SpatialApp. You translate natural language into spatial operations on a Leaflet.js map using 44 tools.
 
 RESPONSE RULES:
 - Lead with the answer, then explain briefly.
@@ -35,6 +35,54 @@ TOOL SELECTION:
 - style_layer: Use to change layer appearance ("color the parks green", "make roads thicker").
 - closest_facility: Use when the user asks for "nearest", "closest" N features of a type from a point. Returns results sorted by distance.
 - optimize_route: Use when the user wants to optimize visiting order of 3+ locations (traveling salesman / delivery route optimization).
+
+Geometry operations:
+- intersection: Use when the user asks "where do X and Y overlap?" Returns features present in both layers.
+- difference: Use to subtract one layer from another ("remove water from land area").
+- symmetric_difference: Use for features in either layer but not both ("what's unique to each?").
+- convex_hull: Use when the user asks for the outer boundary or "footprint" of scattered points.
+- centroid: Use to get center points of polygons ("get building centers").
+- simplify: Use to reduce geometry complexity for export or display ("simplify for performance").
+- bounding_box: Use to get the rectangular extent of a layer.
+- dissolve: Use to merge features by attribute ("merge zones by type").
+- clip: Use to cut one layer to the boundary of another ("cut buildings to city limits").
+- voronoi: Use to create service areas / Thiessen polygons from point features.
+
+Advanced analysis:
+- point_in_polygon: Use to determine which polygon contains a point, or tag each point in a layer with its containing polygon. Single-point mode returns polygon properties; batch mode returns a new layer.
+- attribute_join: Use to join tabular data to a spatial layer by matching an attribute. Useful for enriching features with external data.
+- spatial_statistics: Use to analyze spatial clustering patterns. nearest_neighbor returns NNI (< 1 clustered, > 1 dispersed). dbscan groups nearby points into clusters.
+
+Geocoding:
+- reverse_geocode: Use when the user provides coordinates and wants to know "what's at this location?"
+- batch_geocode: Use when the user provides multiple addresses to geocode at once.
+
+Data import/export:
+- import_csv: Use when the user provides CSV data with lat/lon columns to plot as points.
+- import_wkt: Use when the user provides a WKT geometry string to display on the map.
+- import_layer: Use when the user provides raw GeoJSON to add as a layer.
+- export_layer: Use when the user wants to download/export layer data (GeoJSON or shapefile).
+
+Measurement & analysis:
+- calculate_area: Use when the user asks "how big" or "what area" for polygon layers.
+- measure_distance: Use when the user asks "how far" between two locations.
+
+Layer management:
+- show_layer / hide_layer / remove_layer: Use when the user wants to toggle or remove layers.
+- highlight_features: Use when the user wants to visually emphasize specific features by attribute value.
+- merge_layers: Use to combine multiple layers into one.
+
+Annotations:
+- add_annotation: Use when the user wants to save a manual annotation or marker.
+- get_annotations / export_annotations: Use when the user wants to retrieve or export saved annotations.
+
+Visualization:
+- classify_landcover: Use for thematic classification of land cover features.
+- heatmap: Use when the user wants a density/heat map visualization of point data.
+
+Routing:
+- find_route: Use when the user asks for directions or a route between locations.
+- isochrone: Use when the user asks "what can I reach in X minutes?"
 
 TOOL CHAINING PATTERNS (follow these for multi-step queries):
 - "Show parks in Chicago" → fetch_osm(feature_type="park", location="Chicago") → map_command(action="fit_bounds")
@@ -61,6 +109,23 @@ TOOL CHAINING PATTERNS (follow these for multi-step queries):
 - "Export buildings as shapefile" → export_layer(layer_name="buildings", format="shapefile")
 - "Find 3 nearest hospitals to Times Square" → closest_facility(location="Times Square", feature_type="hospital", count=3)
 - "Optimize route visiting these 5 stops" → optimize_route(locations=[{lat, lon}, ...], profile="auto")
+- "Which district is this point in?" → point_in_polygon(lat=..., lon=..., polygon_layer="districts")
+- "Tag each store with its census tract" → point_in_polygon(point_layer="stores", polygon_layer="census_tracts")
+- "Add population data to districts" → attribute_join(layer_name="districts", join_data=[...], layer_key="id", data_key="district_id")
+- "Are these crime points clustered?" → spatial_statistics(layer_name="crimes", method="nearest_neighbor")
+- "Find clusters in restaurant data" → spatial_statistics(layer_name="restaurants", method="dbscan", eps=200, min_samples=3)
+
+EXAMPLE CONVERSATIONS:
+Example 1 — Multi-step spatial analysis:
+User: "How many restaurants are within 500m of Central Park?"
+Assistant thinking: Need to (1) find Central Park, (2) create 500m buffer, (3) find restaurants in the area, (4) spatial_query to find which are within the buffer, (5) count them.
+Tool calls: geocode("Central Park, NYC") → buffer(geometry=park_bbox_polygon, distance_m=500) → search_nearby(lat=40.78, lon=-73.97, radius_m=600, feature_type="restaurant") → spatial_query(source="restaurants_nearby_...", predicate="within", target="buffer_...") → aggregate(layer="spatial_query_...", operation="count")
+Result: "Found **23 restaurants** within 500m of Central Park."
+
+Example 2 — Layer comparison:
+User: "Show me where parks and commercial zones overlap in downtown Seattle"
+Tool calls: fetch_osm(feature_type="park", location="downtown Seattle") → fetch_osm(feature_type="commercial", location="downtown Seattle") → intersection(layer_a="parks_...", layer_b="commercial_...") → calculate_area(layer_name="intersection_...")
+Result: "The overlap between parks and commercial zones covers **0.12 sq km** (29.6 acres)."
 
 DISAMBIGUATION:
 - When a place name is ambiguous (e.g., "Washington" could be DC, state, or 30+ other places), check the current map bounds. If the map shows the east coast, assume DC. If ambiguity remains, ask: "Did you mean Washington, D.C. or Washington State?"
@@ -113,6 +178,8 @@ class ChatSession:
             "last_layer": None,         # layer name string
             "last_operation": None,     # {"tool": str, "summary": str}
         }
+        self._recently_referenced_layers = set()  # Layers referenced in recent turns
+        self._turn_counter = 0  # Tracks conversation turns for layer recency
         self._init_client()
 
     def _init_client(self):
@@ -256,6 +323,13 @@ class ChatSession:
         # Track last layer created
         if "layer_name" in result:
             self.context["last_layer"] = result["layer_name"]
+            self._recently_referenced_layers.add(result["layer_name"])
+        # Track layers referenced as inputs (source_layer, target_layer, layer_name, etc.)
+        for key in ("layer_name", "source_layer", "target_layer", "layer_a",
+                     "layer_b", "clip_layer", "mask_layer"):
+            ref = tool_input.get(key)
+            if ref and isinstance(ref, str):
+                self._recently_referenced_layers.add(ref)
         # Track last operation summary
         summary_map = {
             "fetch_osm": lambda: f"fetched {result.get('feature_count', '?')} {tool_input.get('feature_type', 'features')}",
@@ -306,6 +380,11 @@ class ChatSession:
             yield from self._fallback_process(message)
             return
 
+        # Track turn counter for layer recency; reset referenced layers every 3 turns
+        self._turn_counter += 1
+        if self._turn_counter % 3 == 0:
+            self._recently_referenced_layers.clear()
+
         # Build dynamic system prompt with map state and session context
         system = SYSTEM_PROMPT
         state_parts = []
@@ -318,21 +397,31 @@ class ChatSession:
             if "zoom" in map_context:
                 state_parts.append(f"Zoom level: {map_context['zoom']}")
 
-        # Layer metadata (names + feature counts), limited to 10 most recent
+        # Layer metadata: prefer recently-referenced layers, fallback to last 5
         with self._layer_lock:
             layer_snapshot = dict(self.layer_store)
         if layer_snapshot:
             layer_info = []
-            # Take the last 10 items (most recently added/used)
-            layer_items = list(layer_snapshot.items())
-            total_layers = len(layer_items)
-            recent_items = layer_items[-10:]
-            for name, geojson in recent_items:
+            total_layers = len(layer_snapshot)
+            # Filter to recently-referenced layers if any exist
+            if self._recently_referenced_layers:
+                relevant = {
+                    name: geojson
+                    for name, geojson in layer_snapshot.items()
+                    if name in self._recently_referenced_layers
+                }
+            else:
+                relevant = {}
+            # Fallback: if no recent layers match, show the last 5
+            if not relevant:
+                layer_items = list(layer_snapshot.items())
+                relevant = dict(layer_items[-5:])
+            for name, geojson in relevant.items():
                 count = len(geojson.get("features", [])) if isinstance(geojson, dict) else 0
                 layer_info.append(f"{name} ({count} features)")
             summary = f"Active layers: {', '.join(layer_info)}"
-            if total_layers > 10:
-                summary += f" ({total_layers} layers total, showing 10 most recent)"
+            if total_layers > len(relevant):
+                summary += f" ({total_layers} layers total, showing {len(relevant)} relevant)"
             state_parts.append(summary)
         else:
             state_parts.append("Active layers: none")
@@ -362,6 +451,7 @@ class ChatSession:
         tool_call_count = 0
         max_tool_calls = Config.MAX_TOOL_CALLS_PER_MESSAGE
         completed_tools = []  # Track successful tools for error recovery
+        tool_metrics = []  # Per-tool-call instrumentation
 
         try:
             while True:
@@ -461,6 +551,14 @@ class ChatSession:
 
                             yield {"type": "tool_result", "tool": tool_name, "result": result}
 
+                            # Track per-tool metrics
+                            tool_metrics.append({
+                                "tool": tool_name,
+                                "success": "error" not in result,
+                                "chain_position": tool_call_count,
+                                "retry": False,
+                            })
+
                             if "error" not in result:
                                 completed_tools.append(tool_name)
                                 # Update session context for multi-turn awareness
@@ -555,6 +653,7 @@ class ChatSession:
                         "text": text,
                         "done": True,
                         "usage": self.usage.copy(),
+                        "tool_metrics": tool_metrics,
                     }
                     break
 

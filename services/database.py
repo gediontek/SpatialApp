@@ -135,6 +135,7 @@ def init_db():
             output_tokens INTEGER DEFAULT 0,
             duration_ms INTEGER DEFAULT 0,
             error INTEGER DEFAULT 0,
+            tool_details_json TEXT DEFAULT '[]',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -151,6 +152,8 @@ def init_db():
     _migrate_add_column(conn, "annotations", "user_id", "TEXT DEFAULT 'anonymous'")
     _migrate_add_column(conn, "layers", "user_id", "TEXT DEFAULT 'anonymous'")
     _migrate_add_column(conn, "chat_sessions", "user_id", "TEXT DEFAULT 'anonymous'")
+    # Migration: add tool_details_json column to query_metrics if missing
+    _migrate_add_column(conn, "query_metrics", "tool_details_json", "TEXT DEFAULT '[]'")
 
     # Create user_id indexes (only after migration ensures columns exist)
     for idx_sql in [
@@ -178,7 +181,8 @@ _ALLOWED_COLUMNS = {"user_id", "username", "api_token", "category_name", "color"
                     "source", "geometry_json", "properties_json", "geojson",
                     "feature_count", "style_json", "messages_json", "session_id",
                     "message", "tool_calls", "input_tokens", "output_tokens",
-                    "duration_ms", "error", "created_at", "updated_at", "name"}
+                    "duration_ms", "error", "tool_details_json",
+                    "created_at", "updated_at", "name"}
 
 
 def _migrate_add_column(conn, table: str, column: str, definition: str):
@@ -443,13 +447,20 @@ def delete_chat_session(session_id: str):
 def log_query_metric(user_id: str = "anonymous", session_id: str = None,
                      message: str = "", tool_calls: int = 0,
                      input_tokens: int = 0, output_tokens: int = 0,
-                     duration_ms: int = 0, error: bool = False):
-    """Log a single query metric."""
+                     duration_ms: int = 0, error: bool = False,
+                     tool_details: list = None):
+    """Log a single query metric.
+
+    Args:
+        tool_details: Optional list of per-tool-call dicts with keys:
+            tool (str), success (bool), chain_position (int), retry (bool).
+    """
     conn = get_connection()
+    tool_details_json = json.dumps(tool_details or [])
     try:
         conn.execute(
-            "INSERT INTO query_metrics (user_id, session_id, message, tool_calls, input_tokens, output_tokens, duration_ms, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (user_id, session_id, message[:200], tool_calls, input_tokens, output_tokens, duration_ms, 1 if error else 0)
+            "INSERT INTO query_metrics (user_id, session_id, message, tool_calls, input_tokens, output_tokens, duration_ms, error, tool_details_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (user_id, session_id, message[:200], tool_calls, input_tokens, output_tokens, duration_ms, 1 if error else 0, tool_details_json)
         )
         conn.commit()
     except Exception:
@@ -569,6 +580,66 @@ def delete_chat_session_for_user(session_id: str, user_id: str) -> bool:
     except Exception:
         conn.rollback()
         raise
+
+
+def get_tool_stats(user_id: str = None) -> dict:
+    """Aggregate per-tool usage statistics from tool_details_json.
+
+    Returns dict with:
+        most_used: list of {tool, count} sorted by count desc (top 10)
+        failure_rate: dict of tool -> failure rate (0.0-1.0)
+        avg_chain_length: average number of tool calls per query
+    """
+    conn = get_connection()
+    where = "WHERE user_id = ?" if user_id else ""
+    params = (user_id,) if user_id else ()
+
+    rows = conn.execute(
+        f"SELECT tool_details_json, tool_calls FROM query_metrics {where}",
+        params
+    ).fetchall()
+
+    tool_counts = {}  # tool -> total count
+    tool_failures = {}  # tool -> failure count
+    total_chains = 0
+    total_chain_length = 0
+
+    for row in rows:
+        tc = row["tool_calls"] or 0
+        if tc > 0:
+            total_chains += 1
+            total_chain_length += tc
+
+        details_raw = row["tool_details_json"]
+        if not details_raw:
+            continue
+        try:
+            details = json.loads(details_raw)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        for entry in details:
+            tool = entry.get("tool", "unknown")
+            tool_counts[tool] = tool_counts.get(tool, 0) + 1
+            if not entry.get("success", True):
+                tool_failures[tool] = tool_failures.get(tool, 0) + 1
+
+    most_used = sorted(
+        [{"tool": t, "count": c} for t, c in tool_counts.items()],
+        key=lambda x: x["count"], reverse=True
+    )[:10]
+
+    failure_rate = {}
+    for tool, count in tool_counts.items():
+        failures = tool_failures.get(tool, 0)
+        failure_rate[tool] = round(failures / count, 3) if count > 0 else 0.0
+
+    avg_chain = round(total_chain_length / total_chains, 1) if total_chains > 0 else 0.0
+
+    return {
+        "most_used": most_used,
+        "failure_rate": failure_rate,
+        "avg_chain_length": avg_chain,
+    }
 
 
 def get_metrics_summary(user_id: str = None) -> dict:
@@ -713,12 +784,17 @@ class Database(DatabaseInterface):
 
     def log_query_metric(self, user_id="anonymous", session_id=None,
                          message="", tool_calls=0, input_tokens=0,
-                         output_tokens=0, duration_ms=0, error=False):
+                         output_tokens=0, duration_ms=0, error=False,
+                         tool_details=None):
         return log_query_metric(user_id, session_id, message, tool_calls,
-                                input_tokens, output_tokens, duration_ms, error)
+                                input_tokens, output_tokens, duration_ms, error,
+                                tool_details)
 
     def get_metrics_summary(self, user_id=None):
         return get_metrics_summary(user_id)
+
+    def get_tool_stats(self, user_id=None):
+        return get_tool_stats(user_id)
 
     def cleanup_old_metrics(self, days=180):
         return cleanup_old_metrics(days)

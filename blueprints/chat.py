@@ -141,6 +141,7 @@ def api_chat():
         start_time = _time.time()
         tool_count = 0
         had_error = False
+        tool_metrics = []
         try:
             for event in session.process_message(message, map_context):
                 event_type = event.get('type', 'message')
@@ -149,6 +150,9 @@ def api_chat():
                     tool_count += 1
                 if event_type == 'error':
                     had_error = True
+                # Capture tool metrics from final message event
+                if event_type == 'message' and event.get('done') and event.get('tool_metrics'):
+                    tool_metrics = event['tool_metrics']
 
                 # Store layer in server-side store (with lock)
                 if event_type == 'layer_add':
@@ -185,6 +189,7 @@ def api_chat():
                         output_tokens=session.usage.get("total_output_tokens", 0),
                         duration_ms=duration_ms,
                         error=had_error,
+                        tool_details=tool_metrics,
                     )
                 except Exception:
                     logging.debug("Failed to log query metrics for session %s", session_id, exc_info=True)
