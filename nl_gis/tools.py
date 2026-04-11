@@ -1032,5 +1032,99 @@ def get_tool_definitions() -> list:
                 },
                 "required": ["layer_name"]
             }
+        },
+        # ---- Advanced Analysis Tools ----
+        {
+            "name": "point_in_polygon",
+            "description": "Determine which polygon contains a point, or which polygons contain each point in a point layer. Use for 'which district is this point in?', 'tag each store with its census tract', 'is this coordinate inside the boundary?'. Single-point mode returns the containing polygon's properties. Batch mode returns a new point layer with containing polygon info merged into each point's properties.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "polygon_layer": {
+                        "type": "string",
+                        "description": "Name of the polygon layer to test against"
+                    },
+                    "lat": {
+                        "type": "number",
+                        "description": "Latitude of a single point to test (use with lon)"
+                    },
+                    "lon": {
+                        "type": "number",
+                        "description": "Longitude of a single point to test (use with lat)"
+                    },
+                    "point_layer": {
+                        "type": "string",
+                        "description": "Name of a point layer to test against the polygon layer (batch mode)"
+                    },
+                    "output_name": {
+                        "type": "string",
+                        "description": "Name for the output layer in batch mode (default: pip_<polygon_layer>)"
+                    }
+                },
+                "required": ["polygon_layer"]
+            }
+        },
+        {
+            "name": "attribute_join",
+            "description": "Join tabular data to a spatial layer by matching a shared attribute. Use for 'add population data to districts', 'attach sales figures to store locations', 'enrich features with external data'. Matched fields are prefixed with 'joined_' in the output.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name of the spatial layer to join data to"
+                    },
+                    "join_data": {
+                        "type": "array",
+                        "description": "Array of objects containing the data to join (e.g., [{\"id\": \"A\", \"population\": 5000}, ...])",
+                        "items": {
+                            "type": "object"
+                        }
+                    },
+                    "layer_key": {
+                        "type": "string",
+                        "description": "Attribute name in the layer to match on (e.g., 'district_id')"
+                    },
+                    "data_key": {
+                        "type": "string",
+                        "description": "Key in join_data objects to match on (e.g., 'id')"
+                    },
+                    "output_name": {
+                        "type": "string",
+                        "description": "Name for the output layer (default: joined_<layer_name>)"
+                    }
+                },
+                "required": ["layer_name", "join_data", "layer_key", "data_key"]
+            }
+        },
+        {
+            "name": "spatial_statistics",
+            "description": "Compute spatial clustering statistics for point features. Methods: nearest_neighbor (Nearest Neighbor Index — values < 1 indicate clustering, = 1 random, > 1 dispersed), dbscan (density-based clustering with eps distance and min_samples). Use for 'are these points clustered?', 'find clusters in crime data', 'identify hotspot groups'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Name of the point layer to analyze"
+                    },
+                    "method": {
+                        "type": "string",
+                        "description": "Statistical method to use",
+                        "enum": ["nearest_neighbor", "dbscan"],
+                        "default": "nearest_neighbor"
+                    },
+                    "eps": {
+                        "type": "number",
+                        "description": "DBSCAN: maximum distance (meters) between two points to be considered neighbors (default: 100)",
+                        "default": 100
+                    },
+                    "min_samples": {
+                        "type": "integer",
+                        "description": "DBSCAN: minimum number of points to form a cluster (default: 5)",
+                        "default": 5
+                    }
+                },
+                "required": ["layer_name"]
+            }
         }
     ]

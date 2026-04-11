@@ -1,6 +1,7 @@
-"""Spatial analysis handlers: buffer, spatial query, aggregate, area, distance, filter, geometry."""
+"""Spatial analysis handlers: buffer, spatial query, aggregate, area, distance, filter, geometry, advanced analysis."""
 
 import logging
+import math
 
 from shapely.ops import unary_union
 
@@ -828,3 +829,303 @@ def handle_voronoi(params: dict, layer_store: dict = None) -> dict:
         "layer_name": output_name,
         "feature_count": len(voronoi_features),
     }
+
+
+# ============================================================
+# Advanced Analysis Tools
+# ============================================================
+
+
+def handle_point_in_polygon(params: dict, layer_store: dict = None) -> dict:
+    """Determine which polygon contains a point or batch of points."""
+    polygon_layer = params.get("polygon_layer")
+    lat = params.get("lat")
+    lon = params.get("lon")
+    point_layer = params.get("point_layer")
+    output_name = params.get("output_name", f"pip_{polygon_layer}")
+
+    if not polygon_layer:
+        return {"error": "polygon_layer is required"}
+
+    # Get polygon geometries + features
+    poly_geoms, err = _get_layer_geometries(layer_store, polygon_layer)
+    if err:
+        return {"error": err}
+    poly_features, _ = _get_layer_snapshot(layer_store, polygon_layer)
+
+    if not poly_geoms:
+        return {"error": f"Layer '{polygon_layer}' has no valid polygon geometries"}
+
+    # Build spatial index on polygons
+    tree = _build_spatial_index(poly_geoms)
+
+    if lat is not None and lon is not None:
+        # Single point query
+        from shapely.geometry import Point
+        try:
+            pt = Point(float(lon), float(lat))
+        except (TypeError, ValueError):
+            return {"error": "lat and lon must be valid numbers"}
+        candidates = tree.query(pt)
+        for idx in candidates:
+            if poly_geoms[idx].contains(pt):
+                return {
+                    "found": True,
+                    "polygon": poly_features[idx].get("properties", {}),
+                    "polygon_index": int(idx),
+                }
+        return {"found": False, "message": "Point is not inside any polygon"}
+
+    elif point_layer:
+        # Multi-point query: for each point, find containing polygon
+        point_features, err = _get_layer_snapshot(layer_store, point_layer)
+        if err:
+            return {"error": err}
+        point_geoms, err = _get_layer_geometries(layer_store, point_layer)
+        if err:
+            return {"error": err}
+
+        result_features = []
+        for pt_geom, pt_feat in zip(point_geoms, point_features):
+            centroid = pt_geom.centroid  # works for any geometry
+            candidates = tree.query(centroid)
+            containing = None
+            for idx in candidates:
+                if poly_geoms[idx].contains(centroid):
+                    containing = poly_features[idx]
+                    break
+
+            # Merge point properties with containing polygon properties
+            props = dict(pt_feat.get("properties", {}))
+            if containing:
+                props["containing_polygon"] = containing.get("properties", {})
+                props["in_polygon"] = True
+            else:
+                props["in_polygon"] = False
+
+            result_features.append({
+                "type": "Feature",
+                "geometry": pt_feat.get("geometry"),
+                "properties": props
+            })
+
+        geojson = {"type": "FeatureCollection", "features": result_features}
+        inside_count = sum(1 for f in result_features if f["properties"].get("in_polygon"))
+        return {
+            "geojson": geojson,
+            "layer_name": output_name,
+            "total_points": len(result_features),
+            "inside": inside_count,
+            "outside": len(result_features) - inside_count,
+        }
+    else:
+        return {"error": "Provide lat/lon for single point or point_layer for batch query"}
+
+
+def handle_attribute_join(params: dict, layer_store: dict = None) -> dict:
+    """Join tabular data to a spatial layer by matching attribute."""
+    layer_name = params.get("layer_name")
+    join_data = params.get("join_data", [])
+    layer_key = params.get("layer_key")
+    data_key = params.get("data_key")
+    output_name = params.get("output_name", f"joined_{layer_name}")
+
+    if not layer_name:
+        return {"error": "layer_name is required"}
+    if not layer_key:
+        return {"error": "layer_key is required"}
+    if not data_key:
+        return {"error": "data_key is required"}
+    if not join_data:
+        return {"error": "join_data must be a non-empty array"}
+
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
+    if not features:
+        return {"error": f"Layer '{layer_name}' not found"}
+
+    # Build lookup from join data
+    lookup = {}
+    for item in join_data:
+        key_val = item.get(data_key)
+        if key_val is not None:
+            lookup[str(key_val)] = item
+
+    result_features = []
+    matched = 0
+    for feat in features:
+        props = dict(feat.get("properties", {}))
+        key_val = str(props.get(layer_key, ""))
+        if key_val in lookup:
+            # Merge join data into properties (prefix with "joined_")
+            for k, v in lookup[key_val].items():
+                if k != data_key:
+                    props[f"joined_{k}"] = v
+            matched += 1
+        result_features.append({
+            "type": "Feature",
+            "geometry": feat.get("geometry"),
+            "properties": props
+        })
+
+    geojson = {"type": "FeatureCollection", "features": result_features}
+    return {
+        "geojson": geojson,
+        "layer_name": output_name,
+        "total_features": len(result_features),
+        "matched": matched,
+        "unmatched": len(result_features) - matched,
+    }
+
+
+def handle_spatial_statistics(params: dict, layer_store: dict = None) -> dict:
+    """Compute spatial clustering statistics for point features."""
+    layer_name = params.get("layer_name")
+    method = params.get("method", "nearest_neighbor")
+
+    if not layer_name:
+        return {"error": "layer_name is required"}
+
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
+    if not features:
+        return {"error": f"Layer '{layer_name}' has no features"}
+
+    geoms, err = _get_layer_geometries(layer_store, layer_name)
+    if err:
+        return {"error": err}
+    if len(geoms) < 2:
+        return {"error": "Spatial statistics require at least 2 features"}
+
+    # Extract centroids as (lon, lat) for spatial operations
+    centroids = [g.centroid for g in geoms]
+
+    if method == "nearest_neighbor":
+        try:
+            from scipy.spatial import cKDTree
+        except ImportError:
+            return {"error": "scipy is required for nearest neighbor analysis. Install with: pip install scipy"}
+
+        import numpy as np
+
+        # Project to UTM for metric distances
+        coords_wgs84 = np.array([[c.x, c.y] for c in centroids])
+
+        # Use the first centroid to determine UTM zone
+        from nl_gis.geo_utils import estimate_utm_epsg, project_geometry
+        utm_epsg = estimate_utm_epsg(centroids[0].x, centroids[0].y)
+
+        from shapely.geometry import Point as ShapelyPoint
+        projected_coords = []
+        for c in centroids:
+            projected = project_geometry(ShapelyPoint(c.x, c.y), 4326, utm_epsg)
+            projected_coords.append([projected.x, projected.y])
+        projected_coords = np.array(projected_coords)
+
+        # Build KDTree on projected coordinates
+        tree = cKDTree(projected_coords)
+        # Find nearest neighbor for each point (k=2 because k=1 is the point itself)
+        distances, _ = tree.query(projected_coords, k=2)
+        nn_distances = distances[:, 1]  # second column = nearest neighbor
+
+        observed_mean = float(np.mean(nn_distances))
+        n = len(centroids)
+
+        # Calculate study area from convex hull of projected points
+        from shapely.geometry import MultiPoint
+        hull = MultiPoint([ShapelyPoint(p) for p in projected_coords]).convex_hull
+        area = hull.area
+
+        if area == 0:
+            return {"error": "All points are collinear or coincident; cannot compute NNI"}
+
+        # Expected mean nearest neighbor distance for random pattern
+        expected_mean = 0.5 * math.sqrt(area / n)
+
+        nni = observed_mean / expected_mean if expected_mean > 0 else float('inf')
+
+        if nni < 0.8:
+            interpretation = "clustered"
+        elif nni > 1.2:
+            interpretation = "dispersed"
+        else:
+            interpretation = "random"
+
+        return {
+            "method": "nearest_neighbor",
+            "nni": round(nni, 4),
+            "interpretation": interpretation,
+            "observed_mean_distance_m": round(observed_mean, 2),
+            "expected_mean_distance_m": round(expected_mean, 2),
+            "point_count": n,
+            "study_area_sq_m": round(area, 2),
+        }
+
+    elif method == "dbscan":
+        try:
+            from sklearn.cluster import DBSCAN
+        except ImportError:
+            return {"error": "scikit-learn is required for DBSCAN clustering. Install with: pip install scikit-learn"}
+
+        import numpy as np
+
+        eps = float(params.get("eps", 100))
+        min_samples = int(params.get("min_samples", 5))
+
+        # Project to UTM for metric distances
+        from nl_gis.geo_utils import estimate_utm_epsg, project_geometry
+        from shapely.geometry import Point as ShapelyPoint
+
+        utm_epsg = estimate_utm_epsg(centroids[0].x, centroids[0].y)
+
+        projected_coords = []
+        for c in centroids:
+            projected = project_geometry(ShapelyPoint(c.x, c.y), 4326, utm_epsg)
+            projected_coords.append([projected.x, projected.y])
+        projected_coords = np.array(projected_coords)
+
+        # Run DBSCAN
+        clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(projected_coords)
+        labels = clustering.labels_
+
+        # Build result features with cluster_id
+        # Filter features to match geoms (same filtering as _get_layer_geometries)
+        valid_features = []
+        for f in features:
+            geom = f.get("geometry")
+            if geom:
+                shapely_geom = _safe_geojson_to_shapely(geom)
+                if shapely_geom:
+                    valid_features.append(f)
+
+        result_features = []
+        for feat, label in zip(valid_features, labels):
+            props = dict(feat.get("properties", {}))
+            props["cluster_id"] = int(label)  # -1 = noise
+            result_features.append({
+                "type": "Feature",
+                "geometry": feat.get("geometry"),
+                "properties": props
+            })
+
+        n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+        noise_count = int(np.sum(labels == -1))
+
+        output_name = params.get("output_name", f"dbscan_{layer_name}")
+        geojson = {"type": "FeatureCollection", "features": result_features}
+
+        return {
+            "geojson": geojson,
+            "layer_name": output_name,
+            "method": "dbscan",
+            "n_clusters": n_clusters,
+            "noise_points": noise_count,
+            "total_points": len(result_features),
+            "eps_m": eps,
+            "min_samples": min_samples,
+        }
+
+    else:
+        return {"error": f"Unknown method: {method}. Valid: nearest_neighbor, dbscan"}

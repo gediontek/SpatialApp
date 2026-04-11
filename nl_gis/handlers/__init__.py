@@ -27,6 +27,7 @@ LAYER_PRODUCING_TOOLS = {
     "classify_landcover", "intersection", "difference",
     "symmetric_difference", "convex_hull", "centroid", "simplify",
     "bounding_box", "dissolve", "clip", "voronoi", "batch_geocode",
+    "point_in_polygon", "attribute_join", "spatial_statistics",
 }
 
 # Reuse OSM feature mappings from app.py
@@ -360,6 +361,9 @@ from nl_gis.handlers.analysis import (  # noqa: E402,F401
     handle_dissolve,
     handle_clip,
     handle_voronoi,
+    handle_point_in_polygon,
+    handle_attribute_join,
+    handle_spatial_statistics,
 )
 from nl_gis.handlers.layers import (  # noqa: E402,F401
     handle_style_layer,
@@ -449,6 +453,10 @@ def dispatch_tool(tool_name: str, params: dict, layer_store: dict = None) -> dic
         "dissolve": lambda p: handle_dissolve(p, layer_store),
         "clip": lambda p: handle_clip(p, layer_store),
         "voronoi": lambda p: handle_voronoi(p, layer_store),
+        # Advanced analysis tools
+        "point_in_polygon": lambda p: handle_point_in_polygon(p, layer_store),
+        "attribute_join": lambda p: handle_attribute_join(p, layer_store),
+        "spatial_statistics": lambda p: handle_spatial_statistics(p, layer_store),
     }
 
     if tool_name not in handlers:
