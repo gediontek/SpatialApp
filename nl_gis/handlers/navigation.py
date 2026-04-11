@@ -268,7 +268,7 @@ def handle_reverse_geocode(params: dict) -> dict:
         return result
     except Exception as e:
         logger.error("Reverse geocoding error: %s", e, exc_info=True)
-        return {"error": f"Reverse geocoding failed: {str(e)}"}
+        return {"error": "Reverse geocoding failed"}
 
 
 def handle_batch_geocode(params: dict, layer_store: dict = None) -> dict:

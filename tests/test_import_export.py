@@ -241,25 +241,23 @@ class TestExportLayer:
         assert "error" not in result
         assert result["format"] == "geojson"
 
-    def test_export_shapefile(self, layer_store):
+    def test_export_shapefile_returns_error(self, layer_store):
+        """Shapefile export is not supported via the chat tool handler."""
         result = dispatch_tool("export_layer", {
             "layer_name": "buildings",
             "format": "shapefile",
         }, layer_store)
-        assert "error" not in result
-        assert result["format"] == "shapefile"
-        assert result["file_path"].endswith(".shp")
-        assert os.path.exists(result["file_path"])
+        assert "error" in result
+        assert "GeoJSON" in result["error"]
 
-    def test_export_geopackage(self, layer_store):
+    def test_export_geopackage_returns_error(self, layer_store):
+        """GeoPackage export is not supported via the chat tool handler."""
         result = dispatch_tool("export_layer", {
             "layer_name": "buildings",
             "format": "geopackage",
         }, layer_store)
-        assert "error" not in result
-        assert result["format"] == "geopackage"
-        assert result["file_path"].endswith(".gpkg")
-        assert os.path.exists(result["file_path"])
+        assert "error" in result
+        assert "GeoJSON" in result["error"]
 
     def test_missing_layer_name(self, layer_store):
         result = dispatch_tool("export_layer", {}, layer_store)

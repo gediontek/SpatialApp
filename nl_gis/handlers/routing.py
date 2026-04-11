@@ -446,12 +446,12 @@ def handle_optimize_route(params: dict, layer_store: dict = None) -> dict:
     route_locations = [(vp.lat, vp.lon) for vp, _name in ordered_points]
     route_data = get_route(locations=route_locations, profile=profile if profile in ("driving", "walking", "cycling") else "driving")
 
-    # Also get route along original order for comparison
-    original_locations = [(vp.lat, vp.lon) for vp, _name in points]
-    original_route = get_route(locations=original_locations, profile=profile if profile in ("driving", "walking", "cycling") else "driving")
-
     if route_data is None:
         return {"error": "Could not calculate optimized route. Routing service may be unavailable."}
+
+    # Get route along original order for comparison (only after optimized route succeeds)
+    original_locations = [(vp.lat, vp.lon) for vp, _name in points]
+    original_route = get_route(locations=original_locations, profile=profile if profile in ("driving", "walking", "cycling") else "driving")
 
     # Build GeoJSON FeatureCollection
     features = [

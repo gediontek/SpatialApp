@@ -20,10 +20,10 @@ logger = logging.getLogger(__name__)
 
 # Tools that produce layers (used by chat.py for layer_add events)
 LAYER_PRODUCING_TOOLS = {
-    "geocode", "search_nearby", "buffer", "spatial_query",
-    "aggregate", "filter_layer", "fetch_osm", "merge_layers",
+    "search_nearby", "buffer", "spatial_query",
+    "filter_layer", "fetch_osm", "merge_layers",
     "import_layer", "import_csv", "import_wkt",
-    "find_route", "isochrone", "heatmap", "closest_facility", "optimize_route",
+    "find_route", "isochrone", "closest_facility", "optimize_route",
     "classify_landcover", "intersection", "difference",
     "symmetric_difference", "convex_hull", "centroid", "simplify",
     "bounding_box", "dissolve", "clip", "voronoi", "batch_geocode",

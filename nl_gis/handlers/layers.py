@@ -219,6 +219,7 @@ def handle_import_csv(params: dict, layer_store: dict = None) -> dict:
         return {"error": f"Column '{lon_col}' not found in CSV. Available columns: {', '.join(fieldnames)}"}
 
     features = []
+    skipped = 0
     for row in reader:
         try:
             lat = float(row[lat_col])
@@ -230,6 +231,7 @@ def handle_import_csv(params: dict, layer_store: dict = None) -> dict:
                 "properties": props,
             })
         except (KeyError, ValueError):
+            skipped += 1
             continue
 
     if not features:
@@ -248,7 +250,13 @@ def handle_import_csv(params: dict, layer_store: dict = None) -> dict:
         else:
             layer_store[layer_name] = geojson
 
-    return {"geojson": geojson, "layer_name": layer_name, "imported": len(features)}
+    return {
+        "geojson": geojson,
+        "layer_name": layer_name,
+        "imported": len(features),
+        "skipped": skipped,
+        "total_rows": len(features) + skipped,
+    }
 
 
 def handle_import_wkt(params: dict, layer_store: dict = None) -> dict:
@@ -311,43 +319,17 @@ def handle_export_layer(params: dict, layer_store: dict = None) -> dict:
 
     geojson_data = {"type": "FeatureCollection", "features": features}
 
-    if export_format == "geojson":
+    if export_format != "geojson":
         return {
-            "success": True,
-            "format": "geojson",
-            "layer_name": layer_name,
-            "feature_count": len(features),
-            "geojson_string": json_mod.dumps(geojson_data),
-            "description": f"Exported {len(features)} features from '{layer_name}' as GeoJSON",
+            "error": f"The chat tool only supports GeoJSON export. "
+                     f"For {export_format} export, use the /export_annotations HTTP endpoint.",
         }
 
-    # For shapefile/geopackage, use GeoPandas
-    import geopandas as gpd_mod
-    import tempfile
-    import os
-
-    try:
-        gdf = gpd_mod.GeoDataFrame.from_features(features)
-        if gdf.crs is None:
-            gdf.set_crs(epsg=4326, inplace=True)
-
-        export_dir = tempfile.mkdtemp(prefix="spatialapp_export_")
-
-        if export_format == "shapefile":
-            out_path = os.path.join(export_dir, f"{layer_name}.shp")
-            gdf.to_file(out_path, driver="ESRI Shapefile")
-        else:  # geopackage
-            out_path = os.path.join(export_dir, f"{layer_name}.gpkg")
-            gdf.to_file(out_path, driver="GPKG")
-
-        return {
-            "success": True,
-            "format": export_format,
-            "layer_name": layer_name,
-            "feature_count": len(features),
-            "file_path": out_path,
-            "description": f"Exported {len(features)} features from '{layer_name}' as {export_format}",
-        }
-    except Exception as e:
-        logger.error(f"Export error: {e}", exc_info=True)
-        return {"error": f"Export to {export_format} failed"}
+    return {
+        "success": True,
+        "format": "geojson",
+        "layer_name": layer_name,
+        "feature_count": len(features),
+        "geojson_string": json_mod.dumps(geojson_data),
+        "description": f"Exported {len(features)} features from '{layer_name}' as GeoJSON",
+    }

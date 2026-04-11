@@ -421,14 +421,18 @@ def _overlay_operation(params: dict, layer_store: dict, op_name: str) -> dict:
     if not geom_b.is_valid:
         geom_b = make_valid(geom_b)
 
-    if op_name == "intersection":
-        result = geom_a.intersection(geom_b)
-    elif op_name == "difference":
-        result = geom_a.difference(geom_b)
-    elif op_name == "symmetric_difference":
-        result = geom_a.symmetric_difference(geom_b)
-    else:
-        return {"error": f"Unknown overlay operation: {op_name}"}
+    try:
+        if op_name == "intersection":
+            result = geom_a.intersection(geom_b)
+        elif op_name == "difference":
+            result = geom_a.difference(geom_b)
+        elif op_name == "symmetric_difference":
+            result = geom_a.symmetric_difference(geom_b)
+        else:
+            return {"error": f"Unknown overlay operation: {op_name}"}
+    except Exception as e:
+        logger.error("Overlay %s failed: %s", op_name, e, exc_info=True)
+        return {"error": f"Overlay operation failed. The geometries may be incompatible."}
 
     # Handle empty result
     if result.is_empty:
@@ -775,8 +779,10 @@ def handle_clip(params: dict, layer_store: dict = None) -> dict:
 
 def handle_voronoi(params: dict, layer_store: dict = None) -> dict:
     """Generate Voronoi diagram from point features."""
-    from shapely.geometry import MultiPoint
+    from shapely.geometry import MultiPoint, box
     from shapely.ops import voronoi_diagram
+
+    MAX_VORONOI_POINTS = 5000
 
     layer_name = params.get("layer_name")
     output_name = params.get("output_name", f"voronoi_{layer_name}")
@@ -789,6 +795,9 @@ def handle_voronoi(params: dict, layer_store: dict = None) -> dict:
         return {"error": err}
     if not geoms:
         return {"error": f"Layer '{layer_name}' has no valid geometries"}
+
+    if len(geoms) > MAX_VORONOI_POINTS:
+        return {"error": f"Too many features ({len(geoms)}). Voronoi supports at most {MAX_VORONOI_POINTS} points."}
 
     # Extract point coordinates (use centroids for non-point geometries)
     points = []
@@ -808,11 +817,17 @@ def handle_voronoi(params: dict, layer_store: dict = None) -> dict:
         logger.error("Voronoi diagram generation failed", exc_info=True)
         return {"error": "Voronoi diagram generation failed"}
 
+    # Clip voronoi regions to the bounding box of input points (with small buffer)
+    bounds = multi_point.envelope.buffer(0.01)
+
     voronoi_features = []
     for geom in regions.geoms:
+        clipped = geom.intersection(bounds)
+        if clipped.is_empty:
+            continue
         voronoi_features.append({
             "type": "Feature",
-            "geometry": shapely_to_geojson(geom),
+            "geometry": shapely_to_geojson(clipped),
             "properties": {
                 "operation": "voronoi",
                 "source_layer": layer_name,
@@ -847,11 +862,19 @@ def handle_point_in_polygon(params: dict, layer_store: dict = None) -> dict:
     if not polygon_layer:
         return {"error": "polygon_layer is required"}
 
-    # Get polygon geometries + features
+    # Get polygon geometries + features (filtered in parallel to keep indices aligned)
     poly_geoms, err = _get_layer_geometries(layer_store, polygon_layer)
     if err:
         return {"error": err}
-    poly_features, _ = _get_layer_snapshot(layer_store, polygon_layer)
+    all_poly_features, _ = _get_layer_snapshot(layer_store, polygon_layer)
+    all_poly_features = all_poly_features or []
+    poly_features = []
+    for f in all_poly_features:
+        geom = f.get("geometry")
+        if geom:
+            shapely_geom = _safe_geojson_to_shapely(geom)
+            if shapely_geom:
+                poly_features.append(f)
 
     if not poly_geoms:
         return {"error": f"Layer '{polygon_layer}' has no valid polygon geometries"}
@@ -878,12 +901,21 @@ def handle_point_in_polygon(params: dict, layer_store: dict = None) -> dict:
 
     elif point_layer:
         # Multi-point query: for each point, find containing polygon
-        point_features, err = _get_layer_snapshot(layer_store, point_layer)
-        if err:
-            return {"error": err}
         point_geoms, err = _get_layer_geometries(layer_store, point_layer)
         if err:
             return {"error": err}
+        all_point_features, err = _get_layer_snapshot(layer_store, point_layer)
+        if err:
+            return {"error": err}
+        all_point_features = all_point_features or []
+        # Filter point features in parallel with point_geoms to keep indices aligned
+        point_features = []
+        for f in all_point_features:
+            geom = f.get("geometry")
+            if geom:
+                shapely_geom = _safe_geojson_to_shapely(geom)
+                if shapely_geom:
+                    point_features.append(f)
 
         result_features = []
         for pt_geom, pt_feat in zip(point_geoms, point_features):
@@ -1010,58 +1042,62 @@ def handle_spatial_statistics(params: dict, layer_store: dict = None) -> dict:
 
         import numpy as np
 
-        # Project to UTM for metric distances
-        coords_wgs84 = np.array([[c.x, c.y] for c in centroids])
+        try:
+            # Project to UTM for metric distances
+            coords_wgs84 = np.array([[c.x, c.y] for c in centroids])
 
-        # Use the first centroid to determine UTM zone
-        from nl_gis.geo_utils import estimate_utm_epsg, project_geometry
-        utm_epsg = estimate_utm_epsg(centroids[0].x, centroids[0].y)
+            # Use the first centroid to determine UTM zone
+            from nl_gis.geo_utils import estimate_utm_epsg, project_geometry
+            utm_epsg = estimate_utm_epsg(centroids[0].x, centroids[0].y)
 
-        from shapely.geometry import Point as ShapelyPoint
-        projected_coords = []
-        for c in centroids:
-            projected = project_geometry(ShapelyPoint(c.x, c.y), 4326, utm_epsg)
-            projected_coords.append([projected.x, projected.y])
-        projected_coords = np.array(projected_coords)
+            from shapely.geometry import Point as ShapelyPoint
+            projected_coords = []
+            for c in centroids:
+                projected = project_geometry(ShapelyPoint(c.x, c.y), 4326, utm_epsg)
+                projected_coords.append([projected.x, projected.y])
+            projected_coords = np.array(projected_coords)
 
-        # Build KDTree on projected coordinates
-        tree = cKDTree(projected_coords)
-        # Find nearest neighbor for each point (k=2 because k=1 is the point itself)
-        distances, _ = tree.query(projected_coords, k=2)
-        nn_distances = distances[:, 1]  # second column = nearest neighbor
+            # Build KDTree on projected coordinates
+            tree = cKDTree(projected_coords)
+            # Find nearest neighbor for each point (k=2 because k=1 is the point itself)
+            distances, _ = tree.query(projected_coords, k=2)
+            nn_distances = distances[:, 1]  # second column = nearest neighbor
 
-        observed_mean = float(np.mean(nn_distances))
-        n = len(centroids)
+            observed_mean = float(np.mean(nn_distances))
+            n = len(centroids)
 
-        # Calculate study area from convex hull of projected points
-        from shapely.geometry import MultiPoint
-        hull = MultiPoint([ShapelyPoint(p) for p in projected_coords]).convex_hull
-        area = hull.area
+            # Calculate study area from convex hull of projected points
+            from shapely.geometry import MultiPoint
+            hull = MultiPoint([ShapelyPoint(p) for p in projected_coords]).convex_hull
+            area = hull.area
 
-        if area == 0:
-            return {"error": "All points are collinear or coincident; cannot compute NNI"}
+            if area == 0:
+                return {"error": "All points are collinear or coincident; cannot compute NNI"}
 
-        # Expected mean nearest neighbor distance for random pattern
-        expected_mean = 0.5 * math.sqrt(area / n)
+            # Expected mean nearest neighbor distance for random pattern
+            expected_mean = 0.5 * math.sqrt(area / n)
 
-        nni = observed_mean / expected_mean if expected_mean > 0 else float('inf')
+            nni = observed_mean / expected_mean if expected_mean > 0 else float('inf')
 
-        if nni < 0.8:
-            interpretation = "clustered"
-        elif nni > 1.2:
-            interpretation = "dispersed"
-        else:
-            interpretation = "random"
+            if nni < 0.8:
+                interpretation = "clustered"
+            elif nni > 1.2:
+                interpretation = "dispersed"
+            else:
+                interpretation = "random"
 
-        return {
-            "method": "nearest_neighbor",
-            "nni": round(nni, 4),
-            "interpretation": interpretation,
-            "observed_mean_distance_m": round(observed_mean, 2),
-            "expected_mean_distance_m": round(expected_mean, 2),
-            "point_count": n,
-            "study_area_sq_m": round(area, 2),
-        }
+            return {
+                "method": "nearest_neighbor",
+                "nni": round(nni, 4),
+                "interpretation": interpretation,
+                "observed_mean_distance_m": round(observed_mean, 2),
+                "expected_mean_distance_m": round(expected_mean, 2),
+                "point_count": n,
+                "study_area_sq_m": round(area, 2),
+            }
+        except Exception as e:
+            logger.error("Spatial statistics failed: %s", e, exc_info=True)
+            return {"error": "Spatial statistics computation failed"}
 
     elif method == "dbscan":
         try:
@@ -1071,8 +1107,15 @@ def handle_spatial_statistics(params: dict, layer_store: dict = None) -> dict:
 
         import numpy as np
 
-        eps = float(params.get("eps", 100))
-        min_samples = int(params.get("min_samples", 5))
+        try:
+            eps = float(params.get("eps", 100))
+            min_samples = int(params.get("min_samples", 5))
+        except (ValueError, TypeError):
+            return {"error": "eps must be a number and min_samples must be an integer"}
+        if eps <= 0:
+            return {"error": "eps must be positive"}
+        if min_samples < 1:
+            return {"error": "min_samples must be at least 1"}
 
         # Project to UTM for metric distances
         from nl_gis.geo_utils import estimate_utm_epsg, project_geometry
