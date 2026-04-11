@@ -1,0 +1,16 @@
+version: '3.8'
+services:
+  web:
+    build: .
+    ports:
+      - "${PORT:-5000}:5000"
+    volumes:
+      - app-data:/app/data
+      - app-cache:/app/cache
+    env_file:
+      - .env
+    restart: unless-stopped
+
+volumes:
+  app-data:
+  app-cache:
