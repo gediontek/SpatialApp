@@ -1376,6 +1376,205 @@ def get_tool_definitions() -> list:
                 }
             }
         },
+        # ---- Coordinate Tools (Milestone 5.1) ----
+        {
+            "name": "reproject_layer",
+            "description": "Add CRS metadata to a layer. Display stays in WGS84, but adds source_crs property to all features indicating the original coordinate reference system. Use when the user says 'this layer is in EPSG:32632' or wants to tag a layer's CRS.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Layer to add CRS metadata to. Example: 'buildings'"
+                    },
+                    "from_crs": {
+                        "type": "integer",
+                        "description": "Source EPSG code. Example: 32632 for UTM zone 32N"
+                    },
+                    "to_crs": {
+                        "type": "integer",
+                        "description": "Target EPSG code (default 4326 WGS84). Example: 4326",
+                        "default": 4326
+                    },
+                    "output_name": {
+                        "type": "string",
+                        "description": "Name for the output layer. Example: 'buildings_wgs84'"
+                    }
+                },
+                "required": ["layer_name", "from_crs"]
+            }
+        },
+        {
+            "name": "detect_crs",
+            "description": "Heuristically detect the coordinate reference system of a layer by examining coordinate ranges. If all coordinates fall within [-180,180] x [-90,90], reports WGS84 (EPSG:4326). If coordinates exceed these ranges, reports likely projected CRS.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Layer to detect CRS for. Example: 'imported_data'"
+                    }
+                },
+                "required": ["layer_name"]
+            }
+        },
+        # ---- Advanced Network (Milestone 5.2) ----
+        {
+            "name": "od_matrix",
+            "description": "Compute an origin-destination cost matrix. Returns distances (in meters) between all origin-destination pairs. Uses geodesic distance calculations. Use for 'distance matrix from warehouses to customers', 'travel costs between locations'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "origins": {
+                        "type": "array",
+                        "description": "Array of origin points. Each can have {lat, lon} or {location}.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "lat": {"type": "number"},
+                                "lon": {"type": "number"},
+                                "location": {"type": "string"}
+                            }
+                        }
+                    },
+                    "destinations": {
+                        "type": "array",
+                        "description": "Array of destination points. Each can have {lat, lon} or {location}.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "lat": {"type": "number"},
+                                "lon": {"type": "number"},
+                                "location": {"type": "string"}
+                            }
+                        }
+                    },
+                    "profile": {
+                        "type": "string",
+                        "description": "Travel profile (used for labeling; distances are geodesic).",
+                        "enum": ["driving", "walking", "cycling"],
+                        "default": "driving"
+                    }
+                },
+                "required": ["origins", "destinations"]
+            }
+        },
+        # ---- Geometry Editing (Milestone 5.3) ----
+        {
+            "name": "split_feature",
+            "description": "Split a polygon feature by a line. Uses shapely.ops.split to divide a polygon into two or more parts along the given line. Use for 'cut this parcel in half', 'split along this road'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Layer containing the polygon to split. Example: 'parcels'"
+                    },
+                    "feature_index": {
+                        "type": "integer",
+                        "description": "Index of the feature to split (0-based). Example: 0 for the first feature"
+                    },
+                    "split_line": {
+                        "type": "object",
+                        "description": "GeoJSON LineString geometry to split by. Example: {\"type\": \"LineString\", \"coordinates\": [[0,0],[1,1]]}"
+                    },
+                    "output_name": {
+                        "type": "string",
+                        "description": "Name for the output layer. Example: 'split_parcels'"
+                    }
+                },
+                "required": ["layer_name", "feature_index", "split_line"]
+            }
+        },
+        {
+            "name": "merge_features",
+            "description": "Merge features within a layer by attribute value. Groups features that share the same value for a given attribute and unions their geometries. Simpler than dissolve — just unions geometries with matching attribute values. Use for 'merge polygons by zone type', 'combine features by category'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Layer containing features to merge. Example: 'zones'"
+                    },
+                    "by": {
+                        "type": "string",
+                        "description": "Attribute name to group by. Example: 'zone_type'"
+                    },
+                    "output_name": {
+                        "type": "string",
+                        "description": "Name for the output layer. Example: 'merged_zones'"
+                    }
+                },
+                "required": ["layer_name", "by"]
+            }
+        },
+        {
+            "name": "extract_vertices",
+            "description": "Convert polygon or line boundaries to a point layer. Extracts all vertex coordinates from geometries and creates a point feature for each. Use for 'show polygon corners', 'extract boundary points'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Layer to extract vertices from. Example: 'buildings'"
+                    },
+                    "output_name": {
+                        "type": "string",
+                        "description": "Name for the output point layer. Example: 'building_vertices'"
+                    }
+                },
+                "required": ["layer_name"]
+            }
+        },
+        # ---- Temporal & Attribute (Milestone 5.4) ----
+        {
+            "name": "temporal_filter",
+            "description": "Filter features by a date attribute. Keeps features whose date value falls within the specified range. Use for 'show events after 2023-01-01', 'filter records between two dates'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Layer to filter. Example: 'events'"
+                    },
+                    "date_attribute": {
+                        "type": "string",
+                        "description": "Name of the date attribute in feature properties. Example: 'event_date'"
+                    },
+                    "after": {
+                        "type": "string",
+                        "description": "ISO date string for lower bound (inclusive). Example: '2023-01-01'"
+                    },
+                    "before": {
+                        "type": "string",
+                        "description": "ISO date string for upper bound (inclusive). Example: '2023-12-31'"
+                    },
+                    "output_name": {
+                        "type": "string",
+                        "description": "Name for the output layer. Example: 'events_2023'"
+                    }
+                },
+                "required": ["layer_name", "date_attribute"]
+            }
+        },
+        {
+            "name": "attribute_statistics",
+            "description": "Compute detailed statistics for a numeric attribute in a layer. Returns min, max, mean, median, standard deviation, percentiles (25th/50th/75th), and a histogram with 10 bins. Use for 'statistics for population', 'distribution of building heights'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {
+                        "type": "string",
+                        "description": "Layer to analyze. Example: 'buildings'"
+                    },
+                    "attribute": {
+                        "type": "string",
+                        "description": "Numeric attribute to compute statistics for. Example: 'height'"
+                    }
+                },
+                "required": ["layer_name", "attribute"]
+            }
+        },
         # ---- Code Execution (Fallback) ----
         {
             "name": "execute_code",

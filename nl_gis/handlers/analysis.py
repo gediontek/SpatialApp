@@ -5,8 +5,11 @@ import json
 import logging
 import math
 import time
+from collections import defaultdict
+from datetime import datetime
 
-from shapely.ops import unary_union
+from shapely.geometry import mapping, shape, Point
+from shapely.ops import unary_union, split
 
 from config import Config
 from nl_gis.geo_utils import (
@@ -18,6 +21,7 @@ from nl_gis.geo_utils import (
     buffer_geometry,
     project_to_utm,
     project_to_wgs84,
+    project_geometry,
 )
 from nl_gis.handlers import (
     _resolve_point_from_object,
@@ -2110,4 +2114,473 @@ def handle_clean_layer(params: dict, layer_store: dict = None) -> dict:
             f"trimmed {whitespace_trimmed} whitespace values. "
             f"{len(cleaned)}/{original_count} features remain."
         ),
+    }
+
+
+# ============================================================
+# Milestone 5.1: Coordinate Tools
+# ============================================================
+
+def handle_reproject_layer(params: dict, layer_store: dict = None) -> dict:
+    """Transform layer CRS metadata. Display stays WGS84, adds source_crs property."""
+    layer_name = params.get("layer_name")
+    from_crs = params.get("from_crs")
+    to_crs = params.get("to_crs", 4326)
+    output_name = params.get("output_name", f"reprojected_{layer_name}")
+
+    if not layer_name:
+        return {"error": "layer_name is required"}
+    if from_crs is None:
+        return {"error": "from_crs (EPSG code) is required"}
+
+    try:
+        from_crs = int(from_crs)
+        to_crs = int(to_crs)
+    except (ValueError, TypeError):
+        return {"error": "from_crs and to_crs must be integer EPSG codes"}
+
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
+    if not features:
+        return {"error": f"Layer '{layer_name}' has no features"}
+
+    reprojected_features = []
+    for f in features:
+        new_f = {
+            "type": "Feature",
+            "geometry": f.get("geometry"),
+            "properties": dict(f.get("properties", {})),
+        }
+        new_f["properties"]["source_crs"] = f"EPSG:{from_crs}"
+        new_f["properties"]["display_crs"] = f"EPSG:{to_crs}"
+
+        # If from_crs != to_crs and from_crs != 4326, actually reproject geometry
+        if from_crs != to_crs and f.get("geometry"):
+            try:
+                geom = geojson_to_shapely(f["geometry"])
+                reprojected = project_geometry(geom, from_crs, to_crs)
+                new_f["geometry"] = shapely_to_geojson(reprojected)
+            except Exception:
+                logger.warning("Failed to reproject feature, keeping original", exc_info=True)
+
+        reprojected_features.append(new_f)
+
+    result_geojson = {"type": "FeatureCollection", "features": reprojected_features}
+
+    return {
+        "geojson": result_geojson,
+        "layer_name": output_name,
+        "feature_count": len(reprojected_features),
+        "from_crs": f"EPSG:{from_crs}",
+        "to_crs": f"EPSG:{to_crs}",
+    }
+
+
+def handle_detect_crs(params: dict, layer_store: dict = None) -> dict:
+    """Heuristic CRS detection from coordinate ranges."""
+    layer_name = params.get("layer_name")
+    if not layer_name:
+        return {"error": "layer_name is required"}
+
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
+    if not features:
+        return {"error": f"Layer '{layer_name}' has no features"}
+
+    all_x = []
+    all_y = []
+    for f in features:
+        geom = f.get("geometry")
+        if not geom:
+            continue
+        try:
+            shapely_geom = geojson_to_shapely(geom)
+            bounds = shapely_geom.bounds  # (minx, miny, maxx, maxy)
+            all_x.extend([bounds[0], bounds[2]])
+            all_y.extend([bounds[1], bounds[3]])
+        except Exception:
+            continue
+
+    if not all_x:
+        return {"error": "No valid geometries found to detect CRS"}
+
+    min_x, max_x = min(all_x), max(all_x)
+    min_y, max_y = min(all_y), max(all_y)
+
+    # Heuristic: WGS84 if all coords in [-180,180] x [-90,90]
+    if -180 <= min_x <= 180 and -180 <= max_x <= 180 and -90 <= min_y <= 90 and -90 <= max_y <= 90:
+        detected_crs = "EPSG:4326"
+        confidence = "high"
+        description = "Coordinates are within WGS84 geographic range (longitude [-180,180], latitude [-90,90])"
+    else:
+        detected_crs = "unknown_projected"
+        confidence = "low"
+        description = (
+            f"Coordinates exceed geographic range (x: {min_x:.1f} to {max_x:.1f}, "
+            f"y: {min_y:.1f} to {max_y:.1f}). Likely a projected CRS (e.g., UTM, State Plane)."
+        )
+
+    return {
+        "layer_name": layer_name,
+        "detected_crs": detected_crs,
+        "confidence": confidence,
+        "description": description,
+        "coordinate_ranges": {
+            "x_min": round(min_x, 6),
+            "x_max": round(max_x, 6),
+            "y_min": round(min_y, 6),
+            "y_max": round(max_y, 6),
+        },
+        "feature_count": len(features),
+    }
+
+
+# ============================================================
+# Milestone 5.3: Geometry Editing
+# ============================================================
+
+def handle_split_feature(params: dict, layer_store: dict = None) -> dict:
+    """Split a polygon by a line using shapely.ops.split."""
+    layer_name = params.get("layer_name")
+    feature_index = params.get("feature_index")
+    split_line = params.get("split_line")
+    output_name = params.get("output_name", f"split_{layer_name}")
+
+    if not layer_name:
+        return {"error": "layer_name is required"}
+    if feature_index is None:
+        return {"error": "feature_index is required"}
+    if not split_line:
+        return {"error": "split_line (GeoJSON LineString) is required"}
+
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
+    if not features:
+        return {"error": f"Layer '{layer_name}' has no features"}
+
+    try:
+        feature_index = int(feature_index)
+    except (ValueError, TypeError):
+        return {"error": "feature_index must be an integer"}
+
+    if feature_index < 0 or feature_index >= len(features):
+        return {"error": f"feature_index {feature_index} out of range (0-{len(features)-1})"}
+
+    target_feature = features[feature_index]
+    target_geom = target_feature.get("geometry")
+    if not target_geom:
+        return {"error": "Target feature has no geometry"}
+
+    try:
+        shapely_target = geojson_to_shapely(target_geom)
+    except Exception:
+        return {"error": "Failed to parse target feature geometry"}
+
+    try:
+        shapely_line = geojson_to_shapely(split_line)
+    except Exception:
+        return {"error": "Failed to parse split_line geometry"}
+
+    if shapely_line.geom_type != "LineString":
+        return {"error": f"split_line must be a LineString, got {shapely_line.geom_type}"}
+
+    try:
+        result_geoms = split(shapely_target, shapely_line)
+    except Exception as exc:
+        logger.error("Split operation failed", exc_info=True)
+        return {"error": "Split operation failed. Ensure the line crosses the polygon."}
+
+    if len(result_geoms.geoms) < 2:
+        return {"error": "Split did not produce multiple parts. Ensure the line fully crosses the polygon."}
+
+    # Build result: other features unchanged, split feature replaced by parts
+    result_features = []
+    for i, f in enumerate(features):
+        if i == feature_index:
+            for j, part in enumerate(result_geoms.geoms):
+                new_props = dict(target_feature.get("properties", {}))
+                new_props["split_part"] = j
+                result_features.append({
+                    "type": "Feature",
+                    "geometry": shapely_to_geojson(part),
+                    "properties": new_props,
+                })
+        else:
+            result_features.append(f)
+
+    result_geojson = {"type": "FeatureCollection", "features": result_features}
+
+    return {
+        "geojson": result_geojson,
+        "layer_name": output_name,
+        "feature_count": len(result_features),
+        "split_into": len(result_geoms.geoms),
+    }
+
+
+def handle_merge_features(params: dict, layer_store: dict = None) -> dict:
+    """Merge features within a layer by attribute value."""
+    layer_name = params.get("layer_name")
+    by_attr = params.get("by")
+    output_name = params.get("output_name", f"merged_{layer_name}")
+
+    if not layer_name:
+        return {"error": "layer_name is required"}
+    if not by_attr:
+        return {"error": "'by' attribute name is required"}
+
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
+    if not features:
+        return {"error": f"Layer '{layer_name}' has no features"}
+
+    # Check attribute exists in at least one feature
+    attr_found = any(by_attr in (f.get("properties") or {}) for f in features)
+    if not attr_found:
+        available = set()
+        for f in features:
+            available.update((f.get("properties") or {}).keys())
+        return {"error": f"Attribute '{by_attr}' not found. Available: {', '.join(sorted(available))}"}
+
+    # Group features by attribute value
+    groups = defaultdict(list)
+    for f in features:
+        val = (f.get("properties") or {}).get(by_attr)
+        groups[val].append(f)
+
+    merged_features = []
+    for val, group_features in groups.items():
+        geoms = []
+        for f in group_features:
+            g = f.get("geometry")
+            if g:
+                sg = _safe_geojson_to_shapely(g)
+                if sg:
+                    geoms.append(sg)
+
+        if not geoms:
+            continue
+
+        merged_geom = unary_union(geoms)
+        merged_features.append({
+            "type": "Feature",
+            "geometry": shapely_to_geojson(merged_geom),
+            "properties": {by_attr: val, "merged_count": len(group_features)},
+        })
+
+    result_geojson = {"type": "FeatureCollection", "features": merged_features}
+
+    return {
+        "geojson": result_geojson,
+        "layer_name": output_name,
+        "feature_count": len(merged_features),
+        "grouped_by": by_attr,
+        "original_count": len(features),
+    }
+
+
+def handle_extract_vertices(params: dict, layer_store: dict = None) -> dict:
+    """Convert polygon/line boundaries to a point layer."""
+    layer_name = params.get("layer_name")
+    output_name = params.get("output_name", f"vertices_{layer_name}")
+
+    if not layer_name:
+        return {"error": "layer_name is required"}
+
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
+    if not features:
+        return {"error": f"Layer '{layer_name}' has no features"}
+
+    point_features = []
+    for feat_idx, f in enumerate(features):
+        geom = f.get("geometry")
+        if not geom:
+            continue
+        try:
+            shapely_geom = geojson_to_shapely(geom)
+        except Exception:
+            continue
+
+        # Extract all coordinates
+        if hasattr(shapely_geom, 'exterior'):
+            # Polygon
+            coords = list(shapely_geom.exterior.coords)
+        elif hasattr(shapely_geom, 'coords'):
+            # LineString or Point
+            coords = list(shapely_geom.coords)
+        elif hasattr(shapely_geom, 'geoms'):
+            # Multi* or GeometryCollection
+            coords = []
+            for sub_geom in shapely_geom.geoms:
+                if hasattr(sub_geom, 'exterior'):
+                    coords.extend(sub_geom.exterior.coords)
+                elif hasattr(sub_geom, 'coords'):
+                    coords.extend(sub_geom.coords)
+        else:
+            continue
+
+        for vert_idx, coord in enumerate(coords):
+            point_features.append({
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [coord[0], coord[1]]},
+                "properties": {
+                    "source_feature": feat_idx,
+                    "vertex_index": vert_idx,
+                },
+            })
+
+    result_geojson = {"type": "FeatureCollection", "features": point_features}
+
+    return {
+        "geojson": result_geojson,
+        "layer_name": output_name,
+        "feature_count": len(point_features),
+        "source_features": len(features),
+    }
+
+
+# ============================================================
+# Milestone 5.4: Temporal & Attribute
+# ============================================================
+
+def handle_temporal_filter(params: dict, layer_store: dict = None) -> dict:
+    """Filter features by date attribute."""
+    layer_name = params.get("layer_name")
+    date_attribute = params.get("date_attribute")
+    after_str = params.get("after")
+    before_str = params.get("before")
+    output_name = params.get("output_name", f"filtered_{layer_name}")
+
+    if not layer_name:
+        return {"error": "layer_name is required"}
+    if not date_attribute:
+        return {"error": "date_attribute is required"}
+    if not after_str and not before_str:
+        return {"error": "At least one of 'after' or 'before' is required"}
+
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
+    if not features:
+        return {"error": f"Layer '{layer_name}' has no features"}
+
+    # Parse boundary dates
+    after_dt = None
+    before_dt = None
+    try:
+        if after_str:
+            after_dt = datetime.fromisoformat(after_str)
+        if before_str:
+            before_dt = datetime.fromisoformat(before_str)
+    except ValueError as e:
+        return {"error": f"Invalid date format (use ISO format, e.g., '2023-01-01'): {e}"}
+
+    filtered = []
+    skipped = 0
+    for f in features:
+        props = f.get("properties") or {}
+        date_val = props.get(date_attribute)
+        if date_val is None:
+            skipped += 1
+            continue
+
+        try:
+            if isinstance(date_val, str):
+                feat_dt = datetime.fromisoformat(date_val)
+            else:
+                skipped += 1
+                continue
+        except ValueError:
+            skipped += 1
+            continue
+
+        if after_dt and feat_dt < after_dt:
+            continue
+        if before_dt and feat_dt > before_dt:
+            continue
+
+        filtered.append(f)
+
+    result_geojson = {"type": "FeatureCollection", "features": filtered}
+
+    return {
+        "geojson": result_geojson,
+        "layer_name": output_name,
+        "feature_count": len(filtered),
+        "original_count": len(features),
+        "skipped_no_date": skipped,
+        "date_attribute": date_attribute,
+        "after": after_str,
+        "before": before_str,
+    }
+
+
+def handle_attribute_statistics(params: dict, layer_store: dict = None) -> dict:
+    """Compute detailed statistics for a numeric attribute."""
+    import numpy as np
+
+    layer_name = params.get("layer_name")
+    attribute = params.get("attribute")
+
+    if not layer_name:
+        return {"error": "layer_name is required"}
+    if not attribute:
+        return {"error": "attribute is required"}
+
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
+    if not features:
+        return {"error": f"Layer '{layer_name}' has no features"}
+
+    values = []
+    non_numeric = 0
+    for f in features:
+        props = f.get("properties") or {}
+        val = props.get(attribute)
+        if val is None:
+            continue
+        try:
+            values.append(float(val))
+        except (ValueError, TypeError):
+            non_numeric += 1
+
+    if not values:
+        return {"error": f"No numeric values found for attribute '{attribute}'"}
+
+    arr = np.array(values)
+    p25, p50, p75 = np.percentile(arr, [25, 50, 75]).tolist()
+
+    # Histogram with 10 bins
+    hist_counts, hist_edges = np.histogram(arr, bins=10)
+    histogram = []
+    for i in range(len(hist_counts)):
+        histogram.append({
+            "bin_min": round(float(hist_edges[i]), 4),
+            "bin_max": round(float(hist_edges[i + 1]), 4),
+            "count": int(hist_counts[i]),
+        })
+
+    return {
+        "layer_name": layer_name,
+        "attribute": attribute,
+        "count": len(values),
+        "non_numeric_skipped": non_numeric,
+        "min": round(float(np.min(arr)), 4),
+        "max": round(float(np.max(arr)), 4),
+        "mean": round(float(np.mean(arr)), 4),
+        "median": round(float(np.median(arr)), 4),
+        "std": round(float(np.std(arr, ddof=1)) if len(values) > 1 else 0.0, 4),
+        "percentiles": {
+            "25": round(p25, 4),
+            "50": round(p50, 4),
+            "75": round(p75, 4),
+        },
+        "histogram": histogram,
     }

@@ -108,6 +108,20 @@ Routing:
 - find_route: Use when the user asks for directions or a route between locations.
 - isochrone: Use when the user asks "what can I reach in X minutes?"
 - service_area: Use when the user asks about multi-facility coverage, reachability zones, or service gaps. Accepts a facility layer or coordinate list, computes isochrones, and unions into a coverage polygon. Use for "show hospital coverage", "find areas within 15 min of any fire station".
+- od_matrix: Use when the user asks for a distance matrix between origins and destinations. Returns pairwise geodesic distances. Use for "distance matrix from warehouses to stores", "travel costs between locations".
+
+Coordinate tools:
+- reproject_layer: Use to add CRS metadata to a layer or reproject coordinates. Display stays WGS84. Use for "this layer is in UTM", "tag CRS".
+- detect_crs: Use to detect the coordinate reference system of a layer by examining coordinate ranges.
+
+Geometry editing:
+- split_feature: Use to split a polygon by a line. Use for "cut this parcel in half", "split along a line".
+- merge_features: Use to merge features by attribute value. Groups features sharing the same attribute and unions geometries. Use for "merge by zone type".
+- extract_vertices: Use to convert polygon/line boundaries to a point layer. Use for "show polygon corners", "extract boundary points".
+
+Temporal & attribute:
+- temporal_filter: Use to filter features by a date attribute. Use for "show events after 2023-01-01", "filter by date range".
+- attribute_statistics: Use to compute detailed statistics (min, max, mean, median, std, percentiles, histogram) for a numeric attribute. Use for "statistics for population", "distribution of heights".
 
 Spatial analysis:
 - interpolate: Use when the user wants to create a contour surface or interpolation from point values. Requires a point layer with a numeric attribute. Use for "interpolate temperature", "create elevation contours", "show pollution gradient".

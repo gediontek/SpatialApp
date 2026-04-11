@@ -31,6 +31,8 @@ LAYER_PRODUCING_TOOLS = {
     "point_in_polygon", "attribute_join", "spatial_statistics",
     "hot_spot_analysis", "execute_code",
     "interpolate", "repair_topology", "service_area",
+    "reproject_layer", "split_feature", "merge_features",
+    "extract_vertices", "temporal_filter",
 }
 
 # Reuse OSM feature mappings from app.py
@@ -375,6 +377,13 @@ from nl_gis.handlers.analysis import (  # noqa: E402,F401
     handle_describe_layer,
     handle_detect_duplicates,
     handle_clean_layer,
+    handle_reproject_layer,
+    handle_detect_crs,
+    handle_split_feature,
+    handle_merge_features,
+    handle_extract_vertices,
+    handle_temporal_filter,
+    handle_attribute_statistics,
 )
 from nl_gis.handlers.layers import (  # noqa: E402,F401
     handle_style_layer,
@@ -403,6 +412,7 @@ from nl_gis.handlers.routing import (  # noqa: E402,F401
     handle_closest_facility,
     handle_optimize_route,
     handle_service_area,
+    handle_od_matrix,
 )
 
 
@@ -486,6 +496,15 @@ def dispatch_tool(tool_name: str, params: dict, layer_store: dict = None) -> dic
         "describe_layer": lambda p: handle_describe_layer(p, layer_store),
         "detect_duplicates": lambda p: handle_detect_duplicates(p, layer_store),
         "clean_layer": lambda p: handle_clean_layer(p, layer_store),
+        # Missing capabilities (Milestone 5)
+        "reproject_layer": lambda p: handle_reproject_layer(p, layer_store),
+        "detect_crs": lambda p: handle_detect_crs(p, layer_store),
+        "od_matrix": lambda p: handle_od_matrix(p, layer_store),
+        "split_feature": lambda p: handle_split_feature(p, layer_store),
+        "merge_features": lambda p: handle_merge_features(p, layer_store),
+        "extract_vertices": lambda p: handle_extract_vertices(p, layer_store),
+        "temporal_filter": lambda p: handle_temporal_filter(p, layer_store),
+        "attribute_statistics": lambda p: handle_attribute_statistics(p, layer_store),
     }
 
     if tool_name not in handlers:

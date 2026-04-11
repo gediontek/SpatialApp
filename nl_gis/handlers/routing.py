@@ -1,4 +1,4 @@
-"""Routing/network handlers: find route, isochrone, heatmap, closest facility, optimize route."""
+"""Routing/network handlers: find route, isochrone, heatmap, closest facility, optimize route, OD matrix."""
 
 import logging
 
@@ -804,3 +804,75 @@ def handle_service_area(params: dict, layer_store: dict = None) -> dict:
         result["gap_area_sq_km"] = gap_area_sq_km
 
     return result
+
+
+def handle_od_matrix(params: dict, layer_store: dict = None) -> dict:
+    """Compute origin-destination cost matrix using geodesic distances."""
+    origins_raw = params.get("origins", [])
+    destinations_raw = params.get("destinations", [])
+    profile = params.get("profile", "driving")
+
+    if not origins_raw:
+        return {"error": "origins array is required and must not be empty"}
+    if not destinations_raw:
+        return {"error": "destinations array is required and must not be empty"}
+
+    MAX_POINTS = 50
+    if len(origins_raw) > MAX_POINTS or len(destinations_raw) > MAX_POINTS:
+        return {"error": f"Maximum {MAX_POINTS} origins and {MAX_POINTS} destinations allowed"}
+
+    # Resolve origins
+    origin_points = []
+    for i, o in enumerate(origins_raw):
+        if "lat" in o and "lon" in o:
+            try:
+                vp = ValidatedPoint(lat=float(o["lat"]), lon=float(o["lon"]))
+                origin_points.append(vp)
+            except (ValueError, TypeError) as e:
+                return {"error": f"Invalid origin {i}: {e}"}
+        elif "location" in o:
+            from nl_gis.handlers.navigation import handle_geocode
+            result = handle_geocode({"query": o["location"]})
+            if "error" in result:
+                return {"error": f"Could not geocode origin {i} '{o['location']}': {result['error']}"}
+            origin_points.append(ValidatedPoint(lat=result["lat"], lon=result["lon"]))
+        else:
+            return {"error": f"Origin {i} must have lat/lon or location"}
+
+    # Resolve destinations
+    dest_points = []
+    for i, d in enumerate(destinations_raw):
+        if "lat" in d and "lon" in d:
+            try:
+                vp = ValidatedPoint(lat=float(d["lat"]), lon=float(d["lon"]))
+                dest_points.append(vp)
+            except (ValueError, TypeError) as e:
+                return {"error": f"Invalid destination {i}: {e}"}
+        elif "location" in d:
+            from nl_gis.handlers.navigation import handle_geocode
+            result = handle_geocode({"query": d["location"]})
+            if "error" in result:
+                return {"error": f"Could not geocode destination {i} '{d['location']}': {result['error']}"}
+            dest_points.append(ValidatedPoint(lat=result["lat"], lon=result["lon"]))
+        else:
+            return {"error": f"Destination {i} must have lat/lon or location"}
+
+    # Compute pairwise geodesic distances
+    matrix = []
+    for o_idx, origin in enumerate(origin_points):
+        row = []
+        for d_idx, dest in enumerate(dest_points):
+            dist = geodesic_distance(origin, dest)
+            row.append(round(dist, 1))
+        matrix.append(row)
+
+    return {
+        "matrix": matrix,
+        "origins_count": len(origin_points),
+        "destinations_count": len(dest_points),
+        "profile": profile,
+        "unit": "meters",
+        "method": "geodesic",
+        "origins": [{"lat": p.lat, "lon": p.lon} for p in origin_points],
+        "destinations": [{"lat": p.lat, "lon": p.lon} for p in dest_points],
+    }
