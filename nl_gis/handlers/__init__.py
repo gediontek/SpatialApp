@@ -23,11 +23,13 @@ LAYER_PRODUCING_TOOLS = {
     "geocode", "search_nearby", "buffer", "spatial_query",
     "aggregate", "filter_layer", "fetch_osm", "merge_layers",
     "import_layer", "find_route", "isochrone", "heatmap",
-    "classify_landcover",
+    "classify_landcover", "intersection", "difference",
+    "symmetric_difference",
 }
 
 # Reuse OSM feature mappings from app.py
 OSM_FEATURE_MAPPINGS = {
+    # Land use
     'building': {'key': 'building', 'value': None},
     'forest': {'key': 'landuse', 'value': 'forest'},
     'water': {'key': 'natural', 'value': 'water'},
@@ -40,6 +42,39 @@ OSM_FEATURE_MAPPINGS = {
     'road': {'key': 'highway', 'value': None},
     'river': {'key': 'waterway', 'value': 'river'},
     'lake': {'key': 'natural', 'value': 'water'},
+    # Amenities
+    'restaurant': {'key': 'amenity', 'value': 'restaurant'},
+    'school': {'key': 'amenity', 'value': 'school'},
+    'hospital': {'key': 'amenity', 'value': 'hospital'},
+    'pharmacy': {'key': 'amenity', 'value': 'pharmacy'},
+    'supermarket': {'key': 'shop', 'value': 'supermarket'},
+    'hotel': {'key': 'tourism', 'value': 'hotel'},
+    'church': {'key': 'amenity', 'value': 'place_of_worship'},
+    'mosque': {'key': 'amenity', 'value': 'place_of_worship'},
+    'bank': {'key': 'amenity', 'value': 'bank'},
+    'atm': {'key': 'amenity', 'value': 'atm'},
+    'cafe': {'key': 'amenity', 'value': 'cafe'},
+    'bar': {'key': 'amenity', 'value': 'bar'},
+    'cinema': {'key': 'amenity', 'value': 'cinema'},
+    'library': {'key': 'amenity', 'value': 'library'},
+    'university': {'key': 'amenity', 'value': 'university'},
+    'police': {'key': 'amenity', 'value': 'police'},
+    'fire_station': {'key': 'amenity', 'value': 'fire_station'},
+    'post_office': {'key': 'amenity', 'value': 'post_office'},
+    # Transport
+    'bus_stop': {'key': 'highway', 'value': 'bus_stop'},
+    'rail': {'key': 'railway', 'value': 'rail'},
+    'parking': {'key': 'amenity', 'value': 'parking'},
+    'fuel': {'key': 'amenity', 'value': 'fuel'},
+    # Recreation
+    'playground': {'key': 'leisure', 'value': 'playground'},
+    'stadium': {'key': 'leisure', 'value': 'stadium'},
+    'swimming_pool': {'key': 'leisure', 'value': 'swimming_pool'},
+    'cemetery': {'key': 'landuse', 'value': 'cemetery'},
+    # Nature
+    'wetland': {'key': 'natural', 'value': 'wetland'},
+    'beach': {'key': 'natural', 'value': 'beach'},
+    'cliff': {'key': 'natural', 'value': 'cliff'},
 }
 
 
@@ -311,6 +346,9 @@ from nl_gis.handlers.analysis import (  # noqa: E402,F401
     handle_calculate_area,
     handle_measure_distance,
     handle_filter_layer,
+    handle_intersection,
+    handle_difference,
+    handle_symmetric_difference,
 )
 from nl_gis.handlers.layers import (  # noqa: E402,F401
     handle_style_layer,
@@ -376,6 +414,10 @@ def dispatch_tool(tool_name: str, params: dict, layer_store: dict = None) -> dic
         "find_route": handle_find_route,
         "isochrone": handle_isochrone,
         "heatmap": lambda p: handle_heatmap(p, layer_store),
+        # Overlay operations
+        "intersection": lambda p: handle_intersection(p, layer_store),
+        "difference": lambda p: handle_difference(p, layer_store),
+        "symmetric_difference": lambda p: handle_symmetric_difference(p, layer_store),
     }
 
     if tool_name not in handlers:

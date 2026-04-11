@@ -89,12 +89,16 @@ def handle_fetch_osm(params: dict) -> dict:
     if not bbox:
         return {"error": "No bounding box or location provided"}
 
-    if feature_type not in OSM_FEATURE_MAPPINGS:
-        return {"error": f"Unknown feature type: {feature_type}. Valid types: {', '.join(OSM_FEATURE_MAPPINGS.keys())}"}
-
-    mapping = OSM_FEATURE_MAPPINGS[feature_type]
-    key = mapping["key"]
-    value = mapping["value"]
+    if feature_type in OSM_FEATURE_MAPPINGS:
+        mapping = OSM_FEATURE_MAPPINGS[feature_type]
+        key = mapping["key"]
+        value = mapping["value"]
+    else:
+        # Allow custom key=value for arbitrary OSM queries
+        key = params.get("osm_key")
+        value = params.get("osm_value")
+        if not key:
+            return {"error": f"Unknown feature type: '{feature_type}'. Use a known type or provide osm_key/osm_value for custom queries."}
 
     # Build Overpass query — use `out geom` to get coordinates inline
     # (avoids slow node-by-node reconstruction)
@@ -248,12 +252,16 @@ def handle_search_nearby(params: dict) -> dict:
     except (ValueError, TypeError) as e:
         return {"error": f"Invalid coordinates: {e}"}
 
-    if feature_type not in OSM_FEATURE_MAPPINGS:
-        return {"error": f"Unknown feature type: {feature_type}"}
-
-    mapping = OSM_FEATURE_MAPPINGS[feature_type]
-    key = mapping["key"]
-    value = mapping["value"]
+    if feature_type in OSM_FEATURE_MAPPINGS:
+        mapping = OSM_FEATURE_MAPPINGS[feature_type]
+        key = mapping["key"]
+        value = mapping["value"]
+    else:
+        # Allow custom key=value for arbitrary OSM queries
+        key = params.get("osm_key")
+        value = params.get("osm_value")
+        if not key:
+            return {"error": f"Unknown feature type: '{feature_type}'. Use a known type or provide osm_key/osm_value for custom queries."}
 
     # Build Overpass around query
     if value is None:

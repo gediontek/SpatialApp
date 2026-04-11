@@ -312,3 +312,100 @@ class TestHandleFetchOSM:
         })
         assert "error" in result
         assert "timed out" in result["error"].lower()
+
+    @patch("nl_gis.handlers.navigation.requests.get")
+    def test_new_feature_type_restaurant(self, mock_get):
+        """Test that new 'restaurant' feature type works."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "elements": [
+                {
+                    "type": "way",
+                    "id": 200,
+                    "geometry": [
+                        {"lat": 47.60, "lon": -122.33},
+                        {"lat": 47.61, "lon": -122.33},
+                        {"lat": 47.61, "lon": -122.32},
+                        {"lat": 47.60, "lon": -122.32},
+                    ],
+                    "tags": {"amenity": "restaurant", "name": "Test Cafe"},
+                },
+            ]
+        }
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
+
+        result = handle_fetch_osm({
+            "feature_type": "restaurant",
+            "category_name": "test_restaurants",
+            "bbox": "47.5,-122.5,47.7,-122.3",
+        })
+        assert "error" not in result
+        assert result["feature_count"] == 1
+        assert result["layer_name"] == "restaurant_test_restaurants"
+
+    @patch("nl_gis.handlers.navigation.requests.get")
+    def test_custom_osm_key_value(self, mock_get):
+        """Test custom osm_key/osm_value for unlisted feature types."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"elements": []}
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
+
+        result = handle_fetch_osm({
+            "feature_type": "dog_park",
+            "category_name": "test_dog_parks",
+            "bbox": "47.5,-122.5,47.7,-122.3",
+            "osm_key": "leisure",
+            "osm_value": "dog_park",
+        })
+        assert "error" not in result
+        assert result["feature_count"] == 0
+
+    def test_unknown_feature_type_no_osm_key(self):
+        """Unknown feature_type without osm_key returns helpful error."""
+        result = handle_fetch_osm({
+            "feature_type": "unknown_xyz",
+            "category_name": "test",
+            "bbox": "47.5,-122.5,47.7,-122.3",
+        })
+        assert "error" in result
+        assert "Unknown feature type" in result["error"]
+        assert "osm_key" in result["error"]
+
+
+class TestSearchNearbyExpanded:
+    """Tests for expanded search_nearby feature types."""
+
+    def test_unknown_feature_type_no_osm_key(self):
+        """Unknown feature_type without osm_key returns helpful error."""
+        from nl_gis.handlers import handle_search_nearby
+        result = handle_search_nearby({
+            "feature_type": "unknown_xyz",
+            "lat": 47.6,
+            "lon": -122.3,
+            "radius_m": 500,
+        })
+        assert "error" in result
+        assert "Unknown feature type" in result["error"]
+        assert "osm_key" in result["error"]
+
+    @patch("nl_gis.handlers.navigation.requests.get")
+    def test_custom_osm_key_search_nearby(self, mock_get):
+        """Test custom osm_key/osm_value in search_nearby."""
+        from nl_gis.handlers import handle_search_nearby
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"elements": []}
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
+
+        result = handle_search_nearby({
+            "feature_type": "dog_park",
+            "lat": 47.6,
+            "lon": -122.3,
+            "radius_m": 500,
+            "osm_key": "leisure",
+            "osm_value": "dog_park",
+        })
+        assert "error" not in result
+        assert result["feature_count"] == 0

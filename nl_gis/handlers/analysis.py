@@ -372,3 +372,105 @@ def handle_filter_layer(params: dict, layer_store: dict = None) -> dict:
         "feature_count": len(filtered),
         "original_count": len(features),
     }
+
+
+def _overlay_operation(params: dict, layer_store: dict, op_name: str) -> dict:
+    """Shared logic for overlay operations (intersection, difference, symmetric_difference).
+
+    Args:
+        params: Tool parameters with layer_a, layer_b, output_name.
+        layer_store: Server-side layer store.
+        op_name: One of 'intersection', 'difference', 'symmetric_difference'.
+
+    Returns:
+        Result dict with geojson, layer_name, or error.
+    """
+    from shapely.validation import make_valid
+
+    layer_a = params.get("layer_a")
+    layer_b = params.get("layer_b")
+
+    if not layer_a or not layer_b:
+        return {"error": "Both layer_a and layer_b are required"}
+
+    output_name = params.get("output_name", f"{op_name}_{layer_a}_{layer_b}")
+
+    # Get geometries from both layers
+    geoms_a, err = _get_layer_geometries(layer_store, layer_a)
+    if err:
+        return {"error": f"layer_a: {err}"}
+    geoms_b, err = _get_layer_geometries(layer_store, layer_b)
+    if err:
+        return {"error": f"layer_b: {err}"}
+
+    if not geoms_a:
+        return {"error": f"Layer '{layer_a}' has no valid geometries"}
+    if not geoms_b:
+        return {"error": f"Layer '{layer_b}' has no valid geometries"}
+
+    # Union each layer's geometries, then apply the overlay operation
+    geom_a = unary_union(geoms_a)
+    geom_b = unary_union(geoms_b)
+
+    # Ensure valid geometries before overlay
+    if not geom_a.is_valid:
+        geom_a = make_valid(geom_a)
+    if not geom_b.is_valid:
+        geom_b = make_valid(geom_b)
+
+    if op_name == "intersection":
+        result = geom_a.intersection(geom_b)
+    elif op_name == "difference":
+        result = geom_a.difference(geom_b)
+    elif op_name == "symmetric_difference":
+        result = geom_a.symmetric_difference(geom_b)
+    else:
+        return {"error": f"Unknown overlay operation: {op_name}"}
+
+    # Handle empty result
+    if result.is_empty:
+        return {
+            "geojson": {"type": "FeatureCollection", "features": []},
+            "layer_name": output_name,
+            "feature_count": 0,
+            "message": f"The {op_name} produced an empty result (no overlapping area).",
+        }
+
+    # Ensure result is valid
+    if not result.is_valid:
+        result = make_valid(result)
+
+    result_geojson = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "geometry": shapely_to_geojson(result),
+            "properties": {
+                "operation": op_name,
+                "layer_a": layer_a,
+                "layer_b": layer_b,
+            }
+        }]
+    }
+
+    return {
+        "geojson": result_geojson,
+        "layer_name": output_name,
+        "feature_count": 1,
+        "area_sq_km": round(geodesic_area(result) / 1e6, 4),
+    }
+
+
+def handle_intersection(params: dict, layer_store: dict = None) -> dict:
+    """Compute geometric intersection of two layers."""
+    return _overlay_operation(params, layer_store, "intersection")
+
+
+def handle_difference(params: dict, layer_store: dict = None) -> dict:
+    """Subtract layer B geometry from layer A geometry."""
+    return _overlay_operation(params, layer_store, "difference")
+
+
+def handle_symmetric_difference(params: dict, layer_store: dict = None) -> dict:
+    """Compute areas in either layer but not both."""
+    return _overlay_operation(params, layer_store, "symmetric_difference")

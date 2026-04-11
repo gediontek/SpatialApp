@@ -24,14 +24,13 @@ def get_tool_definitions() -> list:
         },
         {
             "name": "fetch_osm",
-            "description": "Fetch OpenStreetMap features within a bounding box or near a location. Returns a GeoJSON FeatureCollection that is displayed as a named layer on the map. Available feature types: building, forest, water, park, grass, farmland, residential, commercial, industrial, road, river, lake.",
+            "description": "Fetch OpenStreetMap features within a bounding box or near a location. Returns a GeoJSON FeatureCollection displayed as a named layer. Built-in types: building, forest, water, park, grass, farmland, residential, commercial, industrial, road, river, lake, restaurant, school, hospital, pharmacy, supermarket, hotel, church, mosque, bank, atm, cafe, bar, cinema, library, university, police, fire_station, post_office, bus_stop, rail, parking, fuel, playground, stadium, swimming_pool, cemetery, wetland, beach, cliff. For unlisted types, use osm_key and osm_value for custom Overpass queries.",
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "feature_type": {
                         "type": "string",
-                        "description": "Type of OSM feature to fetch",
-                        "enum": ["building", "forest", "water", "park", "grass", "farmland", "residential", "commercial", "industrial", "road", "river", "lake"]
+                        "description": "Type of OSM feature to fetch (use a built-in name or a custom name with osm_key/osm_value)"
                     },
                     "category_name": {
                         "type": "string",
@@ -44,6 +43,14 @@ def get_tool_definitions() -> list:
                     "location": {
                         "type": "string",
                         "description": "Place name to use as the search area. Will be geocoded to get a bounding box. Use if bbox is not available."
+                    },
+                    "osm_key": {
+                        "type": "string",
+                        "description": "OSM tag key for custom queries (e.g., 'amenity', 'shop', 'tourism')"
+                    },
+                    "osm_value": {
+                        "type": "string",
+                        "description": "OSM tag value for custom queries (e.g., 'restaurant', 'supermarket')"
                     }
                 },
                 "required": ["feature_type", "category_name"]
@@ -169,7 +176,7 @@ def get_tool_definitions() -> list:
         },
         {
             "name": "spatial_query",
-            "description": "Find features in one layer that match a spatial relationship with another layer or geometry. Predicates: intersects (overlapping), contains (fully inside), within (source within target), within_distance (within N meters).",
+            "description": "Find features in one layer that match a spatial relationship with another layer or geometry. Predicates: intersects (any overlap between source feature and target), contains (source feature fully encloses the target geometry), within (source feature is fully inside the target geometry), within_distance (source feature is within N meters of target).",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -210,7 +217,7 @@ def get_tool_definitions() -> list:
                     },
                     "operation": {
                         "type": "string",
-                        "description": "Aggregation operation",
+                        "description": "Operation to perform: count (number of features), area (total geodesic area in sq meters)",
                         "enum": ["count", "area", "group_by"]
                     },
                     "group_by": {
@@ -223,7 +230,7 @@ def get_tool_definitions() -> list:
         },
         {
             "name": "search_nearby",
-            "description": "Search for OSM features near a point within a given radius. Uses Overpass API 'around' filter. Returns a GeoJSON FeatureCollection added as a map layer.",
+            "description": "Search for OSM features near a point within a given radius. Uses Overpass API 'around' filter. Returns a GeoJSON FeatureCollection added as a map layer. Supports 35+ built-in feature types plus custom osm_key/osm_value queries.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -248,8 +255,15 @@ def get_tool_definitions() -> list:
                     },
                     "feature_type": {
                         "type": "string",
-                        "description": "OSM feature type to search for",
-                        "enum": ["building", "forest", "water", "park", "grass", "farmland", "residential", "commercial", "industrial", "road", "river", "lake"]
+                        "description": "OSM feature type to search for (use a built-in name or a custom name with osm_key/osm_value)"
+                    },
+                    "osm_key": {
+                        "type": "string",
+                        "description": "OSM tag key for custom queries (e.g., 'amenity', 'shop', 'tourism')"
+                    },
+                    "osm_value": {
+                        "type": "string",
+                        "description": "OSM tag value for custom queries (e.g., 'restaurant', 'supermarket')"
                     }
                 },
                 "required": ["feature_type"]
@@ -626,6 +640,73 @@ def get_tool_definitions() -> list:
                     }
                 },
                 "required": ["layer_name"]
+            }
+        },
+        # ---- Overlay Operations ----
+        {
+            "name": "intersection",
+            "description": "Compute the geometric intersection of two layers. Returns a new layer containing only the area where both layers overlap. Useful for finding where two regions coincide (e.g., parks in flood zones).",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_a": {
+                        "type": "string",
+                        "description": "Name of the first layer"
+                    },
+                    "layer_b": {
+                        "type": "string",
+                        "description": "Name of the second layer"
+                    },
+                    "output_name": {
+                        "type": "string",
+                        "description": "Name for the output layer (default: intersection_<layer_a>_<layer_b>)"
+                    }
+                },
+                "required": ["layer_a", "layer_b"]
+            }
+        },
+        {
+            "name": "difference",
+            "description": "Subtract layer B from layer A. Returns a new layer containing the area of layer A that does NOT overlap with layer B. Useful for removing one region from another (e.g., land minus water).",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_a": {
+                        "type": "string",
+                        "description": "Name of the layer to subtract FROM"
+                    },
+                    "layer_b": {
+                        "type": "string",
+                        "description": "Name of the layer to subtract"
+                    },
+                    "output_name": {
+                        "type": "string",
+                        "description": "Name for the output layer (default: difference_<layer_a>_<layer_b>)"
+                    }
+                },
+                "required": ["layer_a", "layer_b"]
+            }
+        },
+        {
+            "name": "symmetric_difference",
+            "description": "Compute the symmetric difference of two layers. Returns a new layer containing areas that are in EITHER layer but NOT in both. Useful for finding areas unique to each layer.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_a": {
+                        "type": "string",
+                        "description": "Name of the first layer"
+                    },
+                    "layer_b": {
+                        "type": "string",
+                        "description": "Name of the second layer"
+                    },
+                    "output_name": {
+                        "type": "string",
+                        "description": "Name for the output layer (default: symmetric_difference_<layer_a>_<layer_b>)"
+                    }
+                },
+                "required": ["layer_a", "layer_b"]
             }
         }
     ]
