@@ -11,6 +11,7 @@ from nl_gis.handlers import (
     handle_point_in_polygon,
     handle_attribute_join,
     handle_spatial_statistics,
+    handle_hot_spot_analysis,
 )
 
 
@@ -434,3 +435,199 @@ class TestSpatialStatistics:
         )
         assert result["method"] == "nearest_neighbor"
         assert "nni" in result
+
+
+# ============================================================
+# hot_spot_analysis tests
+# ============================================================
+
+def _hot_spot_layer_clustered():
+    """Layer with spatially clustered high/low values for hot spot analysis.
+
+    Left cluster (x ~ 0): high values (100)
+    Right cluster (x ~ 1): low values (1)
+    Center points: medium values (50)
+    """
+    features = []
+    # Hot cluster: high values near (0, 0)
+    for i in range(10):
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [i * 0.001, 0.0]},
+            "properties": {"count": 100, "label": "hot"},
+        })
+    # Cold cluster: low values near (1, 0)
+    for i in range(10):
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [1.0 + i * 0.001, 0.0]},
+            "properties": {"count": 1, "label": "cold"},
+        })
+    # Medium buffer between clusters
+    for i in range(5):
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [0.5 + i * 0.001, 0.0]},
+            "properties": {"count": 50, "label": "mid"},
+        })
+    return {"type": "FeatureCollection", "features": features}
+
+
+def _hot_spot_layer_uniform():
+    """Layer with uniform values — no hot/cold spots expected."""
+    features = []
+    for i in range(20):
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [i * 0.01, 0.0]},
+            "properties": {"count": 42},
+        })
+    return {"type": "FeatureCollection", "features": features}
+
+
+class TestHotSpotAnalysis:
+    """Tests for hot_spot_analysis handler (Getis-Ord Gi*)."""
+
+    def test_clustered_data_produces_hot_spots(self):
+        """Spatially clustered high values should produce hot spots (z > 1.96)."""
+        store = _make_layer_store({"data": _hot_spot_layer_clustered()})
+        result = handle_hot_spot_analysis(
+            {"layer_name": "data", "attribute": "count"},
+            layer_store=store,
+        )
+        assert "error" not in result
+        assert "geojson" in result
+        assert result["layer_name"] == "hotspot_data"
+
+        analysis = result["analysis"]
+        assert analysis["total_features"] == 25
+        assert analysis["attribute"] == "count"
+        assert analysis["significance_level"] == 0.05
+        assert analysis["bandwidth_m"] > 0
+
+        # Should find at least some hot spots in the high-value cluster
+        assert analysis["hot_spots"] > 0
+
+        # Verify z-scores exist on features
+        feats = result["geojson"]["features"]
+        for f in feats:
+            assert "gi_z_score" in f["properties"]
+            assert "gi_p_value" in f["properties"]
+            assert "hotspot_class" in f["properties"]
+            assert f["properties"]["hotspot_class"] in ("hot", "cold", "not_significant")
+
+        # At least one feature in the high-value cluster should have z > 1.96
+        hot_features = [f for f in feats if f["properties"]["hotspot_class"] == "hot"]
+        assert len(hot_features) > 0
+        assert any(f["properties"]["gi_z_score"] > 1.96 for f in hot_features)
+
+    def test_uniform_data_no_significant_results(self):
+        """Uniform attribute values should produce no significant hot/cold spots."""
+        store = _make_layer_store({"data": _hot_spot_layer_uniform()})
+        result = handle_hot_spot_analysis(
+            {"layer_name": "data", "attribute": "count"},
+            layer_store=store,
+        )
+        assert "error" not in result
+        analysis = result["analysis"]
+        assert analysis["hot_spots"] == 0
+        assert analysis["cold_spots"] == 0
+        assert analysis["not_significant"] == 20
+
+    def test_missing_attribute_error(self):
+        """Missing attribute parameter should return error."""
+        store = _make_layer_store({"data": _hot_spot_layer_clustered()})
+        result = handle_hot_spot_analysis(
+            {"layer_name": "data"},
+            layer_store=store,
+        )
+        assert "error" in result
+        assert "attribute" in result["error"]
+
+    def test_non_numeric_attribute_error(self):
+        """Non-numeric attribute values should be skipped, too few valid -> error."""
+        features = [
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [0, 0]},
+                "properties": {"name": "alpha"},
+            },
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [1, 0]},
+                "properties": {"name": "beta"},
+            },
+        ]
+        layer = {"type": "FeatureCollection", "features": features}
+        store = _make_layer_store({"data": layer})
+        result = handle_hot_spot_analysis(
+            {"layer_name": "data", "attribute": "name"},
+            layer_store=store,
+        )
+        assert "error" in result
+        assert "at least 3" in result["error"]
+
+    def test_too_few_features_error(self):
+        """Fewer than 3 valid features should return error."""
+        features = [
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [0, 0]},
+                "properties": {"val": 10},
+            },
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [1, 0]},
+                "properties": {"val": 20},
+            },
+        ]
+        layer = {"type": "FeatureCollection", "features": features}
+        store = _make_layer_store({"data": layer})
+        result = handle_hot_spot_analysis(
+            {"layer_name": "data", "attribute": "val"},
+            layer_store=store,
+        )
+        assert "error" in result
+        assert "at least 3" in result["error"]
+
+    def test_missing_layer_error(self):
+        """Nonexistent layer should return error."""
+        result = handle_hot_spot_analysis(
+            {"layer_name": "nonexistent", "attribute": "val"},
+            layer_store={},
+        )
+        assert "error" in result
+
+    def test_custom_output_name(self):
+        """Custom output_name should be used."""
+        store = _make_layer_store({"data": _hot_spot_layer_clustered()})
+        result = handle_hot_spot_analysis(
+            {"layer_name": "data", "attribute": "count", "output_name": "my_hotspots"},
+            layer_store=store,
+        )
+        assert "error" not in result
+        assert result["layer_name"] == "my_hotspots"
+
+    def test_colors_in_result(self):
+        """Result should include color mapping for rendering."""
+        store = _make_layer_store({"data": _hot_spot_layer_clustered()})
+        result = handle_hot_spot_analysis(
+            {"layer_name": "data", "attribute": "count"},
+            layer_store=store,
+        )
+        assert "colors" in result
+        assert result["colors"]["hot"] == "#ff0000"
+        assert result["colors"]["cold"] == "#0000ff"
+        assert result["colors"]["not_significant"] == "#808080"
+
+    def test_dispatch(self):
+        """Verify dispatch_tool routes to hot_spot_analysis."""
+        store = _make_layer_store({"data": _hot_spot_layer_clustered()})
+        result = dispatch_tool(
+            "hot_spot_analysis",
+            {"layer_name": "data", "attribute": "count"},
+            layer_store=store,
+        )
+        assert "error" not in result
+        assert "geojson" in result
+        assert result["analysis"]["total_features"] == 25
