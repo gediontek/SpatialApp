@@ -2,6 +2,9 @@
 
 Uses plain SQLite (no SpatiaLite dependency) with GeoJSON stored as TEXT.
 Spatial indexing deferred until PostGIS migration.
+
+This module provides both module-level functions (legacy API) and a
+Database class that implements DatabaseInterface for the new abstraction layer.
 """
 
 import json
@@ -597,3 +600,128 @@ def get_metrics_summary(user_id: str = None) -> dict:
         "error_rate": round((row["total_errors"] or 0) / total * 100, 1) if total > 0 else 0,
         "last_query_at": row["last_query_at"],
     }
+
+
+# ============================================================
+# Database class (implements DatabaseInterface)
+# ============================================================
+
+from services.db_interface import DatabaseInterface
+
+
+class Database(DatabaseInterface):
+    """SQLite implementation of DatabaseInterface.
+
+    Wraps the module-level functions above, adding a db_path parameter
+    so multiple instances can target different database files (useful
+    for testing and multi-tenant deployments).
+    """
+
+    def __init__(self, db_path: str = None):
+        """Initialize with an optional database path.
+
+        Args:
+            db_path: Path to the SQLite database file. If None, uses
+                     the module-level DB_PATH default.
+        """
+        global DB_PATH
+        if db_path is not None:
+            DB_PATH = db_path
+        self.db_path = DB_PATH
+
+    # -- Lifecycle -------------------------------------------------------
+
+    def init_db(self):
+        return init_db()
+
+    def close_connection(self):
+        return close_connection()
+
+    def verify_db_integrity(self):
+        return verify_db_integrity()
+
+    # -- User CRUD -------------------------------------------------------
+
+    def create_user(self, username, api_token=None):
+        return create_user(username, api_token)
+
+    def get_user_by_token(self, api_token):
+        return get_user_by_token(api_token)
+
+    def get_user_by_id(self, user_id):
+        return get_user_by_id(user_id)
+
+    def list_users(self):
+        return list_users()
+
+    # -- Annotation CRUD -------------------------------------------------
+
+    def save_annotation(self, category_name, geometry, color="#3388ff",
+                        source="manual", properties=None, user_id="anonymous"):
+        return save_annotation(category_name, geometry, color, source,
+                               properties, user_id)
+
+    def get_all_annotations(self, user_id=None, limit=None, offset=0):
+        return get_all_annotations(user_id, limit, offset)
+
+    def get_annotation_count(self, user_id=None):
+        return get_annotation_count(user_id)
+
+    def clear_annotations(self, user_id=None):
+        return clear_annotations(user_id)
+
+    # -- Layer CRUD ------------------------------------------------------
+
+    def save_layer(self, name, geojson, style=None, user_id="anonymous"):
+        return save_layer(name, geojson, style, user_id)
+
+    def get_layer(self, name, user_id=None):
+        return get_layer(name, user_id)
+
+    def get_all_layers(self, user_id=None):
+        return get_all_layers(user_id)
+
+    def delete_layer(self, name, user_id=None):
+        return delete_layer(name, user_id)
+
+    # -- Chat Session CRUD -----------------------------------------------
+
+    def save_chat_session(self, session_id, messages, user_id="anonymous"):
+        return save_chat_session(session_id, messages, user_id)
+
+    def get_chat_session(self, session_id):
+        return get_chat_session(session_id)
+
+    def delete_chat_session(self, session_id):
+        return delete_chat_session(session_id)
+
+    def get_chat_session_with_owner(self, session_id):
+        return get_chat_session_with_owner(session_id)
+
+    def delete_chat_session_for_user(self, session_id, user_id):
+        return delete_chat_session_for_user(session_id, user_id)
+
+    def get_user_sessions(self, user_id):
+        return get_user_sessions(user_id)
+
+    # -- Layer convenience -----------------------------------------------
+
+    def get_user_layers(self, user_id):
+        return get_user_layers(user_id)
+
+    # -- Query Metrics ---------------------------------------------------
+
+    def log_query_metric(self, user_id="anonymous", session_id=None,
+                         message="", tool_calls=0, input_tokens=0,
+                         output_tokens=0, duration_ms=0, error=False):
+        return log_query_metric(user_id, session_id, message, tool_calls,
+                                input_tokens, output_tokens, duration_ms, error)
+
+    def get_metrics_summary(self, user_id=None):
+        return get_metrics_summary(user_id)
+
+    def cleanup_old_metrics(self, days=180):
+        return cleanup_old_metrics(days)
+
+    def get_user_stats(self, user_id):
+        return get_user_stats(user_id)

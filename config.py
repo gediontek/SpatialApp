@@ -104,3 +104,5 @@ class Config:
     # Database
     DATABASE_PATH = os.environ.get('DATABASE_PATH',
         os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'spatialapp.db'))
+    DATABASE_BACKEND = os.environ.get('DATABASE_BACKEND', 'sqlite')  # 'sqlite' or 'postgres'
+    DATABASE_URL = os.environ.get('DATABASE_URL', '')  # PostgreSQL connection string
