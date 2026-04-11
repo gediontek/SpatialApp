@@ -497,7 +497,7 @@ class TestMultiToolChainSimulation:
         mock_response.raise_for_status = MagicMock()
         mock_get.return_value = mock_response
 
-        from nl_gis.tool_handlers import dispatch_tool
+        from nl_gis.handlers import dispatch_tool
 
         # Step 1: Geocode
         geocode_result = dispatch_tool("geocode", {"query": "Seattle"})
@@ -522,7 +522,7 @@ class TestMultiToolChainSimulation:
         """'contains' and 'within' predicates are directional opposites.
         A large polygon 'contains' a small polygon, but a small polygon
         is 'within' a large polygon."""
-        from nl_gis.tool_handlers import dispatch_tool
+        from nl_gis.handlers import dispatch_tool
 
         # Create layers: large box contains small box
         large_box = box(-122.4, 47.5, -122.2, 47.7)

@@ -10,7 +10,8 @@ os.environ['FLASK_DEBUG'] = 'false'
 os.environ['SECRET_KEY'] = 'test-secret-key'
 os.environ['ANTHROPIC_API_KEY'] = ''
 
-from app import app, layer_store, chat_sessions
+from app import app
+from state import layer_store, chat_sessions
 
 
 @pytest.fixture

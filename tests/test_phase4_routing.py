@@ -7,7 +7,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from nl_gis.tool_handlers import (
+from nl_gis.handlers import (
     dispatch_tool,
     handle_find_route,
     handle_isochrone,

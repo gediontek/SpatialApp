@@ -1,4 +1,4 @@
-"""Tests for handle_filter_layer in nl_gis.tool_handlers."""
+"""Tests for handle_filter_layer in nl_gis.handlers."""
 
 import pytest
 import sys
@@ -6,7 +6,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from nl_gis.tool_handlers import dispatch_tool
+from nl_gis.handlers import dispatch_tool
 
 
 def _make_layer(features):

@@ -228,7 +228,7 @@ def fetch_osm_data():
             return jsonify(success=False, error='Invalid bounding box'), 400
 
         # Mapping of user-friendly feature types to OSM query parameters
-        from nl_gis.tool_handlers import OSM_FEATURE_MAPPINGS
+        from nl_gis.handlers import OSM_FEATURE_MAPPINGS
 
         # Get OSM query parameters for this feature type
         if feature_type not in OSM_FEATURE_MAPPINGS:

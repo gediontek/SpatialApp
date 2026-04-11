@@ -8,7 +8,7 @@ from typing import Generator
 
 from config import Config
 from nl_gis.tools import get_tool_definitions
-from nl_gis.tool_handlers import dispatch_tool, LAYER_PRODUCING_TOOLS
+from nl_gis.handlers import dispatch_tool, LAYER_PRODUCING_TOOLS
 from nl_gis.llm_provider import create_provider, DEFAULT_MODELS
 
 

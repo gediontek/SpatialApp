@@ -10,7 +10,9 @@ import shutil
 os.environ['FLASK_DEBUG'] = 'false'
 os.environ['SECRET_KEY'] = 'test-secret-key'
 
-from app import app, geo_coco_annotations, Config
+from app import app
+from config import Config
+from state import geo_coco_annotations
 
 
 @pytest.fixture

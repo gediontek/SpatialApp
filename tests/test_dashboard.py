@@ -10,7 +10,8 @@ os.environ['SECRET_KEY'] = 'test-secret-key'
 os.environ['ANTHROPIC_API_KEY'] = ''
 os.environ['CHAT_API_TOKEN'] = ''
 
-from app import app, chat_sessions
+from app import app
+from state import chat_sessions
 from config import Config
 import state
 

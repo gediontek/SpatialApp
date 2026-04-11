@@ -231,33 +231,6 @@ def create_app(testing=False):
 # This lets `from app import app` and `python app.py` keep working.
 app = create_app()
 
-# Re-export shared state at module level for backward compatibility.
-# Code that does ``from app import geo_coco_annotations`` etc. will
-# get the *same* objects that blueprints use via state.py.
-geo_coco_annotations = state.geo_coco_annotations
-annotation_lock = state.annotation_lock
-layer_store = state.layer_store
-layer_lock = state.layer_lock
-chat_sessions = state.chat_sessions
-session_lock = state.session_lock
-
-
-def __getattr__(name):
-    """Lazy module-level attribute lookup for `db`.
-
-    state.db is None at import time and set during create_app().
-    This ensures `from app import db` always returns the current value.
-    """
-    if name == "db":
-        return state.db
-    raise AttributeError(f"module 'app' has no attribute {name!r}")
-
-# Re-export helpers that nl_gis handlers import from app
-from blueprints.annotations import save_annotations_to_file, _persist_annotation, _clear_all_annotations
-
-# Re-export helpers used by tests
-from blueprints.osm import validate_osm_input, validate_bbox
-
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     if state.socketio is not None:

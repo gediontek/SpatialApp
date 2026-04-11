@@ -12,8 +12,10 @@ os.environ['FLASK_DEBUG'] = 'false'
 os.environ['SECRET_KEY'] = 'test-secret-key'
 os.environ['CHAT_API_TOKEN'] = ''  # Open access by default
 
-from app import app, geo_coco_annotations, Config
-from nl_gis.tool_handlers import dispatch_tool
+from app import app
+from config import Config
+from state import geo_coco_annotations
+from nl_gis.handlers import dispatch_tool
 from nl_gis.geo_utils import ValidatedPoint
 
 
@@ -369,7 +371,7 @@ class TestHandleStyleLayer:
 
     def test_change_color(self):
         """Setting color returns style with color."""
-        from nl_gis.tool_handlers import handle_style_layer
+        from nl_gis.handlers.layers import handle_style_layer
         result = handle_style_layer({
             "layer_name": "buildings",
             "color": "#ff0000"
@@ -381,7 +383,7 @@ class TestHandleStyleLayer:
 
     def test_change_opacity(self):
         """Setting fill_opacity returns style with fillOpacity (Leaflet key)."""
-        from nl_gis.tool_handlers import handle_style_layer
+        from nl_gis.handlers.layers import handle_style_layer
         result = handle_style_layer({
             "layer_name": "parks",
             "fill_opacity": 0.5
@@ -391,7 +393,7 @@ class TestHandleStyleLayer:
 
     def test_layer_not_found_still_returns_instruction(self):
         """handle_style_layer does not check layer existence; it returns instruction for frontend."""
-        from nl_gis.tool_handlers import handle_style_layer
+        from nl_gis.handlers.layers import handle_style_layer
         result = handle_style_layer({
             "layer_name": "nonexistent_layer",
             "color": "#00ff00"
@@ -402,21 +404,21 @@ class TestHandleStyleLayer:
 
     def test_missing_layer_name(self):
         """Missing layer_name returns error."""
-        from nl_gis.tool_handlers import handle_style_layer
+        from nl_gis.handlers.layers import handle_style_layer
         result = handle_style_layer({"color": "#ff0000"})
         assert "error" in result
         assert "layer_name" in result["error"]
 
     def test_missing_style_properties(self):
         """No style properties returns error."""
-        from nl_gis.tool_handlers import handle_style_layer
+        from nl_gis.handlers.layers import handle_style_layer
         result = handle_style_layer({"layer_name": "buildings"})
         assert "error" in result
         assert "style property" in result["error"].lower() or "required" in result["error"].lower()
 
     def test_multiple_style_properties(self):
         """Multiple style properties are all included."""
-        from nl_gis.tool_handlers import handle_style_layer
+        from nl_gis.handlers.layers import handle_style_layer
         result = handle_style_layer({
             "layer_name": "roads",
             "color": "#333333",
@@ -470,7 +472,7 @@ class TestEdgeCases:
 
     def test_special_characters_in_layer_names(self):
         """Layer names with special characters in style handler."""
-        from nl_gis.tool_handlers import handle_style_layer
+        from nl_gis.handlers.layers import handle_style_layer
         result = handle_style_layer({
             "layer_name": "layer with spaces & <special> chars!",
             "color": "#ff0000"
@@ -480,7 +482,7 @@ class TestEdgeCases:
 
     def test_unicode_layer_name(self):
         """Unicode layer names are handled."""
-        from nl_gis.tool_handlers import handle_style_layer
+        from nl_gis.handlers.layers import handle_style_layer
         result = handle_style_layer({
             "layer_name": "\u6771\u4eac_\u5efa\u7269",
             "color": "#0000ff"

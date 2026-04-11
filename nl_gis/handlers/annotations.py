@@ -3,6 +3,8 @@
 import logging
 
 from nl_gis.handlers import _get_layer_snapshot
+from state import geo_coco_annotations, annotation_lock, db as app_db
+from blueprints.annotations import save_annotations_to_file
 
 logger = logging.getLogger(__name__)
 
@@ -16,11 +18,7 @@ def handle_add_annotation(params: dict, layer_store: dict = None) -> dict:
     category_name = params.get("category_name", "unknown")
     color = params.get("color", "#3388ff")
 
-    # Import app-level annotation functions + lock
-    try:
-        from app import geo_coco_annotations, save_annotations_to_file, annotation_lock
-    except ImportError:
-        return {"error": "Cannot access annotation store"}
+    # Uses top-level imports: geo_coco_annotations, save_annotations_to_file, annotation_lock
 
     added = 0
 
@@ -73,7 +71,6 @@ def handle_add_annotation(params: dict, layer_store: dict = None) -> dict:
 
             # Persist to database
             try:
-                from app import db as app_db
                 if app_db:
                     if layer_name and layer_features:
                         for f in layer_features:
@@ -178,11 +175,6 @@ def handle_export_annotations(params: dict) -> dict:
     if format_type not in valid_formats:
         return {"error": f"Invalid format. Choose from: {', '.join(valid_formats)}"}
 
-    try:
-        from app import geo_coco_annotations, annotation_lock
-    except ImportError:
-        return {"error": "Cannot access annotation store"}
-
     with annotation_lock:
         count = len(geo_coco_annotations)
 
@@ -200,11 +192,6 @@ def handle_export_annotations(params: dict) -> dict:
 
 def handle_get_annotations(params: dict) -> dict:
     """Get current annotations summary."""
-    try:
-        from app import geo_coco_annotations, annotation_lock
-    except ImportError:
-        return {"error": "Cannot access annotation store"}
-
     with annotation_lock:
         features = list(geo_coco_annotations)
 

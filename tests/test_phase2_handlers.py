@@ -8,7 +8,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from nl_gis.tool_handlers import (
+from nl_gis.handlers import (
     dispatch_tool,
     handle_buffer,
     handle_spatial_query,
@@ -21,8 +21,8 @@ from nl_gis.tool_handlers import (
     handle_get_annotations,
     handle_import_layer,
     handle_merge_layers,
-    MAX_BUFFER_DISTANCE_M,
 )
+from nl_gis.handlers.analysis import MAX_BUFFER_DISTANCE_M
 
 
 # Shared test fixtures
@@ -279,7 +279,8 @@ class TestHandleAnnotation:
 
     def test_add_annotation_with_geometry(self):
         """Test annotation via Flask test client (imports from app work)."""
-        from app import app, geo_coco_annotations
+        from app import app
+        from state import geo_coco_annotations
         app.config['TESTING'] = True
         app.config['WTF_CSRF_ENABLED'] = False
 
@@ -301,7 +302,7 @@ class TestHandleAnnotation:
 
     def test_add_annotation_from_layer(self):
         """Test bulk annotation from layer."""
-        from app import geo_coco_annotations
+        from state import geo_coco_annotations
         initial_count = len(geo_coco_annotations)
         store = make_layer_store()
 
@@ -392,7 +393,7 @@ class TestHandleExportAnnotations:
         assert "error" in result
 
     def test_valid_format_no_annotations(self):
-        from app import geo_coco_annotations
+        from state import geo_coco_annotations
         original = geo_coco_annotations.copy()
         geo_coco_annotations.clear()
 
@@ -404,7 +405,7 @@ class TestHandleExportAnnotations:
         geo_coco_annotations.extend(original)
 
     def test_valid_format_with_annotations(self):
-        from app import geo_coco_annotations
+        from state import geo_coco_annotations
         geo_coco_annotations.append({"type": "Feature", "geometry": {}, "properties": {}})
 
         result = handle_export_annotations({"format": "geojson"})

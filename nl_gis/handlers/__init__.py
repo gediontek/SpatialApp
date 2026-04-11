@@ -257,10 +257,7 @@ def _safe_geojson_to_shapely(geojson_geom):
 
 def _get_layer_snapshot(layer_store, layer_name):
     """Get a snapshot of a layer's features list. Thread-safe."""
-    try:
-        from app import layer_lock
-    except ImportError:
-        layer_lock = None
+    from state import layer_lock
 
     if not layer_store:
         return None, f"Layer '{layer_name}' not found"

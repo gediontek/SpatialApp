@@ -133,7 +133,7 @@ def handle_merge_layers(params: dict, layer_store: dict = None) -> dict:
 
         if layer_store is not None:
             try:
-                from app import layer_lock as _lk
+                from state import layer_lock as _lk
             except ImportError:
                 _lk = None
             if _lk:
@@ -169,7 +169,7 @@ def handle_import_layer(params: dict, layer_store: dict = None) -> dict:
 
         if layer_store is not None:
             try:
-                from app import layer_lock as _lk
+                from state import layer_lock as _lk
             except ImportError:
                 _lk = None
             if _lk:
