@@ -31,9 +31,17 @@ v2.1 raises the NL-GIS pipeline from ~85% tool-selection accuracy (v2.0 baseline
 
 ## How to Work These Plans
 
-Each plan is structured as **Milestones → Epics → Tasks** with acceptance criteria and effort estimates. See [PROMPTS.md](PROMPTS.md) for the generation prompts and execution order.
+Each plan is structured as **Milestones → Epics → Tasks** with acceptance criteria and effort estimates. See [PROMPTS.md](PROMPTS.md) for the generation prompts.
 
-**Recommended order:** 01 → 06 → 02 (measure → gate → improve) then fan out by theme.
+**Before starting execution:** read [`DEPENDENCIES.md`](DEPENDENCIES.md) — it maps hidden dependencies between plans, identifies touchpoint hotspots, and recommends execution order.
+
+**Recommended order (from DEPENDENCIES.md):**
+```
+Phase 0 (parallel):  01 Accuracy Audit + 05 Error Recovery
+Phase 1:             02+03 paired → 06 → 07
+Phase 2 (parallel):  04 · 08 · 10 · 11 · 12
+Phase 3:             09 (needs stable chat.py) → 13
+```
 
 ## Status Updates
 
