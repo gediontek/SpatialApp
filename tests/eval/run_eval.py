@@ -5,15 +5,17 @@ Usage:
 
 Options:
     --mock      Use mocked LLM responses (default, no API key required)
-    --live      Use real LLM API (requires ANTHROPIC_API_KEY)
+    --live      Use real LLM API (reads Config.LLM_PROVIDER + matching key)
     --queries   Comma-separated list of query IDs to evaluate
     --all       Include supplementary queries (default: primary 30 only)
     --report    Print markdown report (default: summary only)
+    --output    Write raw results + batch summary to a JSON file.
 """
 
 import argparse
 import json
 import sys
+from datetime import datetime, timezone
 
 from tests.eval.reference_queries import REFERENCE_QUERIES, ALL_QUERIES, get_tool_coverage
 from tests.eval.evaluator import ToolSelectionEvaluator
@@ -58,14 +60,29 @@ def run_live_evaluation(queries, query_ids=None):
     """
     try:
         from nl_gis.chat import ChatSession
+        from config import Config
     except ImportError:
-        print("ERROR: Cannot import ChatSession. Run from project root.", file=sys.stderr)
+        print("ERROR: Cannot import ChatSession/Config. Run from project root.", file=sys.stderr)
         sys.exit(1)
 
-    import os
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        print("ERROR: ANTHROPIC_API_KEY required for --live mode.", file=sys.stderr)
+    if not Config.get_llm_api_key():
+        provider = Config.LLM_PROVIDER
+        expected_key = {
+            "anthropic": "ANTHROPIC_API_KEY",
+            "gemini": "GEMINI_API_KEY",
+            "openai": "OPENAI_API_KEY",
+        }.get(provider.lower(), f"<key for {provider}>")
+        print(
+            f"ERROR: LLM_PROVIDER={provider} but {expected_key} is empty. "
+            f"Set it in .env to run --live.",
+            file=sys.stderr,
+        )
         sys.exit(1)
+
+    print(
+        f"  Provider: {Config.LLM_PROVIDER} · Model: {Config.get_llm_model()}",
+        file=sys.stderr,
+    )
 
     session = ChatSession()
     results = []
@@ -116,6 +133,8 @@ def main():
                         help="Include supplementary queries")
     parser.add_argument("--report", action="store_true",
                         help="Print full markdown report")
+    parser.add_argument("--output", type=str, default=None,
+                        help="Write raw results + batch summary to a JSON file.")
 
     args = parser.parse_args()
 
@@ -140,6 +159,27 @@ def main():
     evaluator = ToolSelectionEvaluator(queries)
     batch = evaluator.evaluate_batch(results)
 
+    # Optional JSON dump of raw results + batch summary
+    if args.output:
+        try:
+            from config import Config
+            provider = Config.LLM_PROVIDER
+            model = Config.get_llm_model()
+        except ImportError:
+            provider = "mock"
+            model = "mock"
+        payload = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "mode": "live" if args.live else "mock",
+            "provider": provider if args.live else "mock",
+            "model": model if args.live else "mock",
+            "query_count": len(results),
+            "batch": batch,
+        }
+        with open(args.output, "w") as f:
+            json.dump(payload, f, indent=2, default=str)
+        print(f"  Results written to {args.output}", file=sys.stderr)
+
     if args.report:
         print(evaluator.generate_report(results))
     else:
@@ -147,6 +187,14 @@ def main():
         print(f"  Full match:    {batch['full_match']}/{batch['total']}")
         print(f"  Partial match: {batch['partial_match']}/{batch['total']}")
         print(f"  No match:      {batch['no_match']}/{batch['total']}")
+        print(
+            f"Parameter Accuracy:       {batch['param_accuracy']:.1%} "
+            f"({batch['param_matched']}/{batch['param_checked_total']})"
+        )
+        print(
+            f"Chain Accuracy (multi):   {batch['chain_accuracy']:.1%} "
+            f"({batch['chain_correct']}/{batch['chain_eligible_total']})"
+        )
 
         if batch["worst_queries"]:
             print(f"\nMismatches ({len(batch['worst_queries'])}):")
