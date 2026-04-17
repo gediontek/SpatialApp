@@ -174,6 +174,77 @@ MOCK_RESPONSES = {
     "S012": [
         _tool_use("attribute_join", {"layer_name": "districts", "join_data": [], "layer_key": "district_id", "data_key": "district_id"}),
     ],
+
+    # === v2.1 Plan 01 — Coverage expansion (S013-S032) ===
+    "S013": [
+        _tool_use("hot_spot_analysis", {"layer_name": "incidents", "attribute": "count"}),
+    ],
+    "S014": [
+        _tool_use("interpolate", {"layer_name": "weather_stations", "attribute": "temperature", "method": "linear"}),
+    ],
+    "S015": [
+        _tool_use("service_area", {"facility_layer": "fire_stations", "time_minutes": 10, "profile": "auto"}),
+    ],
+    "S016": [
+        _tool_use("describe_layer", {"layer_name": "buildings"}),
+    ],
+    "S017": [
+        _tool_use("detect_duplicates", {"layer_name": "sensor_locations", "threshold_m": 10}),
+    ],
+    "S018": [
+        _tool_use("clean_layer", {"layer_name": "raw_data"}),
+    ],
+    "S019": [
+        _tool_use("import_kml", {"kml_data": "<kml>...</kml>", "layer_name": "waypoints"}),
+    ],
+    "S020": [
+        _tool_use("temporal_filter", {"layer_name": "events", "date_attribute": "event_date", "after": "2025-01-01", "before": "2025-12-31"}),
+    ],
+    "S021": [
+        _tool_use("attribute_statistics", {"layer_name": "buildings", "attribute": "height"}),
+    ],
+    "S022": [
+        _tool_use("od_matrix", {"origins": [], "destinations": []}),
+    ],
+    "S023": [
+        _tool_use("validate_topology", {"layer_name": "imported_parcels"}),
+        _tool_use("repair_topology", {"layer_name": "imported_parcels"}),
+    ],
+    "S024": [
+        _tool_use("reproject_layer", {"layer_name": "boundaries", "from_crs": 32632, "to_crs": 4326}),
+    ],
+    "S025": [
+        _tool_use("detect_crs", {"layer_name": "imported_data"}),
+    ],
+    "S026": [
+        _tool_use("split_feature", {
+            "layer_name": "parcels",
+            "feature_index": 0,
+            "split_line": {"type": "LineString", "coordinates": [[0, 0], [1, 1]]},
+        }),
+    ],
+    "S027": [
+        _tool_use("merge_features", {"layer_name": "zones", "by": "zone_type"}),
+    ],
+    "S028": [
+        _tool_use("extract_vertices", {"layer_name": "coastline"}),
+    ],
+    "S029": [
+        _tool_use("import_geoparquet", {"parquet_data": "<base64>", "layer_name": "parcels"}),
+    ],
+    "S030": [
+        _tool_use("export_geoparquet", {"layer_name": "buildings"}),
+    ],
+    "S031": [
+        _tool_use("validate_topology", {"layer_name": "boundaries"}),
+        _tool_use("repair_topology", {"layer_name": "boundaries", "output_name": "boundaries_clean"}),
+    ],
+    "S032": [
+        _tool_use("execute_code", {
+            "code": "import geopandas as gpd\ngdf = gpd.GeoDataFrame.from_features(_input_data['layer']['features'])\nresult = gdf.total_bounds.tolist()",
+            "input_layer": "buildings",
+        }),
+    ],
 }
 
 

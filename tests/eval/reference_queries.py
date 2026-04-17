@@ -389,23 +389,243 @@ SUPPLEMENTARY_QUERIES = [
         },
         "category": "spatial_analysis",
     },
+
+    # === v2.1 Plan 01 — Coverage expansion (S013-S032) ===
+    # S013-S022 target high-priority uncovered tools (Task 1.1.2)
+    {
+        "id": "S013",
+        "query": "Find crime hot spots in the incidents layer using the count attribute",
+        "complexity": "simple",
+        "expected_tools": ["hot_spot_analysis"],
+        "expected_params": {
+            "hot_spot_analysis": {"layer_name": "incidents", "attribute": "count"}
+        },
+        "category": "spatial_analysis",
+    },
+    {
+        "id": "S014",
+        "query": "Interpolate temperature readings from the weather_stations layer",
+        "complexity": "simple",
+        "expected_tools": ["interpolate"],
+        "expected_params": {
+            "interpolate": {"layer_name": "weather_stations", "attribute": "temperature"}
+        },
+        "category": "spatial_analysis",
+    },
+    {
+        "id": "S015",
+        "query": "Show the 10-minute driving coverage from all fire stations",
+        "complexity": "simple",
+        "expected_tools": ["service_area"],
+        "expected_params": {
+            "service_area": {"facility_layer": "fire_stations", "time_minutes": 10}
+        },
+        "category": "routing",
+    },
+    {
+        "id": "S016",
+        "query": "Describe the buildings layer — what's in it?",
+        "complexity": "simple",
+        "expected_tools": ["describe_layer"],
+        "expected_params": {
+            "describe_layer": {"layer_name": "buildings"}
+        },
+        "category": "data_quality",
+    },
+    {
+        "id": "S017",
+        "query": "Find duplicate features in the sensor_locations layer within 10 meters",
+        "complexity": "simple",
+        "expected_tools": ["detect_duplicates"],
+        "expected_params": {
+            "detect_duplicates": {"layer_name": "sensor_locations", "threshold_m": 10}
+        },
+        "category": "data_quality",
+    },
+    {
+        "id": "S018",
+        "query": "Clean the raw_data layer: remove nulls and fix attributes",
+        "complexity": "simple",
+        "expected_tools": ["clean_layer"],
+        "expected_params": {
+            "clean_layer": {"layer_name": "raw_data"}
+        },
+        "category": "data_quality",
+    },
+    {
+        "id": "S019",
+        "query": "Import this KML content as a waypoints layer: <kml>...</kml>",
+        "complexity": "simple",
+        "expected_tools": ["import_kml"],
+        "category": "import_export",
+    },
+    {
+        "id": "S020",
+        "query": "Show only the events between 2025-01-01 and 2025-12-31 from the events layer",
+        "complexity": "simple",
+        "expected_tools": ["temporal_filter"],
+        "expected_params": {
+            "temporal_filter": {"layer_name": "events", "after": "2025-01-01", "before": "2025-12-31"}
+        },
+        "category": "spatial_analysis",
+    },
+    {
+        "id": "S021",
+        "query": "Give me summary statistics for the height attribute in the buildings layer",
+        "complexity": "simple",
+        "expected_tools": ["attribute_statistics"],
+        "expected_params": {
+            "attribute_statistics": {"layer_name": "buildings", "attribute": "height"}
+        },
+        "category": "spatial_analysis",
+    },
+    {
+        "id": "S022",
+        "query": "Compute the origin-destination matrix between the warehouses and customers layers",
+        "complexity": "simple",
+        "expected_tools": ["od_matrix"],
+        "category": "routing",
+    },
+
+    # S023-S032 target remaining uncovered tools, multi-step where natural (Task 1.1.3)
+    {
+        "id": "S023",
+        "query": "Check if the imported_parcels polygons are valid and fix any topology errors",
+        "complexity": "moderate",
+        "expected_tools": ["validate_topology", "repair_topology"],
+        "expected_params": {
+            "validate_topology": {"layer_name": "imported_parcels"},
+            "repair_topology": {"layer_name": "imported_parcels"}
+        },
+        "category": "data_quality",
+    },
+    {
+        "id": "S024",
+        "query": "Tag the boundaries layer as being in EPSG:32632",
+        "complexity": "simple",
+        "expected_tools": ["reproject_layer"],
+        "expected_params": {
+            "reproject_layer": {"layer_name": "boundaries", "from_crs": 32632}
+        },
+        "category": "spatial_analysis",
+    },
+    {
+        "id": "S025",
+        "query": "What coordinate system is the imported_data layer in?",
+        "complexity": "simple",
+        "expected_tools": ["detect_crs"],
+        "expected_params": {
+            "detect_crs": {"layer_name": "imported_data"}
+        },
+        "category": "spatial_analysis",
+    },
+    {
+        "id": "S026",
+        "query": "Split the first parcel in the parcels layer along this line: [[0,0],[1,1]]",
+        "complexity": "simple",
+        "expected_tools": ["split_feature"],
+        "expected_params": {
+            "split_feature": {"layer_name": "parcels", "feature_index": 0}
+        },
+        "category": "geometry",
+    },
+    {
+        "id": "S027",
+        "query": "Merge features in the zones layer that share the same zone_type value",
+        "complexity": "simple",
+        "expected_tools": ["merge_features"],
+        "expected_params": {
+            "merge_features": {"layer_name": "zones", "by": "zone_type"}
+        },
+        "category": "geometry",
+    },
+    {
+        "id": "S028",
+        "query": "Extract the vertex points from the coastline layer",
+        "complexity": "simple",
+        "expected_tools": ["extract_vertices"],
+        "expected_params": {
+            "extract_vertices": {"layer_name": "coastline"}
+        },
+        "category": "geometry",
+    },
+    {
+        "id": "S029",
+        "query": "Import this GeoParquet file as a parcels layer",
+        "complexity": "simple",
+        "expected_tools": ["import_geoparquet"],
+        "category": "import_export",
+    },
+    {
+        "id": "S030",
+        "query": "Export the buildings layer as GeoParquet",
+        "complexity": "simple",
+        "expected_tools": ["export_geoparquet"],
+        "expected_params": {
+            "export_geoparquet": {"layer_name": "buildings"}
+        },
+        "category": "import_export",
+    },
+    {
+        "id": "S031",
+        "query": "Validate topology on the boundaries layer, and if there are issues, repair them into a clean version",
+        "complexity": "moderate",
+        "expected_tools": ["validate_topology", "repair_topology"],
+        "expected_params": {
+            "validate_topology": {"layer_name": "boundaries"},
+            "repair_topology": {"layer_name": "boundaries", "output_name": "boundaries_clean"}
+        },
+        "category": "data_quality",
+    },
+    {
+        "id": "S032",
+        "query": "Compute the minimum bounding rectangle for all features in the buildings layer",
+        "complexity": "simple",
+        "expected_tools": ["execute_code"],
+        "category": "advanced",
+    },
 ]
 
 # Full query set = primary + supplementary
 ALL_QUERIES = REFERENCE_QUERIES + SUPPLEMENTARY_QUERIES
 
-# All 44 tool names for coverage validation
+# All 64 tool names for coverage validation (source of truth: nl_gis/tools.py)
 ALL_TOOLS = [
+    # Data acquisition + nav
     "geocode", "fetch_osm", "reverse_geocode", "batch_geocode", "map_command",
+    "search_nearby",
+    # Measurement + core analysis
     "calculate_area", "measure_distance", "buffer", "spatial_query", "aggregate",
-    "search_nearby", "show_layer", "hide_layer", "remove_layer", "highlight_features",
-    "filter_layer", "style_layer", "add_annotation", "classify_landcover",
-    "export_annotations", "get_annotations", "merge_layers", "import_layer",
-    "import_csv", "import_wkt", "export_layer", "find_route", "isochrone", "heatmap",
-    "closest_facility", "optimize_route", "intersection", "difference",
-    "symmetric_difference", "convex_hull", "centroid", "simplify", "bounding_box",
-    "dissolve", "clip", "voronoi", "point_in_polygon", "attribute_join",
-    "spatial_statistics",
+    "filter_layer",
+    # Layer management
+    "show_layer", "hide_layer", "remove_layer", "highlight_features", "style_layer",
+    "merge_layers",
+    # Annotations
+    "add_annotation", "classify_landcover", "export_annotations", "get_annotations",
+    # Import/export
+    "import_layer", "import_csv", "import_wkt", "import_kml",
+    "import_geoparquet", "export_geoparquet", "export_layer",
+    # Data quality
+    "describe_layer", "detect_duplicates", "clean_layer",
+    # Routing
+    "find_route", "isochrone", "heatmap", "closest_facility", "optimize_route",
+    "service_area", "od_matrix",
+    # Overlays
+    "intersection", "difference", "symmetric_difference",
+    # Geometry
+    "convex_hull", "centroid", "simplify", "bounding_box", "dissolve", "clip",
+    "voronoi", "split_feature", "merge_features", "extract_vertices",
+    # Advanced spatial analysis
+    "point_in_polygon", "attribute_join", "spatial_statistics",
+    "hot_spot_analysis", "interpolate",
+    # Topology
+    "validate_topology", "repair_topology",
+    # CRS
+    "reproject_layer", "detect_crs",
+    # Temporal + attribute stats
+    "temporal_filter", "attribute_statistics",
+    # Code fallback
+    "execute_code",
 ]
 
 
