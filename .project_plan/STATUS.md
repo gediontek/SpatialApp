@@ -1,126 +1,96 @@
 # SpatialApp Project Status
 
-**Last updated**: 2026-04-11
-**Tests**: 438 passing
-**Commits**: 22 on main
+**Last updated**: 2026-04-17
+**Current version**: v2.0 complete · v2.1 planned
+**Tests**: 1002 collected across 35 test files
+**Commits**: 51 on main
 **Health**: All systems operational
+
+**Navigation:** [Shipped history → `docs/v1/`](../docs/v1/) · [Active plans → `docs/v2/`](../docs/v2/) · [Roadmap](ROADMAP.md) · [Architecture](ARCHITECTURE.md) · [Capability map](CAPABILITY_MAP.md)
 
 ---
 
-## Current State: Production-Hardened + Feature-Complete
+## Current State: v2.0 Complete, v2.1 Planned
 
 ### Core Metrics
 
-| Metric | Before (2026-04-02) | After (2026-04-11) | Delta |
-|--------|---------------------|---------------------|-------|
-| Tools (Claude API) | 24 | 26 (+ waypoints, dashboard) | +2 |
-| API endpoints | 24 | 30 | +6 |
-| Database tables | 5 | 5 | — |
-| Test count | 236 | 438 | +86% |
-| Python LOC | ~13,000 | ~14,500 | +12% |
-| JavaScript LOC | ~1,300 | ~1,800 | +38% |
-| Bugs fixed | — | 80 | — |
-| Improvements | — | 33 | — |
+| Metric | 2026-04-02 | 2026-04-11 (v1.3) | 2026-04-17 (v2.0) | Delta (total) |
+|--------|------------|-------------------|-------------------|---------------|
+| Tools (Claude API) | 24 | 26 | 64 | +167% |
+| Tests collected | 236 | 438 | 1002 | +325% |
+| Test files | ~10 | 15 | 35 | +250% |
+| Handlers | monolith | 6 | 5 (consolidated) | — |
+| Blueprints | — | 5 | 7 | +2 |
+| Services | 4 | 7 | 9 | +5 |
+| Commits | — | 22 | 51 | +29 |
 
-### Architecture (Post-Refactor)
+### What Shipped (Chronological)
+
+**v1.0-v1.3** (2026-04-10 → 2026-04-11)
+- 80 bugs fixed (2 critical, 15 high, 32 medium, 31 low)
+- 33 quality/security/performance improvements
+- Blueprint refactor + app factory + handler package
+- Connection pooling, structured logging, Gunicorn, STRtree, responsive CSS
+- Multi-stop routing, dashboard, WebSocket, PostGIS migration path
+
+**v2.0** (2026-04-11)
+- **M1** — Spatial analysis depth: interpolation, topology validation/repair, service areas (commit `90f19fa`)
+- **M2** — Data pipeline: KML import, GeoParquet, data quality tools (commit `4576912`)
+- **M3** — Infrastructure: Prometheus metrics, layer pagination (commit `fd9c050`)
+- **M5** — Capability tools: 8 tools — CRS, network, geometry, temporal (commit `91799c9`)
+- **M6** — Integration: tests, documentation, performance benchmarks (commit `0b2b6a4`)
+- **A1-A4** — LLM accuracy: code-gen fallback, plan-then-execute, enhanced tool descriptions, LLM-as-judge eval
+- **B1-B4** — Spatial ops: hot-spot analysis, IDW interpolation, topology validation, service areas
+- **C3** — Prometheus metrics endpoint
+
+Full v1 history + frozen plans: [`docs/v1/`](../docs/v1/).
+
+### Architecture (Current)
 
 ```
-app.py (239 lines) — create_app() factory only
-state.py (30 lines) — shared mutable state
+app.py                           — create_app() factory
+state.py                         — shared mutable state
 
-blueprints/
+blueprints/                      (7 blueprints)
   auth.py         — /api/register, /api/me, /api/health
   annotations.py  — 8 annotation CRUD routes
   chat.py         — /api/chat (SSE), /api/usage, /api/metrics
-  layers.py       — /api/layers, /api/import
+  layers.py       — /api/layers, /api/import, pagination
   osm.py          — /, /upload, /fetch_osm_data, /api/geocode, /api/auto-classify
   dashboard.py    — /dashboard, /api/dashboard, session management
-  websocket.py    — Socket.IO events (connect, chat_message, join_session)
+  websocket.py    — Socket.IO events
 
 nl_gis/
-  chat.py         — ChatSession: LLM tool dispatch loop + SSE streaming
-  tools.py        — 26 tool schemas for Claude API
+  chat.py         — ChatSession: LLM tool dispatch loop + SSE streaming + plan mode
+  tools.py        — 64 tool schemas for Claude API
   geo_utils.py    — ValidatedPoint, projections, geodesic ops
-  handlers/
+  handlers/       (5 modules)
     __init__.py   — dispatch_tool, shared helpers, STRtree indexing
-    navigation.py — geocode, fetch_osm, map_command, search_nearby
-    analysis.py   — buffer, spatial_query, aggregate, area, distance, filter
-    layers.py     — style, visibility, highlight, merge, import
+    navigation.py — geocode, fetch_osm, map_command, search_nearby, reverse_geocode, batch_geocode
+    analysis.py   — buffer, spatial_query, aggregate, overlays, geometry tools, stats, code_executor
+    layers.py     — style, visibility, highlight, merge, import/export (CSV/KML/WKT/GeoParquet)
     annotations.py — add_annotation, classify_landcover, export, get
-    routing.py    — find_route (multi-stop), isochrone, heatmap
+    routing.py    — find_route, isochrone, heatmap, closest_facility, optimize_route, service_area
 
-services/
-  database.py     — SQLite + WAL, thread-local connection pooling
-  db_interface.py — DatabaseInterface ABC (24 methods)
-  postgres_db.py  — PostgreSQL stub (migration path)
-  valhalla_client.py — Routing + isochrone + retry logic
-  cache.py        — File cache with size limits + collision verification
-  rate_limiter.py — Token bucket (release-before-sleep)
-  logging_config.py — JSON structured logging with request IDs
+services/                        (9 services)
+  database.py, db_interface.py, postgres_db.py — SQLite + Postgres migration path
+  valhalla_client.py — routing + isochrone + retry
+  cache.py, rate_limiter.py, logging_config.py
+  code_executor.py — sandboxed Python execution (execute_code tool)
+  metrics.py      — Prometheus /metrics endpoint
 ```
-
-### What Was Done (2026-04-10 — 2026-04-11 Session)
-
-#### Phase 1: Bug Investigation & Fixes (80 bugs)
-- 2 critical: geodesic area for polygons with holes, inverted contains predicate
-- 15 high: tool call limit, history trimming, XSS (3), timing attack, thread safety (4), session bypass
-- 32 medium: info leaks (7), SSE parser, connection leak, race conditions, missing validation
-- 31 low: schema validation, null guards, edge cases
-
-#### Phase 2: Quality Improvements (33 items)
-- Security: CSRF on fetch, hmac tokens, session hardening, consistent auth
-- Quality: annotation/point dedup, pyproj caching, error handlers, cache limits
-- Features: abort controller, numeric filters, OSM relations, offline reconnection
-- Accessibility: ARIA labels, keyboard navigation
-- Performance: system prompt bounds, spatial indexing (STRtree)
-
-#### Phase 3: Architectural Refactor (5 items)
-- S1: Extract 5 Flask blueprints from monolithic app.py (1452→239 lines, -86%)
-- S2: Application factory pattern (create_app())
-- S3: Shared state module (state.py) — eliminates circular imports
-- S4: Split tool_handlers.py into handlers/ package (1500→6 modules)
-- S5: DB-first data flow (writes to DB before in-memory cache)
-
-#### Phase 4: Infrastructure (5 items)
-- SQLite connection pooling (thread-local)
-- Structured JSON logging with request IDs
-- Gunicorn production config (gthread workers)
-- STRtree spatial indexing for O(log n) queries
-- Responsive CSS for tablet (768px) and phone (480px)
-
-#### Phase 5: New Features (4 items)
-- Multi-stop routing with Valhalla waypoints
-- User dashboard (sessions, layers, usage stats)
-- WebSocket transport via Flask-SocketIO (alongside SSE)
-- PostGIS migration path (database abstraction layer)
-
-#### Phase 6: Cleanup
-- Deleted backward-compat shim (tool_handlers.py)
-- Migrated all imports to canonical paths (state.py, nl_gis.handlers)
-- Removed all app.py re-exports
-- Zero stale imports verified by grep
 
 ### Known Limitations
 
-| Limitation | Condition | Impact |
-|------------|-----------|--------|
-| UTM zone distortion | Geometry spans > 6 longitude | 0.2-31% area error |
-| No spatial indexing at DB level | > 10K features in DB queries | Slow DB reads |
-| SQLite single-writer | High write concurrency | WAL helps; PostGIS migration path ready |
-| Flask dev server in dev | Production load | Gunicorn config ready |
-| No raster analysis | Elevation/terrain queries | Not supported |
-| Chat layers not persisted to DB | Server restart | Chat-created layers lost |
+| Limitation | Condition | Tracked In |
+|------------|-----------|------------|
+| UTM zone distortion | Geometry spans > 6° longitude | Known (0.2-31% area error) |
+| No spatial indexing at DB level | > 10K features | `docs/v2/13-production-plan.md` |
+| SQLite single-writer | High write concurrency | PostGIS path ready |
+| No raster analysis | Elevation/terrain queries | `docs/v2/08-raster-analysis-plan.md` |
+| Chat layers not persisted to DB | Server restart | Open |
+| Accuracy baseline unmeasured | — | `docs/v2/01-accuracy-audit-plan.md` |
 
-### Test Coverage
+### Next: v2.1
 
-| Category | Count | Files |
-|----------|-------|-------|
-| Unit/handler tests | 296 | test_app, test_tool_handlers, test_phase2/4, test_filter, test_valhalla |
-| Coverage gap tests | 34 | test_coverage_gaps |
-| Chat engine tests | 31 | test_chat_engine |
-| E2E Playwright | 25 | test_e2e |
-| Multi-stop routing | 10 | test_multistop_routing |
-| Dashboard | 21 | test_dashboard |
-| WebSocket | 13 | test_websocket |
-| DB interface | 16 | test_db_interface |
-| **Total** | **438** | **15 test files** |
+13 plans drafted, none started. See [`docs/v2/README.md`](../docs/v2/README.md) for the status dashboard and recommended execution order.

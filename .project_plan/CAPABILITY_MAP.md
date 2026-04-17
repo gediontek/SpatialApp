@@ -1,5 +1,10 @@
 # SpatialApp Capability Map
 
+**As of:** 2026-04-17 · 64 tools · 5 handlers · 7 blueprints
+**Navigation:** [Status](STATUS.md) · [Shipped → `docs/v1/`](../docs/v1/) · [Active → `docs/v2/`](../docs/v2/)
+
+---
+
 ## NL-to-GIS Pipeline
 
 ```
@@ -12,9 +17,10 @@ blueprints/chat.py: api_chat() — HTTP POST with SSE response
 nl_gis/chat.py: ChatSession.process_message()
   │ 1. Build dynamic system prompt (static rules + map state + recent context)
   │ 2. Append user message to conversation history
+  │ 3. Optional: plan_mode → return structured plan for user approval
   │
   ▼
-Claude API call (system + 26 tool schemas + message history)
+Claude API call (system + 64 tool schemas + message history)
   │
   ├─ stop_reason="end_turn" → yield SSE message event → done
   │
@@ -27,75 +33,82 @@ Claude API call (system + 26 tool schemas + message history)
        │ 6. loop → next Claude API call
 ```
 
-## Tool Inventory (26 tools)
+## Tool Inventory (64 tools)
 
-### Data Acquisition (4 tools)
-| Tool | External API | Output | Caching |
-|------|-------------|--------|---------|
-| `geocode` | Nominatim | lat/lon/bbox | 24h file cache |
-| `fetch_osm` | Overpass | GeoJSON layer | 1h file cache |
-| `search_nearby` | Overpass | GeoJSON layer | 1h file cache |
-| `classify_landcover` | OSM_auto_label | GeoJSON layer | None |
+### Data Acquisition (5)
+`geocode`, `reverse_geocode`, `batch_geocode`, `fetch_osm`, `search_nearby`
 
-### Spatial Analysis (6 tools)
-| Tool | Spatial Operations | Output |
-|------|-------------------|--------|
-| `buffer` | UTM project → Shapely buffer → reproject | GeoJSON layer |
-| `spatial_query` | STRtree index + intersects/contains/within/within_distance | GeoJSON layer |
-| `aggregate` | geodesic_area (for area op) | Stats dict |
-| `calculate_area` | geodesic_area (pyproj ellipsoidal) | Stats dict |
-| `measure_distance` | geodesic_distance (pyproj inverse) | Stats dict |
-| `filter_layer` | 9 operators (equals, gt, lt, between, etc.) | GeoJSON layer |
+### Spatial Analysis — Core (5)
+`buffer`, `spatial_query`, `aggregate`, `calculate_area`, `measure_distance`
 
-### Routing & Network (3 tools)
-| Tool | External API | Output |
-|------|-------------|--------|
-| `find_route` | Valhalla (multi-stop) | GeoJSON layer (line + markers) |
-| `isochrone` | Valhalla (fallback: buffer) | GeoJSON layer (polygon) |
-| `heatmap` | None (centroid extraction) | Point array for Leaflet.heat |
+### Spatial Analysis — Overlay (3)
+`intersection`, `difference`, `symmetric_difference`
 
-### Layer Management (7 tools)
-| Tool | Operation | Output |
-|------|-----------|--------|
-| `show_layer` | Visibility toggle | Frontend command |
-| `hide_layer` | Visibility toggle | Frontend command |
-| `remove_layer` | Delete from map | Frontend command |
-| `style_layer` | Change color/weight/opacity | Frontend command |
-| `highlight_features` | Attribute-based highlight | Frontend command |
-| `merge_layers` | Union or spatial_join (GeoPandas) | GeoJSON layer |
-| `import_layer` | Direct GeoJSON import | GeoJSON layer |
+### Spatial Analysis — Geometry (10)
+`convex_hull`, `centroid`, `simplify`, `bounding_box`, `dissolve`, `clip`, `voronoi`, `split_feature`, `merge_features`, `extract_vertices`
 
-### Annotations (3 tools)
-| Tool | Operation | Output |
-|------|-----------|--------|
-| `add_annotation` | Save features to annotation store | Success/count |
-| `export_annotations` | GeoJSON/Shapefile/GeoPackage | Download URL |
-| `get_annotations` | Read annotation store | GeoJSON + summary |
+### Spatial Analysis — Advanced (6)
+`point_in_polygon`, `attribute_join`, `spatial_statistics`, `hot_spot_analysis`, `interpolate`, `attribute_statistics`
 
-### Map Control (1 tool)
-| Tool | Operations |
-|------|-----------|
-| `map_command` | pan, zoom, pan_and_zoom, fit_bounds, change_basemap |
+### Spatial Analysis — Topology (2)
+`validate_topology`, `repair_topology`
 
-### System (2 implicit)
-| Tool | Notes |
-|------|-------|
-| Dashboard API | /api/dashboard — sessions, layers, stats |
-| WebSocket | Socket.IO alongside SSE |
+### Spatial Analysis — CRS (2)
+`reproject_layer`, `detect_crs`
+
+### Spatial Analysis — Code Fallback (1)
+`execute_code` — sandboxed GeoPandas/Shapely Python execution
+
+### Routing & Network (7)
+`find_route`, `isochrone`, `heatmap`, `closest_facility`, `optimize_route`, `service_area`, `od_matrix`
+
+### Layer Management (7)
+`show_layer`, `hide_layer`, `remove_layer`, `style_layer`, `highlight_features`, `filter_layer`, `merge_layers`
+
+### Import/Export (7)
+`import_layer`, `import_csv`, `import_wkt`, `import_kml`, `import_geoparquet`, `export_layer`, `export_geoparquet`
+
+### Data Quality (3)
+`describe_layer`, `detect_duplicates`, `clean_layer`
+
+### Temporal (1)
+`temporal_filter`
+
+### Annotations (4)
+`add_annotation`, `classify_landcover`, `export_annotations`, `get_annotations`
+
+### Map Control (1)
+`map_command` — pan, zoom, pan_and_zoom, fit_bounds, change_basemap
+
+## Handler Layout
+
+| Handler | Responsibility |
+|---------|---------------|
+| `navigation.py` | geocode, reverse_geocode, batch_geocode, fetch_osm, search_nearby, map_command |
+| `analysis.py` | buffer, spatial_query, aggregate, overlays, geometry ops, topology, CRS, stats, execute_code |
+| `layers.py` | style, visibility, highlight, filter, merge, import/export (GeoJSON/CSV/KML/WKT/GeoParquet), data quality |
+| `annotations.py` | add, export, get, classify_landcover |
+| `routing.py` | find_route, isochrone, heatmap, closest_facility, optimize_route, service_area, od_matrix |
+
+`handlers/__init__.py` hosts `dispatch_tool`, STRtree indexing, and shared helpers.
 
 ## Tool Chain Patterns
 
-The system prompt teaches Claude 8 canonical chains:
+Baseline patterns taught to Claude via the system prompt. Enhanced descriptions landed in A3 (commit `34f2013`).
 
 ```
-1. LOCATE → FETCH:     geocode → fetch_osm / search_nearby
-2. FETCH → ANALYZE:    fetch_osm → aggregate / calculate_area
-3. FETCH → FILTER:     fetch_osm → filter_layer → style_layer
-4. BUFFER ANALYSIS:    fetch_osm(A) → fetch_osm(B) → buffer(B) → spatial_query(A, within, buffer)
-5. ROUTE → BUFFER:     find_route → buffer → spatial_query (what's near my route?)
-6. ISOCHRONE ANALYSIS:  isochrone → fetch_osm → spatial_query (what's reachable?)
-7. ANNOTATE:           fetch_osm → filter → add_annotation → export_annotations
-8. COMPARE:            fetch_osm(A) → fetch_osm(B) → merge_layers(spatial_join)
+1. LOCATE → FETCH:      geocode → fetch_osm / search_nearby
+2. FETCH → ANALYZE:     fetch_osm → aggregate / calculate_area
+3. FETCH → FILTER:      fetch_osm → filter_layer → style_layer
+4. BUFFER ANALYSIS:     fetch_osm(A) → fetch_osm(B) → buffer(B) → spatial_query(A, within, buffer)
+5. ROUTE → BUFFER:      find_route → buffer → spatial_query
+6. ISOCHRONE ANALYSIS:  isochrone → fetch_osm → spatial_query
+7. OVERLAY:             fetch_osm(A) → fetch_osm(B) → intersection/difference
+8. ANNOTATE:            fetch_osm → filter → add_annotation → export_annotations
+9. IMPORT → ANALYZE:    import_csv → buffer → spatial_query
+10. HOT-SPOT:           fetch_osm → hot_spot_analysis → style_layer
+11. SERVICE COVERAGE:   fetch_osm(facilities) → service_area → difference(bounds)
+12. CODE FALLBACK:      execute_code (when no tool chain matches)
 ```
 
 ## Spatial Operations Stack
@@ -109,62 +122,35 @@ geo_utils.py (core library)
   ├── buffer_geometry       — metric-accurate buffer via UTM round-trip
   ├── geodesic_area         — ellipsoidal area (pyproj Geod, handles holes)
   ├── geodesic_distance     — ellipsoidal point-to-point distance
-  └── geojson↔shapely       — format conversion wrappers
+  └── geojson ↔ shapely     — format conversion wrappers
 
 handlers/__init__.py (shared helpers)
-  ├── _build_spatial_index  — STRtree for O(log n) spatial queries
-  ├── _get_layer_snapshot   — thread-safe layer read
-  ├── _get_layer_geometries — extract valid Shapely geometries from layer
+  ├── _build_spatial_index   — STRtree for O(log n) spatial queries
+  ├── _get_layer_snapshot    — thread-safe layer read
+  ├── _get_layer_geometries  — extract valid Shapely geometries from layer
   ├── _safe_geojson_to_shapely — convert with auto-repair (make_valid)
-  ├── _osm_to_geojson       — OSM ways + relations → GeoJSON
-  └── _resolve_point*       — geocode or coordinate resolution
+  ├── _osm_to_geojson        — OSM ways + relations → GeoJSON
+  └── _resolve_point*        — geocode or coordinate resolution
 ```
 
-## Missing Capabilities (Roadmap)
+## Remaining Capability Gaps
 
-### P0 — Critical Gaps (blocks common user requests)
+All v1 P0-P2 gaps from the original capability map have been closed. Remaining gaps map to v2.1 plans:
 
-| # | Capability | User Request Example | Effort |
-|---|-----------|---------------------|--------|
-| 1 | Overlay: intersection | "Show where parks AND flood zones overlap" | M |
-| 2 | Overlay: difference | "Subtract water from the park area" | M |
-| 3 | Reverse geocode | "What's at this location?" (click on map) | S |
-| 4 | Convex hull | "Draw a boundary around these points" | S |
-| 5 | Centroid extraction | "Get center points of all buildings" | S |
-| 6 | Geometry simplify | "Simplify this layer for better performance" | S |
-| 7 | Closest facility | "What's the nearest hospital?" | M |
-
-### P1 — Important Gaps (professional use)
-
-| # | Capability | Description | Effort |
-|---|-----------|-------------|--------|
-| 8 | Batch geocode | Geocode a list of addresses to point layer | M |
-| 9 | CSV import with coordinates | Import tabular data with lat/lon columns | M |
-| 10 | KML/KMZ import | Import GPS tracks and placemarks | M |
-| 11 | Attribute join | Join tabular data to spatial layer by key | M |
-| 12 | Point-in-polygon | "Which district is this address in?" | S |
-| 13 | Bounding box as geometry | "Create a rectangle around this area" | XS |
-| 14 | Traveling salesman | "Optimize the order of these 10 stops" | M |
-| 15 | Spatial statistics | Clustering, hot spot analysis | L |
-
-### P2 — Advanced (specialized use cases)
-
-| # | Capability | Description | Effort |
-|---|-----------|-------------|--------|
-| 16 | Elevation/terrain | Elevation profiles, slope, viewshed | L |
-| 17 | Raster-vector integration | Zonal statistics | L |
-| 18 | Voronoi/Thiessen polygons | Spatial partitioning | M |
-| 19 | Temporal filtering | Time-series layer support | M |
-| 20 | OD cost matrix | Multi-origin to multi-destination | M |
-| 21 | Geometry editing | Split, merge features, edit vertices | L |
-| 22 | GeoParquet support | Modern columnar spatial format | S |
-| 23 | CRS transformation tool | "Reproject to EPSG:4326" | S |
+| Gap | v2.1 Plan |
+|-----|-----------|
+| Raster analysis (elevation, slope, viewshed, zonal stats) | [`docs/v2/08-raster-analysis-plan.md`](../docs/v2/08-raster-analysis-plan.md) |
+| Multi-agent complex query decomposition | [`docs/v2/03-complex-queries-plan.md`](../docs/v2/03-complex-queries-plan.md) |
+| Vector tiles for large layers | [`docs/v2/13-production-plan.md`](../docs/v2/13-production-plan.md) |
+| Visualization/dashboard output | [`docs/v2/11-visualization-plan.md`](../docs/v2/11-visualization-plan.md) |
+| Collaboration (multi-user sessions) | [`docs/v2/09-collaboration-plan.md`](../docs/v2/09-collaboration-plan.md) |
 
 ## External API Dependencies
 
 | API | Used By | Rate Limit | Cache TTL | Fallback |
 |-----|---------|-----------|-----------|----------|
-| Nominatim | geocode, search_nearby, fetch_osm | 1 req/s | 24h | None |
+| Nominatim | geocode, reverse_geocode, batch_geocode | 1 req/s | 24h | None |
 | Overpass | fetch_osm, search_nearby | 2 req/s | 1h | None |
-| Valhalla | find_route, isochrone | 5 req/s | 1h | Buffer estimation (isochrone only) |
-| Claude API | chat.py | Per-plan | None | Rule-based fallback for simple commands |
+| Valhalla | find_route, isochrone, optimize_route, service_area, od_matrix | 5 req/s | 1h | Buffer estimation (isochrone only) |
+| Claude API | nl_gis/chat.py | Per-plan | None | Rule-based fallback for simple commands |
+| OpenAI API (multi-provider) | nl_gis/chat.py | Per-plan | None | Claude fallback |

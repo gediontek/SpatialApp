@@ -1,5 +1,10 @@
 # SpatialApp Architecture
 
+**As of:** 2026-04-17 · post-v2.0 · 7 blueprints · 5 handlers · 9 services · 64 tools
+**Navigation:** [Status](STATUS.md) · [Capability Map](CAPABILITY_MAP.md) · [Shipped → `docs/v1/`](../docs/v1/) · [Active → `docs/v2/`](../docs/v2/)
+
+---
+
 ## System Overview
 
 ```
@@ -61,6 +66,8 @@
 │  │  cache.py ──────── file cache + limits   │            │
 │  │  rate_limiter.py ── token bucket         │            │
 │  │  logging_config.py ── JSON formatter     │            │
+│  │  code_executor.py ── sandboxed Python    │            │
+│  │  metrics.py ─────── Prometheus /metrics  │            │
 │  └──────────────────────────────────────────┘            │
 └──────────────────────────────────────────────────────────┘
               │                │               │

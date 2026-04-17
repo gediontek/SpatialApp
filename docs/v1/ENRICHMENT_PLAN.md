@@ -1,7 +1,11 @@
 # SpatialApp Enrichment Plan — Milestones, Epics & Tasks
 
+> **Status:** FROZEN — v1 historical record. Frozen 2026-04-17.
+> **Outcome:** 100% shipped as v2.0 M1-M6. All 6 milestones, 18 epics, ~70 tasks landed in commits `90f19fa` through `0b2b6a4`.
+> **For active planning:** see [`docs/v2/`](../v2/).
+
 **Date**: 2026-04-11
-**Baseline**: 47 tools, 828 tests, 43 commits
+**Baseline at writing**: 47 tools, 828 tests, 43 commits
 **Scope**: Remaining P2-P3 items + identified gaps
 
 ---

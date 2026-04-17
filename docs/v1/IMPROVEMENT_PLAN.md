@@ -1,8 +1,17 @@
 # SpatialApp Improvement Plan — Research-Driven
 
+> **Status:** FROZEN — v1 historical record. Frozen 2026-04-17.
+> **Outcome:** ~80% shipped (Track A complete, Track B complete, C3 shipped).
+> **Residuals rolled forward to v2.1:**
+> - C1 Elevation/DEM → [`docs/v2/08-raster-analysis-plan.md`](../v2/08-raster-analysis-plan.md)
+> - C2 Vector tiles → [`docs/v2/13-production-plan.md`](../v2/13-production-plan.md)
+> - D1 Multi-agent → [`docs/v2/03-complex-queries-plan.md`](../v2/03-complex-queries-plan.md)
+> - D2 Fine-tuning → [`docs/v2/07-provider-tuning-plan.md`](../v2/07-provider-tuning-plan.md)
+> - A3 description polish for 8 new M5 tools → [`docs/v2/02-tool-descriptions-plan.md`](../v2/02-tool-descriptions-plan.md)
+
 **Based on**: `.project_plan/RESEARCH_NL_GIS.md`
 **Date**: 2026-04-11
-**Current state**: 44 tools, 596 tests, function-calling architecture, ~85% estimated accuracy
+**Baseline at writing**: 44 tools, 596 tests, function-calling architecture, ~85% estimated accuracy
 
 ---
 
