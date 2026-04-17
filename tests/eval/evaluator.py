@@ -94,6 +94,12 @@ class ToolSelectionEvaluator:
         else:
             result["param_match"] = None  # No param check applicable
 
+        # Chain order check: only meaningful for multi-tool queries
+        if len(expected) >= 2:
+            result["chain_order_correct"] = _is_subsequence(expected, actual_tools)
+        else:
+            result["chain_order_correct"] = None
+
         return result
 
     def evaluate_batch(self, results: list[dict]) -> dict:
@@ -122,10 +128,32 @@ class ToolSelectionEvaluator:
 
         accuracy = full_match / total if total > 0 else 0.0
 
+        # Parameter accuracy: count queries that had a param check applicable
+        # (param_match is True or False) and compute ratio of True.
+        param_checked = [e for e in evaluations if e["param_match"] is not None]
+        param_matched = sum(1 for e in param_checked if e["param_match"])
+        param_accuracy = (
+            param_matched / len(param_checked) if param_checked else 0.0
+        )
+
+        # Chain accuracy: only multi-tool queries where ordering is meaningful.
+        # Denominator: multi-tool queries at moderate/complex/multi_step complexity.
+        chain_eligible = [
+            e for e in evaluations
+            if e["chain_order_correct"] is not None
+            and e["complexity"] in ("moderate", "complex", "multi_step")
+        ]
+        chain_correct = sum(1 for e in chain_eligible if e["chain_order_correct"])
+        chain_accuracy = (
+            chain_correct / len(chain_eligible) if chain_eligible else 0.0
+        )
+
         # By complexity
         by_complexity = _group_accuracy(evaluations, "complexity")
         # By category
         by_category = _group_accuracy(evaluations, "category")
+        # Chain accuracy by complexity (multi-tool queries only)
+        chain_by_complexity = _chain_accuracy_by_complexity(chain_eligible)
 
         # Worst queries: non-full matches sorted by severity
         worst = [
@@ -150,8 +178,15 @@ class ToolSelectionEvaluator:
             "partial_match": partial_match,
             "no_match": no_match,
             "accuracy": round(accuracy, 3),
+            "param_accuracy": round(param_accuracy, 3),
+            "param_checked_total": len(param_checked),
+            "param_matched": param_matched,
+            "chain_accuracy": round(chain_accuracy, 3),
+            "chain_eligible_total": len(chain_eligible),
+            "chain_correct": chain_correct,
             "by_complexity": by_complexity,
             "by_category": by_category,
+            "chain_by_complexity": chain_by_complexity,
             "worst_queries": worst,
             "evaluations": evaluations,
         }
@@ -176,7 +211,15 @@ class ToolSelectionEvaluator:
             f"- **Full match**: {summary['full_match']}",
             f"- **Partial match**: {summary['partial_match']}",
             f"- **No match**: {summary['no_match']}",
-            f"- **Accuracy** (full matches / total): **{summary['accuracy']:.1%}**",
+            f"- **Tool selection accuracy** (full matches / total): **{summary['accuracy']:.1%}**",
+            (
+                f"- **Parameter accuracy**: **{summary['param_accuracy']:.1%}** "
+                f"({summary['param_matched']}/{summary['param_checked_total']} queries with param checks)"
+            ),
+            (
+                f"- **Chain accuracy** (multi-tool queries): **{summary['chain_accuracy']:.1%}** "
+                f"({summary['chain_correct']}/{summary['chain_eligible_total']} multi-tool queries)"
+            ),
             "",
             "## Accuracy by Complexity",
             "",
@@ -199,6 +242,23 @@ class ToolSelectionEvaluator:
 
         for cat, data in sorted(summary["by_category"].items()):
             lines.append(f"| {cat} | {data['accuracy']:.1%} | {data['total']} |")
+
+        if summary["chain_by_complexity"]:
+            lines.extend([
+                "",
+                "## Chain Accuracy by Complexity",
+                "",
+                "Multi-tool queries only: correct relative order of expected tools within the actual tool list.",
+                "",
+                "| Complexity | Chain Accuracy | Multi-tool Count |",
+                "|------------|----------------|------------------|",
+            ])
+            for level in ("moderate", "complex", "multi_step"):
+                if level in summary["chain_by_complexity"]:
+                    data = summary["chain_by_complexity"][level]
+                    lines.append(
+                        f"| {level} | {data['accuracy']:.1%} | {data['total']} |"
+                    )
 
         if summary["worst_queries"]:
             lines.extend([
@@ -256,5 +316,34 @@ def _group_accuracy(evaluations: list[dict], key: str) -> dict:
             "accuracy": round(full / total, 3) if total > 0 else 0.0,
             "total": total,
             "full_match": full,
+        }
+    return result
+
+
+def _is_subsequence(expected: list, actual: list) -> bool:
+    """Return True if expected appears as a subsequence of actual.
+
+    Tools must appear in the same relative order, but may be interleaved with
+    other tools. Handles duplicates correctly — each occurrence in expected
+    must be matched by a distinct later occurrence in actual.
+    """
+    it = iter(actual)
+    return all(tool in it for tool in expected)
+
+
+def _chain_accuracy_by_complexity(chain_eligible: list[dict]) -> dict:
+    """Group multi-tool evaluations by complexity and compute chain accuracy."""
+    groups = defaultdict(list)
+    for e in chain_eligible:
+        groups[e["complexity"]].append(e)
+
+    result = {}
+    for complexity, group_evals in groups.items():
+        total = len(group_evals)
+        correct = sum(1 for e in group_evals if e["chain_order_correct"])
+        result[complexity] = {
+            "accuracy": round(correct / total, 3) if total > 0 else 0.0,
+            "total": total,
+            "correct": correct,
         }
     return result

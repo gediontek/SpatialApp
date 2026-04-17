@@ -228,14 +228,21 @@ class TestToolCoverage:
     """Test that all 44 tools appear in at least one reference query."""
 
     def test_all_tools_covered_by_all_queries(self):
-        """ALL_QUERIES (primary + supplementary) must cover all 44 tools."""
+        """ALL_QUERIES (primary + supplementary) must cover every tool in ALL_TOOLS."""
         covered, uncovered = get_tool_coverage(ALL_QUERIES)
         assert uncovered == set(), (
             f"Tools not covered by any query: {sorted(uncovered)}"
         )
 
-    def test_all_tools_list_has_44(self):
-        assert len(ALL_TOOLS) == 44
+    def test_all_tools_list_matches_production_count(self):
+        """ALL_TOOLS must cover every tool schema in nl_gis/tools.py."""
+        from nl_gis.tools import get_tool_definitions
+        production_tools = {t["name"] for t in get_tool_definitions()}
+        eval_tools = set(ALL_TOOLS)
+        missing_from_eval = production_tools - eval_tools
+        extra_in_eval = eval_tools - production_tools
+        assert not missing_from_eval, f"Tools in tools.py missing from ALL_TOOLS: {sorted(missing_from_eval)}"
+        assert not extra_in_eval, f"Tools in ALL_TOOLS not in tools.py: {sorted(extra_in_eval)}"
 
     def test_no_duplicate_query_ids(self):
         ids = [q["id"] for q in ALL_QUERIES]
