@@ -15,7 +15,7 @@ v2.1 raises the NL-GIS pipeline from ~85% tool-selection accuracy (v2.0 baseline
 
 | # | Plan | Theme | Status |
 |---|------|-------|--------|
-| 01 | [accuracy-audit](01-accuracy-audit-plan.md) | Measure before improving — baseline eval on 50+ queries, failure taxonomy | Planned |
+| 01 | [accuracy-audit](01-accuracy-audit-plan.md) | Measure before improving — baseline eval, failure taxonomy, ranked fix list | ✅ **Done** (M1–M3 complete). See [`baseline-scorecard.md`](baseline-scorecard.md), [`baseline-classified.json`](baseline-classified.json), [`failure-patterns.md`](failure-patterns.md) |
 | 02 | [tool-descriptions](02-tool-descriptions-plan.md) | Tool description engineering for 64 tools (finishes A3 from v1) | Planned |
 | 03 | [complex-queries](03-complex-queries-plan.md) | Multi-step reasoning, multi-agent decomposition (successor to v1 D1) | Planned |
 | 04 | [context-awareness](04-context-awareness-plan.md) | Session/layer context reuse across turns | Planned |

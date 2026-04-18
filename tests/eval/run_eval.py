@@ -135,6 +135,9 @@ def main():
                         help="Print full markdown report")
     parser.add_argument("--output", type=str, default=None,
                         help="Write raw results + batch summary to a JSON file.")
+    parser.add_argument("--rank", type=int, nargs="?", const=10, default=None,
+                        metavar="N",
+                        help="Print top N failure patterns ranked by frequency (default 10).")
 
     args = parser.parse_args()
 
@@ -200,6 +203,28 @@ def main():
             print(f"\nMismatches ({len(batch['worst_queries'])}):")
             for w in batch["worst_queries"][:5]:
                 print(f"  {w['id']}: expected {w['expected']}, got {w['actual']}")
+
+    if args.rank is not None:
+        from tests.eval.failure_taxonomy import rank_failure_patterns
+        patterns = rank_failure_patterns(batch["evaluations"], top_n=args.rank)
+        if not patterns:
+            print("\nNo failures to rank.")
+        else:
+            print(f"\nTop {len(patterns)} Failure Patterns:")
+            for p in patterns:
+                print(
+                    f"\n#{p['rank']}  {p['category']}  "
+                    f"[{p['count']} occurrence(s), {p['percentage']}% of failures]"
+                )
+                if p["confusion_pairs"]:
+                    pairs = ", ".join(
+                        f"{a} -> {b}" for a, b in p["confusion_pairs"][:3]
+                    )
+                    print(f"    Confusion: {pairs}")
+                elif p["affected_tools"]:
+                    print(f"    Tools: {', '.join(p['affected_tools'][:5])}")
+                print(f"    Examples: {', '.join(p['example_query_ids'])}")
+                print(f"    Fix target: {p['fix_target']}")
 
     # Exit with non-zero if accuracy < threshold
     if batch["accuracy"] < 0.5:
