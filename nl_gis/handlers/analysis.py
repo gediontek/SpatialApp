@@ -387,6 +387,27 @@ def handle_filter_layer(params: dict, layer_store: dict = None) -> dict:
     if err:
         return {"error": err}
 
+    # Attribute validation (Plan 04 M4.2): if the attribute doesn't appear
+    # on ANY sampled feature (including nested osm_tags), tell the user which
+    # attributes actually exist. Silent zero-result filters are confusing.
+    available: set[str] = set()
+    for f in features[:200]:
+        props = f.get("properties") if isinstance(f, dict) else None
+        if isinstance(props, dict):
+            available.update(props.keys())
+            tags = props.get("osm_tags")
+            if isinstance(tags, dict):
+                available.update(tags.keys())
+    if available and attribute not in available:
+        preview = ", ".join(sorted(available)[:15])
+        return {
+            "error": (
+                f"Attribute '{attribute}' not found in layer '{layer_name}'. "
+                f"Available attributes: {preview}"
+                + (" (...more)" if len(available) > 15 else "")
+            )
+        }
+
     filtered = []
     val_lower = value.lower()
     for feature in features:

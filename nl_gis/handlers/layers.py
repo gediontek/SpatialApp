@@ -71,6 +71,26 @@ def handle_highlight_features(params: dict, layer_store: dict = None) -> dict:
     if err:
         return {"error": err}
 
+    # Attribute validation (Plan 04 M4.2): report which attributes are
+    # actually available if the requested one doesn't exist.
+    available: set[str] = set()
+    for f in features[:200]:
+        props = f.get("properties") if isinstance(f, dict) else None
+        if isinstance(props, dict):
+            available.update(props.keys())
+            tags = props.get("osm_tags")
+            if isinstance(tags, dict):
+                available.update(tags.keys())
+    if available and attribute not in available:
+        preview = ", ".join(sorted(available)[:15])
+        return {
+            "error": (
+                f"Attribute '{attribute}' not found in layer '{layer_name}'. "
+                f"Available attributes: {preview}"
+                + (" (...more)" if len(available) > 15 else "")
+            )
+        }
+
     matched = 0
     for f in features:
         props = f.get("properties", {})
