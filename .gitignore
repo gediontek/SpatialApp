@@ -85,3 +85,4 @@ sample_rasters/
 data/*.db
 data/*.db-wal
 data/*.db-shm
+tests/eval/reports/

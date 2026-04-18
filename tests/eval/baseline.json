@@ -1,0 +1,91 @@
+{
+  "timestamp": "2026-04-18T04:06:55.387891+00:00",
+  "accuracy": 1.0,
+  "param_accuracy": 1.0,
+  "granular_param_accuracy": 1.0,
+  "chain_accuracy": 1.0,
+  "by_category": {
+    "data_acquisition": {
+      "accuracy": 1.0,
+      "total": 5,
+      "full_match": 5
+    },
+    "measurement": {
+      "accuracy": 1.0,
+      "total": 3,
+      "full_match": 3
+    },
+    "spatial_analysis": {
+      "accuracy": 1.0,
+      "total": 12,
+      "full_match": 12
+    },
+    "geometry": {
+      "accuracy": 1.0,
+      "total": 10,
+      "full_match": 10
+    },
+    "overlay": {
+      "accuracy": 1.0,
+      "total": 4,
+      "full_match": 4
+    },
+    "routing": {
+      "accuracy": 1.0,
+      "total": 6,
+      "full_match": 6
+    },
+    "layer_management": {
+      "accuracy": 1.0,
+      "total": 4,
+      "full_match": 4
+    },
+    "import_export": {
+      "accuracy": 1.0,
+      "total": 7,
+      "full_match": 7
+    },
+    "annotation": {
+      "accuracy": 1.0,
+      "total": 3,
+      "full_match": 3
+    },
+    "visualization": {
+      "accuracy": 1.0,
+      "total": 2,
+      "full_match": 2
+    },
+    "data_quality": {
+      "accuracy": 1.0,
+      "total": 5,
+      "full_match": 5
+    },
+    "advanced": {
+      "accuracy": 1.0,
+      "total": 1,
+      "full_match": 1
+    }
+  },
+  "by_complexity": {
+    "simple": {
+      "accuracy": 1.0,
+      "total": 50,
+      "full_match": 50
+    },
+    "moderate": {
+      "accuracy": 1.0,
+      "total": 8,
+      "full_match": 8
+    },
+    "complex": {
+      "accuracy": 1.0,
+      "total": 2,
+      "full_match": 2
+    },
+    "multi_step": {
+      "accuracy": 1.0,
+      "total": 2,
+      "full_match": 2
+    }
+  }
+}

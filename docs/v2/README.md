@@ -20,7 +20,7 @@ v2.1 raises the NL-GIS pipeline from ~85% tool-selection accuracy (v2.0 baseline
 | 03 | [complex-queries](03-complex-queries-plan.md) | Pattern catalog + parameter threading + chain validation (rescoped: skip runtime SYSTEM_PROMPT injection) | ✅ **Done** (rescoped). 10-pattern catalog, `$stepN.field` threading in plan mode, pre-flight chain validation, 28 new tests. |
 | 04 | [context-awareness](04-context-awareness-plan.md) | Context library + handler attribute validation (rescoped: skip unconditional prompt injection) | ✅ **Done** (rescoped). `nl_gis/context.py` library, ReferenceTracker, attribute validation in filter_layer + highlight_features, 26 new tests. |
 | 05 | [error-recovery](05-error-recovery-plan.md) | Retry, graceful degradation, circuit breaker, result-size guards | ✅ **Done** (M1–M5 complete, 24 new tests) |
-| 06 | [eval-framework](06-eval-framework-plan.md) | Deepens v1 A4 — CI-integrated accuracy regression gates | Planned |
+| 06 | [eval-framework](06-eval-framework-plan.md) | Granular param scoring + CI mode + regression detection + baseline persistence (rescoped: skip 58-query expansion) | ✅ **Done** (rescoped). `--ci`, `--save-baseline`, `--check-regression`, `--save-report` flags; coord/CRS tolerance; 19 new tests. |
 | 07 | [provider-tuning](07-provider-tuning-plan.md) | Prompt + model tuning, fine-tuning (successor to v1 D2) | Planned |
 | 08 | [raster-analysis](08-raster-analysis-plan.md) | Elevation/DEM, slope/aspect, viewshed (successor to v1 C1) | Planned |
 | 09 | [collaboration](09-collaboration-plan.md) | Multi-user sessions, shared state | Planned |

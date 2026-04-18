@@ -90,10 +90,17 @@ class ToolSelectionEvaluator:
         # Check params if expected_params is defined and actual_params provided
         expected_params = ref.get("expected_params")
         if expected_params and actual_params is not None:
-            result["param_match"] = _check_params(expected_params, actual_params)
+            ps = _score_params(expected_params, actual_params)
+            result["param_score"] = ps
+            result["param_match"] = ps["score"] == 1.0
         elif expected_params and actual_params is None:
+            result["param_score"] = {
+                "score": 0.0, "total_params": 0, "matched": 0,
+                "mismatched": [], "missing": [],
+            }
             result["param_match"] = False
         else:
+            result["param_score"] = None
             result["param_match"] = None  # No param check applicable
 
         # Chain order check: only meaningful for multi-tool queries
@@ -140,6 +147,19 @@ class ToolSelectionEvaluator:
         param_matched = sum(1 for e in param_checked if e["param_match"])
         param_accuracy = (
             param_matched / len(param_checked) if param_checked else 0.0
+        )
+
+        # Granular param accuracy: average of per-query param_score["score"].
+        # This gives partial credit for queries that got most params right,
+        # unlike the strict all-or-nothing param_match metric above.
+        scored = [
+            e for e in evaluations
+            if e.get("param_score") and e["param_score"].get("total_params")
+        ]
+        granular_total = sum(e["param_score"]["total_params"] for e in scored)
+        granular_matched = sum(e["param_score"]["matched"] for e in scored)
+        granular_param_accuracy = (
+            granular_matched / granular_total if granular_total else 0.0
         )
 
         # Chain accuracy: only multi-tool queries where ordering is meaningful.
@@ -189,6 +209,9 @@ class ToolSelectionEvaluator:
             "param_accuracy": round(param_accuracy, 3),
             "param_checked_total": len(param_checked),
             "param_matched": param_matched,
+            "granular_param_accuracy": round(granular_param_accuracy, 3),
+            "granular_param_total": granular_total,
+            "granular_param_matched": granular_matched,
             "chain_accuracy": round(chain_accuracy, 3),
             "chain_eligible_total": len(chain_eligible),
             "chain_correct": chain_correct,
@@ -327,14 +350,138 @@ def _check_params(expected_params: dict, actual_params: dict) -> bool:
     """Check if actual params match expected params.
 
     Only checks keys present in expected_params — extra actual params are OK.
+    Preserved for backward compatibility; new code should use _score_params.
     """
-    for tool_name, expected_tool_params in expected_params.items():
-        actual_tool_params = actual_params.get(tool_name, {})
-        for key, expected_value in expected_tool_params.items():
-            actual_value = actual_tool_params.get(key)
-            if actual_value != expected_value:
-                return False
-    return True
+    return _score_params(expected_params, actual_params)["score"] == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Plan 06 M2: granular parameter scoring
+# ---------------------------------------------------------------------------
+
+
+# Param names that should be matched with geographic tolerance rather than
+# exact equality. Coordinates with 0.01° resolution (~1km) are considered equal.
+_COORD_NAMES = {"lat", "lon", "lng", "latitude", "longitude"}
+_COORD_TOLERANCE_DEG = 0.01
+
+# Param names that should be matched after CRS normalization
+# ("EPSG:4326" == "epsg:4326" == "WGS84" == "wgs84").
+_CRS_NAMES = {"crs", "srs", "projection", "from_crs", "to_crs"}
+_CRS_ALIASES = {
+    "wgs84": "EPSG:4326",
+    "wgs 84": "EPSG:4326",
+    "nad83": "EPSG:4269",
+    "web mercator": "EPSG:3857",
+    "pseudo-mercator": "EPSG:3857",
+}
+
+
+def _normalize_crs(value) -> str:
+    """Canonicalize a CRS identifier so 'wgs84' and 'EPSG:4326' match."""
+    if value is None:
+        return ""
+    s = str(value).strip().lower()
+    if s in _CRS_ALIASES:
+        return _CRS_ALIASES[s]
+    # Int EPSG codes -> "EPSG:N"
+    try:
+        return f"EPSG:{int(s)}"
+    except (TypeError, ValueError):
+        pass
+    # "epsg:4326" -> "EPSG:4326"
+    if s.startswith("epsg:"):
+        return f"EPSG:{s.split(':', 1)[1].strip()}"
+    return s.upper()
+
+
+def _param_values_match(param_name: str, expected, actual) -> bool:
+    """Return True if two values are considered equal for eval purposes.
+
+    Applies name-aware tolerance:
+    - coordinates: within ±0.01° (~1km)
+    - CRS: normalized by _normalize_crs
+    - floats: within ±0.001
+    - strings: case-insensitive
+    """
+    if actual is None:
+        return False
+    lname = param_name.lower()
+
+    # Coordinate tolerance
+    if lname in _COORD_NAMES:
+        try:
+            return abs(float(expected) - float(actual)) <= _COORD_TOLERANCE_DEG
+        except (TypeError, ValueError):
+            return False
+
+    # CRS normalization
+    if lname in _CRS_NAMES:
+        return _normalize_crs(expected) == _normalize_crs(actual)
+
+    # Numeric tolerance
+    if isinstance(expected, float) or isinstance(actual, float):
+        try:
+            return abs(float(expected) - float(actual)) <= 0.001
+        except (TypeError, ValueError):
+            return False
+
+    # Case-insensitive for strings
+    if isinstance(expected, str) and isinstance(actual, str):
+        return expected.strip().lower() == actual.strip().lower()
+
+    return expected == actual
+
+
+def _score_params(expected_params: dict, actual_params: dict) -> dict:
+    """Granular parameter score across one or more tools.
+
+    Returns:
+        {
+            "score": float (0.0-1.0),
+            "total_params": int,
+            "matched": int,
+            "mismatched": list[{"tool", "param", "expected", "actual"}],
+            "missing":    list[{"tool", "param", "expected"}],
+        }
+    Extra params in `actual_params` not listed in `expected_params` are
+    ignored (consistent with the prior boolean check).
+    """
+    total = 0
+    matched = 0
+    mismatched: list[dict] = []
+    missing: list[dict] = []
+
+    for tool, expected_tool in (expected_params or {}).items():
+        actual_tool = (actual_params or {}).get(tool) or {}
+        for param_name, expected_value in (expected_tool or {}).items():
+            total += 1
+            if param_name not in actual_tool:
+                missing.append({
+                    "tool": tool,
+                    "param": param_name,
+                    "expected": expected_value,
+                })
+                continue
+            actual_value = actual_tool[param_name]
+            if _param_values_match(param_name, expected_value, actual_value):
+                matched += 1
+            else:
+                mismatched.append({
+                    "tool": tool,
+                    "param": param_name,
+                    "expected": expected_value,
+                    "actual": actual_value,
+                })
+
+    score = matched / total if total else 0.0
+    return {
+        "score": round(score, 3),
+        "total_params": total,
+        "matched": matched,
+        "mismatched": mismatched,
+        "missing": missing,
+    }
 
 
 def _group_accuracy(evaluations: list[dict], key: str) -> dict:
