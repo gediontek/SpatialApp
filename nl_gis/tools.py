@@ -1141,7 +1141,7 @@ def get_tool_definitions() -> list:
         # ---- Advanced Analysis Tools ----
         {
             "name": "point_in_polygon",
-            "description": "Determine which polygon contains a point, or which polygons contain each point in a point layer. Use for 'which district is this point in?', 'tag each store with its census tract', 'is this coordinate inside the boundary?'. Single-point mode returns the containing polygon's properties. Batch mode returns a new point layer with containing polygon info merged into each point's properties.",
+            "description": "Determine which polygon contains a point (or each point in a layer). USE WHEN: 'which district is at lat/lon?', 'is this coordinate inside the X boundary?', 'what zone is this address in?', 'tag each store with its census tract', 'assign each point to its parent polygon', 'spatial join points into polygons'. Single-point mode: provide lat + lon. Batch mode: provide point_layer. Do NOT use fetch_osm for this — point_in_polygon is the correct containment test.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -1204,7 +1204,7 @@ def get_tool_definitions() -> list:
         },
         {
             "name": "spatial_statistics",
-            "description": "Compute spatial clustering statistics for point features. Methods: nearest_neighbor (Nearest Neighbor Index — values < 1 indicate clustering, = 1 random, > 1 dispersed), dbscan (density-based clustering with eps distance and min_samples). Use for 'are these points clustered?', 'find clusters in crime data', 'identify hotspot groups'.",
+            "description": "Compute spatial clustering statistics for point features. USE WHEN: 'are these points clustered?', 'test for clustering', 'find clusters in crime data', 'DBSCAN these points', 'compute nearest neighbor index'. Methods: 'nearest_neighbor' (NNI — <1 clustered, 1 random, >1 dispersed — answers 'IS there clustering?'); 'dbscan' (density-based — returns cluster assignments per point — answers 'WHERE are the clusters?', requires eps and min_samples).",
             "input_schema": {
                 "type": "object",
                 "properties": {
