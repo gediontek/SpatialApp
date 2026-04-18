@@ -1,4 +1,9 @@
-"""Data fetching handlers: geocode, OSM fetch, map commands, nearby search."""
+"""Data fetching handlers: geocode, OSM fetch, map commands, nearby search.
+
+ERROR PATHS (audit 2026-04-17 for v2.1 Plan 05 M1):
+    28 error returns · 9 except blocks · 3 leaky str(e) at lines 58, 143, 382.
+    Leaks are fixed by Plan 05 M2 (Nominatim/Overpass degradation).
+"""
 
 import logging
 import requests

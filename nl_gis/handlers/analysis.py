@@ -1,4 +1,10 @@
-"""Spatial analysis handlers: buffer, spatial query, aggregate, area, distance, filter, geometry, advanced analysis."""
+"""Spatial analysis handlers: buffer, spatial query, aggregate, area, distance, filter, geometry, advanced analysis.
+
+ERROR PATHS (audit 2026-04-17 for v2.1 Plan 05 M1):
+    166 error returns · 44 except blocks · 0 leaky str(e).
+    No exception-detail leaks; errors already use generic messages.
+    Candidates for size-guard integration (M3): handlers returning geojson.
+"""
 
 import hashlib
 import json

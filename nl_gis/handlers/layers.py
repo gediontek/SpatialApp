@@ -1,4 +1,9 @@
-"""Layer management handlers: style, visibility, highlight, merge, import/export."""
+"""Layer management handlers: style, visibility, highlight, merge, import/export.
+
+ERROR PATHS (audit 2026-04-17 for v2.1 Plan 05 M1):
+    42 error returns · 20 except blocks · 0 leaky str(e).
+    No exception-detail leaks; size-guards apply to import/merge operations.
+"""
 
 import base64
 import logging

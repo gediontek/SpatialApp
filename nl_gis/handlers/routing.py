@@ -1,4 +1,10 @@
-"""Routing/network handlers: find route, isochrone, heatmap, closest facility, optimize route, OD matrix."""
+"""Routing/network handlers: find route, isochrone, heatmap, closest facility, optimize route, OD matrix.
+
+ERROR PATHS (audit 2026-04-17 for v2.1 Plan 05 M1):
+    44 error returns · 14 except blocks · 1 leaky str(e) at line 337.
+    Leak fixed by Plan 05 M2 (closest_facility). Valhalla-backed handlers
+    gain circuit-breaker protection in M4.
+"""
 
 import logging
 

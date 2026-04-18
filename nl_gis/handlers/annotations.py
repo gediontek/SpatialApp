@@ -1,4 +1,9 @@
-"""Annotation handlers: add, classify landcover, export, get annotations."""
+"""Annotation handlers: add, classify landcover, export, get annotations.
+
+ERROR PATHS (audit 2026-04-17 for v2.1 Plan 05 M1):
+    12 error returns · 4 except blocks · 1 leaky str(e) at line 167.
+    Leak must be replaced with generic message + logger.exception().
+"""
 
 import logging
 
