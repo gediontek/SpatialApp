@@ -24,7 +24,7 @@ v2.1 raises the NL-GIS pipeline from ~85% tool-selection accuracy (v2.0 baseline
 | 07 | [provider-tuning](07-provider-tuning-plan.md) | Prompt + model tuning, fine-tuning (successor to v1 D2) | Planned |
 | 08 | [raster-analysis](08-raster-analysis-plan.md) | 5 raster tools + DEM derivatives (rescoped: skip tile serving blueprint) | ✅ **Done** (rescoped). `raster_info`, `raster_value`, `raster_statistics` (incl. zonal + slope/aspect/hillshade), `raster_profile`, `raster_classify`. 24 new tests. 69 tools total. |
 | 09 | [collaboration](09-collaboration-plan.md) | Multi-user sessions, shared state | Planned |
-| 10 | [data-pipeline](10-data-pipeline-plan.md) | ETL workflows, data ingestion automation | Planned |
+| 10 | [data-pipeline](10-data-pipeline-plan.md) | 4 pipeline tools + validation module (rescoped: skip sample_points, batch_spatial_query, pipeline patterns) | ✅ **Done** (rescoped). `clip_to_bbox`, `generalize` (m-based), `export_gpkg`, `import_auto` + `nl_gis/validation.py`. 30 new tests. 73 tools total. |
 | 11 | [visualization](11-visualization-plan.md) | Chart/dashboard output, visual rendering | Planned |
 | 12 | [osm-autolabel](12-osm-autolabel-plan.md) | OSM auto-labelling enhancements | Planned |
 | 13 | [production](13-production-plan.md) | Vector tiles, auto-scaling, deploy hardening (successor to v1 C2) | Planned |

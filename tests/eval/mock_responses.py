@@ -270,6 +270,20 @@ MOCK_RESPONSES = {
             "labels": ["low", "medium", "high"],
         }),
     ],
+
+    # === v2.1 Plan 10 — Data pipeline (S038-S041) ===
+    "S038": [
+        _tool_use("clip_to_bbox", {"layer_name": "buildings", "location": "Chicago"}),
+    ],
+    "S039": [
+        _tool_use("generalize", {"layer_name": "coastline", "tolerance": 50}),
+    ],
+    "S040": [
+        _tool_use("export_gpkg", {"layer_name": "parks"}),
+    ],
+    "S041": [
+        _tool_use("import_auto", {"data": "{\"type\":\"FeatureCollection\",\"features\":[]}"}),
+    ],
 }
 
 

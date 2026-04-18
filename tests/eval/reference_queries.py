@@ -624,6 +624,39 @@ SUPPLEMENTARY_QUERIES = [
         "expected_params": {"raster_classify": {"raster": "chicago_utm.tif", "breaks": [100, 500]}},
         "category": "raster",
     },
+
+    # === v2.1 Plan 10 — Data pipeline (S038-S041) ===
+    {
+        "id": "S038",
+        "query": "Clip the buildings layer to Chicago's bounding box",
+        "complexity": "simple",
+        "expected_tools": ["clip_to_bbox"],
+        "expected_params": {"clip_to_bbox": {"layer_name": "buildings", "location": "Chicago"}},
+        "category": "data_pipeline",
+    },
+    {
+        "id": "S039",
+        "query": "Simplify the coastline layer to 50 meter tolerance",
+        "complexity": "simple",
+        "expected_tools": ["generalize"],
+        "expected_params": {"generalize": {"layer_name": "coastline", "tolerance": 50}},
+        "category": "data_pipeline",
+    },
+    {
+        "id": "S040",
+        "query": "Export the parks layer as GeoPackage",
+        "complexity": "simple",
+        "expected_tools": ["export_gpkg"],
+        "expected_params": {"export_gpkg": {"layer_name": "parks"}},
+        "category": "data_pipeline",
+    },
+    {
+        "id": "S041",
+        "query": "Import this data and figure out the format automatically",
+        "complexity": "simple",
+        "expected_tools": ["import_auto"],
+        "category": "data_pipeline",
+    },
 ]
 
 # Full query set = primary + supplementary
@@ -669,6 +702,8 @@ ALL_TOOLS = [
     # Raster analysis (v2.1 Plan 08)
     "raster_info", "raster_value", "raster_statistics", "raster_profile",
     "raster_classify",
+    # Data pipeline (v2.1 Plan 10)
+    "clip_to_bbox", "generalize", "export_gpkg", "import_auto",
 ]
 
 

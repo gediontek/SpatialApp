@@ -1668,6 +1668,66 @@ def get_tool_definitions() -> list:
                 "required": ["raster"],
             },
         },
+        # --- Data pipeline (v2.1 Plan 10) ---
+        {
+            "name": "clip_to_bbox",
+            "description": "Clip a layer to a bounding box. Features outside are removed; features crossing the boundary are trimmed. USE WHEN: 'clip this layer to Chicago', 'keep only features in the bbox'. Provide either an explicit bbox [south, west, north, east] OR a location name (which will be geocoded to its bbox).",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {"type": "string", "description": "Layer to clip. Example: 'buildings_all'"},
+                    "bbox": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "minItems": 4, "maxItems": 4,
+                        "description": "Bounding box [south, west, north, east].",
+                    },
+                    "location": {"type": "string", "description": "Alternative to bbox — a place name to geocode."},
+                    "output_name": {"type": "string", "description": "Output layer name (optional)."},
+                },
+                "required": ["layer_name"],
+            },
+        },
+        {
+            "name": "generalize",
+            "description": "Simplify geometries by a tolerance in METERS. Reports vertex reduction statistics. USE WHEN: 'simplify for export', 'reduce file size', 'lighten geometry for rendering'. Differs from 'simplify' by accepting meters directly (converts to CRS degrees using layer centroid latitude).",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {"type": "string", "description": "Layer to generalize. Required."},
+                    "tolerance": {"type": "number", "description": "Tolerance in meters. Example: 50 for 50m simplification."},
+                    "preserve_topology": {"type": "boolean", "description": "Preserve topology (default true).", "default": True},
+                    "output_name": {"type": "string", "description": "Output layer name (optional)."},
+                },
+                "required": ["layer_name", "tolerance"],
+            },
+        },
+        {
+            "name": "export_gpkg",
+            "description": "Export a layer as GeoPackage (.gpkg) — preferred over shapefile for modern workflows (supports CRS metadata, large datasets, multiple geometry types). USE WHEN: 'export as GeoPackage', 'download as gpkg'. Falls back to GeoJSON if GDAL's GPKG driver isn't available.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {"type": "string", "description": "Layer to export. Required."},
+                    "filename": {"type": "string", "description": "Suggested filename (default '<layer>.gpkg')."},
+                },
+                "required": ["layer_name"],
+            },
+        },
+        {
+            "name": "import_auto",
+            "description": "Import spatial data with automatic format detection. Detects GeoJSON (from '{'), CSV (lat/lon header), KML (<?xml/<kml), WKT (POINT/POLYGON...), Shapefile (base64 zip), GeoParquet (base64 PAR1). USE WHEN: user provides raw data without specifying the format.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "data": {"type": "string", "description": "Raw content (text for GeoJSON/KML/WKT/CSV, base64 for Shapefile/GeoParquet)."},
+                    "layer_name": {"type": "string", "description": "Optional layer name for the import."},
+                    "lat_column": {"type": "string", "description": "CSV only: latitude column name (default 'lat')."},
+                    "lon_column": {"type": "string", "description": "CSV only: longitude column name (default 'lon')."},
+                },
+                "required": ["data"],
+            },
+        },
         {
             "name": "raster_classify",
             "description": "Reclassify a raster into discrete polygon categories using breakpoints. USE WHEN: 'classify elevation into low/medium/high', 'show terrain categories', 'vectorize the DEM into zones'. Returns a polygon layer with one feature per contiguous classified region.",

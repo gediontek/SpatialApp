@@ -108,6 +108,10 @@ class Config:
     )
     MAX_RASTER_SIZE_MB = _int_env('MAX_RASTER_SIZE_MB', 500)
 
+    # Data pipeline (v2.1 Plan 10)
+    IMPORT_MAX_FEATURES = _int_env('IMPORT_MAX_FEATURES', 10_000)
+    PIPELINE_MAX_STEPS = _int_env('PIPELINE_MAX_STEPS', 10)
+
     # Database
     DATABASE_PATH = os.environ.get('DATABASE_PATH',
         os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'spatialapp.db'))

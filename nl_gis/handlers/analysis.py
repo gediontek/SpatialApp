@@ -868,6 +868,170 @@ def handle_clip(params: dict, layer_store: dict = None) -> dict:
     }
 
 
+def handle_clip_to_bbox(params: dict, layer_store: dict = None) -> dict:
+    """Clip a layer to a bounding box (v2.1 Plan 10 M1)."""
+    from shapely.geometry import box as shapely_box
+
+    layer_name = params.get("layer_name")
+    bbox = params.get("bbox")
+    location = params.get("location")
+    output_name = params.get("output_name", f"clipped_bbox_{layer_name}")
+
+    if not layer_name:
+        return {"error": "layer_name is required"}
+
+    # Resolve bbox — either explicit, or via geocoded location.
+    if not bbox and location:
+        from nl_gis.handlers.navigation import handle_geocode
+        geo = handle_geocode({"query": location})
+        if "error" in geo:
+            return {"error": f"Could not geocode location: {geo['error']}"}
+        bbox_raw = geo.get("bbox")
+        if not bbox_raw or len(bbox_raw) != 4:
+            return {"error": f"Geocoded '{location}' but no bounding box returned."}
+        # Nominatim returns [south, north, west, east] as strings — normalize.
+        try:
+            s, n, w, e = [float(v) for v in bbox_raw]
+            bbox = [s, w, n, e]
+        except (TypeError, ValueError):
+            return {"error": "Could not parse geocoded bounding box."}
+    if not bbox or len(bbox) != 4:
+        return {"error": "bbox must be [south, west, north, east] or provide a location."}
+
+    try:
+        s, w, n, e = [float(v) for v in bbox]
+    except (TypeError, ValueError):
+        return {"error": "bbox values must be numeric."}
+    # Shapely box expects (minx, miny, maxx, maxy) = (west, south, east, north)
+    mask = shapely_box(w, s, e, n)
+
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
+
+    clipped = []
+    for f in features:
+        geom = f.get("geometry")
+        if not geom:
+            continue
+        shp = _safe_geojson_to_shapely(geom)
+        if not shp:
+            continue
+        inter = shp.intersection(mask)
+        if inter.is_empty:
+            continue
+        clipped.append({
+            "type": "Feature",
+            "geometry": shapely_to_geojson(inter),
+            "properties": dict(f.get("properties", {})),
+        })
+
+    if not clipped:
+        return {"error": "No features found within the bounding box"}
+
+    return {
+        "geojson": {"type": "FeatureCollection", "features": clipped},
+        "layer_name": output_name,
+        "feature_count": len(clipped),
+        "bbox": [s, w, n, e],
+    }
+
+
+def handle_generalize(params: dict, layer_store: dict = None) -> dict:
+    """Simplify geometries by a tolerance specified in METERS (v2.1 Plan 10 M1).
+
+    Unlike `handle_simplify` (tolerance in CRS units), this accepts meters and
+    converts using the layer centroid's latitude. Reports vertex reduction.
+    """
+    layer_name = params.get("layer_name")
+    tolerance_m = params.get("tolerance")
+    preserve_topology = bool(params.get("preserve_topology", True))
+    output_name = params.get("output_name", f"generalized_{layer_name}")
+
+    if not layer_name:
+        return {"error": "layer_name is required"}
+    if tolerance_m is None:
+        return {"error": "tolerance (in meters) is required"}
+    try:
+        tolerance_m = float(tolerance_m)
+    except (TypeError, ValueError):
+        return {"error": "tolerance must be numeric"}
+    if tolerance_m <= 0:
+        return {"error": "tolerance must be > 0"}
+
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
+    if not features:
+        return {"error": f"Layer '{layer_name}' has no features"}
+
+    # Centroid lat for meters->degrees conversion.
+    geoms = [
+        _safe_geojson_to_shapely(f.get("geometry"))
+        for f in features
+        if f.get("geometry")
+    ]
+    geoms = [g for g in geoms if g]
+    if not geoms:
+        return {"error": f"Layer '{layer_name}' has no valid geometries"}
+    centroid = unary_union(geoms).centroid
+    center_lat = centroid.y
+    # 1 degree latitude ~ 111,320 m; longitude scales by cos(lat).
+    meters_per_deg = 111_320.0 * max(0.01, math.cos(math.radians(center_lat)))
+    tolerance_deg = tolerance_m / meters_per_deg
+
+    def count_vertices(g) -> int:
+        try:
+            return len(list(g.coords))
+        except NotImplementedError:
+            return sum(
+                count_vertices(part)
+                for part in getattr(g, "geoms", [])
+            )
+
+    original_vertices = 0
+    simplified_features = []
+    simplified_vertices = 0
+    for f in features:
+        geom = f.get("geometry")
+        shp = _safe_geojson_to_shapely(geom) if geom else None
+        if not shp:
+            continue
+        try:
+            original_vertices += count_vertices(shp)
+        except Exception:
+            pass
+        simplified = shp.simplify(tolerance_deg, preserve_topology=preserve_topology)
+        if simplified.is_empty:
+            continue
+        try:
+            simplified_vertices += count_vertices(simplified)
+        except Exception:
+            pass
+        simplified_features.append({
+            "type": "Feature",
+            "geometry": shapely_to_geojson(simplified),
+            "properties": dict(f.get("properties", {})),
+        })
+
+    reduction_pct = (
+        100.0 * (original_vertices - simplified_vertices) / original_vertices
+        if original_vertices else 0.0
+    )
+
+    return {
+        "geojson": {"type": "FeatureCollection", "features": simplified_features},
+        "layer_name": output_name,
+        "feature_count": len(simplified_features),
+        "tolerance_m": tolerance_m,
+        "tolerance_deg": round(tolerance_deg, 8),
+        "original_vertices": original_vertices,
+        "simplified_vertices": simplified_vertices,
+        "reduction_pct": round(reduction_pct, 1),
+        "preserve_topology": preserve_topology,
+    }
+
+
 def handle_voronoi(params: dict, layer_store: dict = None) -> dict:
     """Generate Voronoi diagram from point features."""
     from shapely.geometry import MultiPoint, box

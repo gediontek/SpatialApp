@@ -611,3 +611,189 @@ def handle_export_geoparquet(params: dict, layer_store: dict = None) -> dict:
         "size_bytes": len(parquet_bytes),
         "description": f"Exported {len(features)} features from '{layer_name}' as GeoParquet ({len(parquet_bytes)} bytes)",
     }
+
+
+# ============================================================
+# v2.1 Plan 10 — GeoPackage export + format-auto import
+# ============================================================
+
+
+def handle_export_gpkg(params: dict, layer_store: dict = None) -> dict:
+    """Export a layer as GeoPackage (.gpkg). Falls back to GeoJSON if GDAL's
+    GPKG driver is unavailable."""
+    import io
+    import tempfile
+    import os as os_mod
+
+    layer_name = params.get("layer_name")
+    if not layer_name:
+        return {"error": "layer_name is required"}
+    filename = params.get("filename") or f"{layer_name}.gpkg"
+
+    features, err = _get_layer_snapshot(layer_store, layer_name)
+    if err:
+        return {"error": err}
+    if not features:
+        return {"error": f"Layer '{layer_name}' has no features to export"}
+
+    try:
+        import geopandas as gpd_mod
+    except ImportError:
+        return {"error": "GeoPackage export requires geopandas."}
+
+    try:
+        gdf = gpd_mod.GeoDataFrame.from_features(features, crs="EPSG:4326")
+    except Exception as exc:
+        logger.debug("GPKG from_features failed: %s", exc, exc_info=True)
+        return {"error": "Could not convert layer to GeoDataFrame for export"}
+
+    # Write to a temp file because fiona/GDAL needs a real path.
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".gpkg", delete=False) as tmp:
+            tmp_path = tmp.name
+        gdf.to_file(tmp_path, driver="GPKG")
+        with open(tmp_path, "rb") as f:
+            data = f.read()
+    except Exception as exc:
+        logger.warning("GPKG write failed, falling back to GeoJSON: %s", exc)
+        # Graceful fallback: return GeoJSON with a warning.
+        import json as json_mod
+        return {
+            "success": True,
+            "format": "geojson",
+            "layer_name": layer_name,
+            "feature_count": len(features),
+            "geojson_string": json_mod.dumps({"type": "FeatureCollection", "features": features}),
+            "warning": (
+                "GeoPackage export failed (GDAL driver unavailable). "
+                "Exported as GeoJSON instead."
+            ),
+            "description": f"Exported {len(features)} features as GeoJSON (GPKG fallback).",
+        }
+    finally:
+        try:
+            os_mod.remove(tmp_path)
+        except OSError:
+            pass
+
+    return {
+        "success": True,
+        "format": "geopackage",
+        "layer_name": layer_name,
+        "feature_count": len(features),
+        "filename": filename,
+        "gpkg_base64": base64.b64encode(data).decode("ascii"),
+        "size_bytes": len(data),
+        "mime_type": "application/geopackage+sqlite3",
+        "description": f"Exported {len(features)} features from '{layer_name}' as GeoPackage ({len(data)} bytes)",
+    }
+
+
+def _detect_format(data: str) -> str | None:
+    """Return a format id ('geojson'|'kml'|'csv'|'wkt'|'shapefile'|'geoparquet')
+    or None if the input can't be classified."""
+    if not data or not isinstance(data, str):
+        return None
+    head = data.strip()
+    # JSON / GeoJSON
+    if head.startswith("{") or head.startswith("["):
+        return "geojson"
+    # XML / KML
+    if head.startswith("<?xml") or "<kml" in head[:200].lower() or "<placemark" in head[:200].lower():
+        return "kml"
+    # WKT
+    upper = head.upper()
+    for prefix in ("POINT", "LINESTRING", "POLYGON", "MULTIPOINT", "MULTILINESTRING",
+                   "MULTIPOLYGON", "GEOMETRYCOLLECTION"):
+        if upper.startswith(prefix):
+            return "wkt"
+    # Base64-encoded binary: Shapefile (ZIP) or GeoParquet.
+    # First few decoded bytes tell us — try once.
+    try:
+        raw = base64.b64decode(head[:256], validate=False)
+        if raw.startswith(b"PK"):
+            return "shapefile"
+        if raw.startswith(b"PAR1"):
+            return "geoparquet"
+    except Exception:
+        pass
+    # CSV heuristic: has a header line with delimiters and a lat/lon-like column.
+    first_line = head.split("\n", 1)[0].lower()
+    if "," in first_line and any(
+        kw in first_line
+        for kw in ("lat", "lon", "latitude", "longitude")
+    ):
+        return "csv"
+    return None
+
+
+def handle_import_auto(params: dict, layer_store: dict = None) -> dict:
+    """Detect format of arbitrary input and delegate to the appropriate importer
+    (v2.1 Plan 10 M4). Supports GeoJSON, KML, WKT, CSV, Shapefile, GeoParquet.
+    """
+    data = params.get("data")
+    if not data:
+        return {"error": "data is required"}
+    layer_name = params.get("layer_name")
+
+    fmt = _detect_format(data)
+    if fmt is None:
+        return {"error": (
+            "Could not auto-detect format. "
+            "Supported: GeoJSON, CSV (with lat/lon columns), KML, WKT, "
+            "Shapefile (base64 zip), GeoParquet (base64)."
+        )}
+
+    # Delegate — each importer has its own error handling.
+    if fmt == "geojson":
+        # handle_import_layer expects a parsed dict, not a JSON string.
+        try:
+            import json as json_mod
+            parsed = json_mod.loads(data)
+        except (TypeError, ValueError) as exc:
+            return {"error": f"Detected GeoJSON but could not parse: {exc}"}
+        sub = {"geojson": parsed}
+        if layer_name:
+            sub["layer_name"] = layer_name
+        result = handle_import_layer(sub, layer_store)
+    elif fmt == "kml":
+        sub = {"kml_data": data}
+        if layer_name:
+            sub["layer_name"] = layer_name
+        result = handle_import_kml(sub, layer_store)
+    elif fmt == "wkt":
+        sub = {"wkt": data}
+        if layer_name:
+            sub["layer_name"] = layer_name
+        result = handle_import_wkt(sub, layer_store)
+    elif fmt == "csv":
+        # Caller can override column names in params.
+        sub = {
+            "csv_data": data,
+            "lat_column": params.get("lat_column", "lat"),
+            "lon_column": params.get("lon_column", "lon"),
+        }
+        if layer_name:
+            sub["layer_name"] = layer_name
+        result = handle_import_csv(sub, layer_store)
+    elif fmt == "geoparquet":
+        sub = {"parquet_data": data}
+        if layer_name:
+            sub["layer_name"] = layer_name
+        result = handle_import_geoparquet(sub, layer_store)
+    elif fmt == "shapefile":
+        # Zipped shapefile currently uses the generic import_layer path only
+        # if the user pre-converted to GeoJSON. Surface a clear error rather
+        # than silently failing.
+        return {
+            "error": (
+                "Shapefile (zip) import is not yet supported by this tool. "
+                "Please unzip and provide the .shp as GeoJSON via import_layer."
+            )
+        }
+    else:
+        return {"error": f"Unsupported detected format: {fmt}"}
+
+    if isinstance(result, dict) and "error" not in result:
+        result["detected_format"] = fmt
+    return result

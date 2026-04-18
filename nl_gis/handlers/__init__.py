@@ -135,6 +135,8 @@ LAYER_PRODUCING_TOOLS = {
     "extract_vertices", "temporal_filter",
     # Raster layer-producing tools (v2.1 Plan 08)
     "raster_profile", "raster_classify", "raster_statistics",
+    # Data pipeline layer producers (v2.1 Plan 10)
+    "clip_to_bbox", "generalize", "import_auto",
 }
 
 # Reuse OSM feature mappings from app.py
@@ -486,6 +488,8 @@ from nl_gis.handlers.analysis import (  # noqa: E402,F401
     handle_extract_vertices,
     handle_temporal_filter,
     handle_attribute_statistics,
+    handle_clip_to_bbox,  # v2.1 Plan 10
+    handle_generalize,    # v2.1 Plan 10
 )
 from nl_gis.handlers.layers import (  # noqa: E402,F401
     handle_style_layer,
@@ -499,6 +503,8 @@ from nl_gis.handlers.layers import (  # noqa: E402,F401
     handle_import_kml,
     handle_import_geoparquet,
     handle_export_geoparquet,
+    handle_export_gpkg,   # v2.1 Plan 10
+    handle_import_auto,   # v2.1 Plan 10
 )
 from nl_gis.handlers.annotations import (  # noqa: E402,F401
     handle_add_annotation,
@@ -630,6 +636,11 @@ def dispatch_tool(tool_name: str, params: dict, layer_store: dict = None) -> dic
         "raster_statistics": lambda p: _raster_call("raster_statistics", p, layer_store),
         "raster_profile": lambda p: _raster_call("raster_profile", p, layer_store),
         "raster_classify": lambda p: _raster_call("raster_classify", p, layer_store),
+        # Data pipeline (v2.1 Plan 10)
+        "clip_to_bbox": lambda p: handle_clip_to_bbox(p, layer_store),
+        "generalize": lambda p: handle_generalize(p, layer_store),
+        "export_gpkg": lambda p: handle_export_gpkg(p, layer_store),
+        "import_auto": lambda p: handle_import_auto(p, layer_store),
     }
 
     if tool_name not in handlers:
