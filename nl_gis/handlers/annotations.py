@@ -167,9 +167,9 @@ def handle_classify_landcover(params: dict) -> dict:
     except FutureTimeout:
         logger.error("Classification timed out after 300s")
         return {"error": "Classification timed out. Try a smaller area."}
-    except Exception as e:
-        logger.error(f"Classification error: {e}", exc_info=True)
-        return {"error": str(e)}
+    except Exception:
+        logger.error("Classification error", exc_info=True)
+        return {"error": "Land-cover classification failed. Try a smaller area or simpler query."}
 
 
 def handle_export_annotations(params: dict) -> dict:

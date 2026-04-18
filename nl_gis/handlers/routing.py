@@ -90,7 +90,12 @@ def handle_find_route(params: dict) -> dict:
     route = get_route(locations=locations, profile=profile)
 
     if route is None:
-        return {"error": "Could not find a route. The routing service may be unavailable."}
+        # Both endpoints geocoded successfully above — so the failure is service-side
+        # rather than a bad address. Distinguish by profile to hint at alternatives.
+        supported_profiles = {"auto", "driving", "pedestrian", "bicycle", "walking", "cycling"}
+        if profile.lower() not in supported_profiles:
+            return {"error": f"Routing not available for '{profile}' mode. Try 'driving', 'walking', or 'bicycle'."}
+        return {"error": "Routing service is temporarily unavailable. Try again in a minute."}
 
     # Build GeoJSON FeatureCollection with route line and markers
     features = [
@@ -267,6 +272,11 @@ def handle_isochrone(params: dict) -> dict:
         "area_sq_km": round(geodesic_area(buffered) / 1e6, 2),
         "profile": profile,
         "method": "buffer_estimate",
+        "warning": (
+            f"Could not compute {time_minutes}-minute {profile} "
+            f"network-based reachability. Showing a circular buffer estimate "
+            f"instead — actual reachable area depends on the road network."
+        ),
     }
 
 
@@ -338,9 +348,22 @@ def handle_closest_facility(params: dict, layer_store: dict = None) -> dict:
         response.raise_for_status()
         osm_data = response.json()
     except requests.Timeout:
-        return {"error": "Search timed out. Try a smaller radius."}
-    except requests.RequestException as e:
-        return {"error": f"OSM request failed: {str(e)}"}
+        logger.warning("Overpass closest-facility timeout radius=%s feature=%s", max_radius_m, feature_type, exc_info=True)
+        return {"error": "Search timed out. Try a smaller radius or more specific feature type."}
+    except requests.HTTPError as e:
+        status = getattr(e.response, "status_code", None)
+        logger.warning("Overpass closest-facility HTTP error: status=%s", status, exc_info=True)
+        if status == 429:
+            return {"error": "OpenStreetMap data service is rate-limiting requests. Wait 30 seconds and try again."}
+        if status == 504:
+            return {"error": "The search area is too large. Reduce max_radius_m or use a more specific feature type."}
+        return {"error": "OpenStreetMap data service returned an error. Try again shortly."}
+    except requests.ConnectionError:
+        logger.warning("Overpass closest-facility connection error", exc_info=True)
+        return {"error": "Cannot reach OpenStreetMap data service. Check your internet connection."}
+    except requests.RequestException:
+        logger.error("Overpass closest-facility unexpected error", exc_info=True)
+        return {"error": "Facility search failed. Try again with a different location."}
 
     # Convert to GeoJSON
     geojson = _osm_to_geojson(osm_data, feature_type, feature_type)
@@ -360,12 +383,15 @@ def handle_closest_facility(params: dict, layer_store: dict = None) -> dict:
                     },
                 })
 
-    # Calculate geodesic distance from center to each feature's centroid
+    # Calculate geodesic distance from center to each feature's centroid.
+    # Track how many distance calcs fail so we can warn about partial results.
     center_point = ValidatedPoint(lat=lat, lon=lon)
+    distance_failures = 0
     for feature in geojson["features"]:
         geom = feature.get("geometry")
         if not geom:
             feature["properties"]["distance_m"] = float("inf")
+            distance_failures += 1
             continue
         try:
             shapely_geom = geojson_to_shapely(geom)
@@ -374,7 +400,11 @@ def handle_closest_facility(params: dict, layer_store: dict = None) -> dict:
             dist = geodesic_distance(center_point, feature_point)
             feature["properties"]["distance_m"] = round(dist, 1)
         except Exception:
+            logger.debug("Distance calc failed for feature", exc_info=True)
             feature["properties"]["distance_m"] = float("inf")
+            distance_failures += 1
+
+    total_found = len(geojson["features"])
 
     # Sort by distance, take top N
     geojson["features"].sort(key=lambda f: f["properties"].get("distance_m", float("inf")))
@@ -382,7 +412,7 @@ def handle_closest_facility(params: dict, layer_store: dict = None) -> dict:
 
     layer_name = f"closest_{feature_type}_{count}"
 
-    return {
+    result = {
         "geojson": geojson,
         "layer_name": layer_name,
         "feature_count": len(geojson["features"]),
@@ -390,6 +420,15 @@ def handle_closest_facility(params: dict, layer_store: dict = None) -> dict:
         "max_radius_m": max_radius_m,
         "requested_count": count,
     }
+    # Partial-failure warning: some features were found but their distances
+    # couldn't be computed, so the sort is less accurate than expected.
+    if distance_failures and total_found > 0:
+        result["warning"] = (
+            f"Found {total_found} facilities but could not compute distances "
+            f"for {distance_failures} of them. Showing results without full "
+            f"distance sorting."
+        )
+    return result
 
 
 def handle_optimize_route(params: dict, layer_store: dict = None) -> dict:

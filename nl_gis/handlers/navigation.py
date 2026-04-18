@@ -58,9 +58,21 @@ def handle_geocode(params: dict) -> dict:
         }
         geocode_cache.set(query.lower().strip(), geo_result)
         return geo_result
-    except Exception as e:
-        logger.error("Geocoding error: %s", e, exc_info=True)
-        return {"error": f"Geocoding failed: {str(e)}"}
+    except requests.HTTPError as e:
+        status = getattr(e.response, "status_code", None)
+        logger.warning("Nominatim HTTP error: status=%s", status, exc_info=True)
+        if status == 429:
+            return {"error": "Geocoding rate limit reached. Please wait a few seconds and try again."}
+        return {"error": "Geocoding service returned an error. Try a different search term."}
+    except requests.Timeout:
+        logger.warning("Nominatim timeout for query %r", query, exc_info=True)
+        return {"error": "Geocoding service is slow right now. Try again shortly."}
+    except requests.ConnectionError:
+        logger.warning("Nominatim connection error for query %r", query, exc_info=True)
+        return {"error": "Cannot reach geocoding service. Check your internet connection."}
+    except Exception:
+        logger.error("Geocoding unexpected error for query %r", query, exc_info=True)
+        return {"error": "Geocoding encountered an unexpected issue. Try a different search term."}
 
 
 def handle_fetch_osm(params: dict) -> dict:
@@ -143,9 +155,22 @@ def handle_fetch_osm(params: dict) -> dict:
         response.raise_for_status()
         osm_data = response.json()
     except requests.Timeout:
-        return {"error": "OSM request timed out. Try a smaller area."}
-    except requests.RequestException as e:
-        return {"error": f"OSM request failed: {str(e)}"}
+        logger.warning("Overpass timeout for bbox=%s key=%s", bbox, key, exc_info=True)
+        return {"error": "OSM request timed out. Try a smaller area or more specific feature type."}
+    except requests.HTTPError as e:
+        status = getattr(e.response, "status_code", None)
+        logger.warning("Overpass HTTP error: status=%s bbox=%s", status, bbox, exc_info=True)
+        if status == 429:
+            return {"error": "OpenStreetMap data service is rate-limiting requests. Wait 30 seconds and try again, or use a smaller area."}
+        if status == 504:
+            return {"error": "The area is too large for this query. Try zooming in or searching a smaller region."}
+        return {"error": "OpenStreetMap data service returned an error. Try again shortly."}
+    except requests.ConnectionError:
+        logger.warning("Overpass connection error for bbox=%s", bbox, exc_info=True)
+        return {"error": "Cannot reach OpenStreetMap data service. Check your internet connection."}
+    except requests.RequestException:
+        logger.error("Overpass unexpected error for bbox=%s", bbox, exc_info=True)
+        return {"error": "OSM request failed. Try a smaller area or different feature type."}
 
     # Convert to GeoJSON
     geojson = _osm_to_geojson(osm_data, category_name, feature_type)
@@ -161,6 +186,10 @@ def handle_fetch_osm(params: dict) -> dict:
     }
     if capped:
         result["note"] = f"Results capped at {Config.MAX_FEATURES_PER_LAYER} features. The actual area may contain more. Try a smaller area for complete data."
+        result["suggestion"] = (
+            "Try a smaller area or a more specific feature type "
+            "(e.g., 'hospital' instead of 'building')."
+        )
 
     # Cache successful result
     overpass_cache.set(cache_key, result)
@@ -271,9 +300,21 @@ def handle_reverse_geocode(params: dict) -> dict:
         }
         geocode_cache.set(cache_key, result)
         return result
-    except Exception as e:
-        logger.error("Reverse geocoding error: %s", e, exc_info=True)
-        return {"error": "Reverse geocoding failed"}
+    except requests.HTTPError as e:
+        status = getattr(e.response, "status_code", None)
+        logger.warning("Nominatim reverse HTTP error: status=%s", status, exc_info=True)
+        if status == 429:
+            return {"error": "Geocoding rate limit reached. Please wait a few seconds and try again."}
+        return {"error": "Geocoding service returned an error."}
+    except requests.Timeout:
+        logger.warning("Nominatim reverse timeout", exc_info=True)
+        return {"error": "Geocoding service is slow right now. Try again shortly."}
+    except requests.ConnectionError:
+        logger.warning("Nominatim reverse connection error", exc_info=True)
+        return {"error": "Cannot reach geocoding service. Check your internet connection."}
+    except Exception:
+        logger.error("Reverse geocoding unexpected error", exc_info=True)
+        return {"error": "Reverse geocoding encountered an unexpected issue."}
 
 
 def handle_batch_geocode(params: dict, layer_store: dict = None) -> dict:
@@ -303,13 +344,24 @@ def handle_batch_geocode(params: dict, layer_store: dict = None) -> dict:
 
     layer_name = params.get("layer_name", "geocoded_points")
     geojson = {"type": "FeatureCollection", "features": features}
-    return {
+    result = {
         "geojson": geojson,
         "layer_name": layer_name,
         "geocoded": len(features),
         "failed": failed,
         "total": len(addresses),
     }
+    # Warn when batch is unusually lossy — strong signal of rate limiting
+    if addresses and len(failed) > len(addresses) / 2:
+        preview = ", ".join(failed[:5])
+        if len(failed) > 5:
+            preview += f", …and {len(failed) - 5} more"
+        result["warning"] = (
+            f"Geocoded {len(features)}/{len(addresses)} addresses. "
+            f"{len(failed)} failed (service may be rate-limiting). "
+            f"Failed: {preview}"
+        )
+    return result
 
 
 def handle_search_nearby(params: dict) -> dict:
@@ -382,9 +434,22 @@ def handle_search_nearby(params: dict) -> dict:
         response.raise_for_status()
         osm_data = response.json()
     except requests.Timeout:
-        return {"error": "Search timed out. Try a smaller radius."}
-    except requests.RequestException as e:
-        return {"error": f"OSM request failed: {str(e)}"}
+        logger.warning("Overpass nearby timeout radius=%s feature=%s", radius_m, feature_type, exc_info=True)
+        return {"error": "Search timed out. Try a smaller radius or more specific feature type."}
+    except requests.HTTPError as e:
+        status = getattr(e.response, "status_code", None)
+        logger.warning("Overpass nearby HTTP error: status=%s", status, exc_info=True)
+        if status == 429:
+            return {"error": "OpenStreetMap data service is rate-limiting requests. Wait 30 seconds and try again."}
+        if status == 504:
+            return {"error": "The search is too broad. Reduce the radius or use a more specific feature type."}
+        return {"error": "OpenStreetMap data service returned an error. Try again shortly."}
+    except requests.ConnectionError:
+        logger.warning("Overpass nearby connection error", exc_info=True)
+        return {"error": "Cannot reach OpenStreetMap data service. Check your internet connection."}
+    except requests.RequestException:
+        logger.error("Overpass nearby unexpected error", exc_info=True)
+        return {"error": "Nearby search failed. Try a different location or feature type."}
 
     geojson = _osm_to_geojson(osm_data, feature_type, feature_type)
     layer_name = f"nearby_{feature_type}_{int(radius_m)}m"
