@@ -144,6 +144,13 @@ Spatial analysis:
 - validate_topology: Use when the user asks to check geometry validity or find topology errors in a layer. Reports valid/invalid counts and error details.
 - repair_topology: Use when the user asks to fix or repair invalid geometries. Use after validate_topology, or proactively before analysis. Returns a new layer with repaired geometries.
 
+Raster analysis:
+- raster_info: List available rasters, or get CRS/resolution/bounds/bands for a specific raster.
+- raster_value: Sample raster value at a point. Use for "what's the elevation at lat/lon?".
+- raster_statistics: Global stats or zonal stats (pass layer_name). Supports DEM derivatives via `derivative`: 'slope', 'aspect', 'hillshade'.
+- raster_profile: Sample values along a line between two points. Returns a LineString + sample array.
+- raster_classify: Reclassify raster into polygon categories by breakpoints.
+
 Code execution (fallback):
 - execute_code: LAST RESORT. Use only when no other tool can accomplish the task. Generate Python using shapely/geopandas/numpy/scipy. Set `result` for text output or `geojson` for map layers.
 

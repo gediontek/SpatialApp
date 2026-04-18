@@ -22,7 +22,7 @@ v2.1 raises the NL-GIS pipeline from ~85% tool-selection accuracy (v2.0 baseline
 | 05 | [error-recovery](05-error-recovery-plan.md) | Retry, graceful degradation, circuit breaker, result-size guards | ✅ **Done** (M1–M5 complete, 24 new tests) |
 | 06 | [eval-framework](06-eval-framework-plan.md) | Granular param scoring + CI mode + regression detection + baseline persistence (rescoped: skip 58-query expansion) | ✅ **Done** (rescoped). `--ci`, `--save-baseline`, `--check-regression`, `--save-report` flags; coord/CRS tolerance; 19 new tests. |
 | 07 | [provider-tuning](07-provider-tuning-plan.md) | Prompt + model tuning, fine-tuning (successor to v1 D2) | Planned |
-| 08 | [raster-analysis](08-raster-analysis-plan.md) | Elevation/DEM, slope/aspect, viewshed (successor to v1 C1) | Planned |
+| 08 | [raster-analysis](08-raster-analysis-plan.md) | 5 raster tools + DEM derivatives (rescoped: skip tile serving blueprint) | ✅ **Done** (rescoped). `raster_info`, `raster_value`, `raster_statistics` (incl. zonal + slope/aspect/hillshade), `raster_profile`, `raster_classify`. 24 new tests. 69 tools total. |
 | 09 | [collaboration](09-collaboration-plan.md) | Multi-user sessions, shared state | Planned |
 | 10 | [data-pipeline](10-data-pipeline-plan.md) | ETL workflows, data ingestion automation | Planned |
 | 11 | [visualization](11-visualization-plan.md) | Chart/dashboard output, visual rendering | Planned |

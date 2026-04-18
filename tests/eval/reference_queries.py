@@ -584,6 +584,46 @@ SUPPLEMENTARY_QUERIES = [
         "expected_tools": ["execute_code"],
         "category": "advanced",
     },
+
+    # === v2.1 Plan 08 — Raster analysis (S033-S037) ===
+    {
+        "id": "S033",
+        "query": "What raster files are available?",
+        "complexity": "simple",
+        "expected_tools": ["raster_info"],
+        "category": "raster",
+    },
+    {
+        "id": "S034",
+        "query": "What is the elevation at lat 40.758, lon -73.985?",
+        "complexity": "simple",
+        "expected_tools": ["raster_value"],
+        "expected_params": {"raster_value": {"lat": 40.758, "lon": -73.985}},
+        "category": "raster",
+    },
+    {
+        "id": "S035",
+        "query": "Compute elevation statistics for the chicago_utm.tif raster",
+        "complexity": "simple",
+        "expected_tools": ["raster_statistics"],
+        "expected_params": {"raster_statistics": {"raster": "chicago_utm.tif"}},
+        "category": "raster",
+    },
+    {
+        "id": "S036",
+        "query": "Draw an elevation profile from downtown Chicago to O'Hare airport using chicago_utm.tif",
+        "complexity": "simple",
+        "expected_tools": ["raster_profile"],
+        "category": "raster",
+    },
+    {
+        "id": "S037",
+        "query": "Classify the chicago_utm.tif raster into low, medium, high at breaks 100 and 500",
+        "complexity": "simple",
+        "expected_tools": ["raster_classify"],
+        "expected_params": {"raster_classify": {"raster": "chicago_utm.tif", "breaks": [100, 500]}},
+        "category": "raster",
+    },
 ]
 
 # Full query set = primary + supplementary
@@ -626,6 +666,9 @@ ALL_TOOLS = [
     "temporal_filter", "attribute_statistics",
     # Code fallback
     "execute_code",
+    # Raster analysis (v2.1 Plan 08)
+    "raster_info", "raster_value", "raster_statistics", "raster_profile",
+    "raster_classify",
 ]
 
 

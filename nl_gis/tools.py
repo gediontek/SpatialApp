@@ -1597,5 +1597,97 @@ def get_tool_definitions() -> list:
                 },
                 "required": ["code"]
             }
-        }
+        },
+        # --- Raster analysis (v2.1 Plan 08) ---
+        {
+            "name": "raster_info",
+            "description": "Get metadata for a raster file (CRS, resolution, bounds in WGS84, band count, dtype). Call with no arguments to LIST available rasters in the configured raster directory. USE WHEN: 'what rasters are available?', 'show info about chicago_utm.tif', 'what CRS is this DEM in?'",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "raster": {
+                        "type": "string",
+                        "description": "Raster filename (e.g. 'chicago_utm.tif'). Omit to list available rasters.",
+                    }
+                },
+            },
+        },
+        {
+            "name": "raster_value",
+            "description": "Sample the raster value at a single point. USE WHEN: 'what's the elevation at X?', 'what pixel value is at lat/lon?', 'elevation of Times Square'. Provide lat + lon OR a location name (which will be geocoded).",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "raster": {"type": "string", "description": "Raster filename. Example: 'chicago_utm.tif'"},
+                    "lat": {"type": "number", "description": "Latitude (WGS84)."},
+                    "lon": {"type": "number", "description": "Longitude (WGS84)."},
+                    "location": {"type": "string", "description": "Place name to geocode (alternative to lat/lon)."},
+                },
+                "required": ["raster"],
+            },
+        },
+        {
+            "name": "raster_statistics",
+            "description": "Compute statistics (min/max/mean/std/median) for a raster band. Optionally compute zonal statistics per polygon by passing `layer_name`. Also supports DEM derivatives via `derivative` ('slope', 'aspect', 'hillshade') which are computed from elevation before statistics. USE WHEN: 'mean elevation of the parks', 'slope statistics for this area', 'min/max pixel values'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "raster": {"type": "string", "description": "Raster filename. Required."},
+                    "band": {"type": "integer", "description": "Band number (default 1).", "default": 1},
+                    "layer_name": {"type": "string", "description": "Polygon layer for zonal stats (optional)."},
+                    "derivative": {
+                        "type": "string",
+                        "description": "Optional DEM derivative: 'slope' (degrees), 'aspect' (0-360°), 'hillshade' (0-255).",
+                        "enum": ["slope", "aspect", "hillshade"],
+                    },
+                },
+                "required": ["raster"],
+            },
+        },
+        {
+            "name": "raster_profile",
+            "description": "Extract a value profile along a line between two points. USE WHEN: 'elevation profile from A to B', 'cross-section between X and Y', 'sample values along this transect'. Returns sampled values at `num_samples` evenly-spaced points plus a GeoJSON LineString visualization.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "raster": {"type": "string", "description": "Raster filename. Required."},
+                    "from_point": {
+                        "type": "object",
+                        "description": "Origin as {lat, lon}. Alternative: from_location.",
+                        "properties": {"lat": {"type": "number"}, "lon": {"type": "number"}},
+                    },
+                    "to_point": {
+                        "type": "object",
+                        "description": "Destination as {lat, lon}. Alternative: to_location.",
+                        "properties": {"lat": {"type": "number"}, "lon": {"type": "number"}},
+                    },
+                    "from_location": {"type": "string", "description": "Origin place name."},
+                    "to_location": {"type": "string", "description": "Destination place name."},
+                    "num_samples": {"type": "integer", "description": "Sample count (2-500, default 100).", "default": 100},
+                },
+                "required": ["raster"],
+            },
+        },
+        {
+            "name": "raster_classify",
+            "description": "Reclassify a raster into discrete polygon categories using breakpoints. USE WHEN: 'classify elevation into low/medium/high', 'show terrain categories', 'vectorize the DEM into zones'. Returns a polygon layer with one feature per contiguous classified region.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "raster": {"type": "string", "description": "Raster filename. Required."},
+                    "breaks": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "description": "Sorted breakpoints. Example: [0, 100, 500] creates classes <0, 0-100, 100-500, >500.",
+                    },
+                    "labels": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional human-readable labels per class.",
+                    },
+                    "band": {"type": "integer", "description": "Band number (default 1).", "default": 1},
+                },
+                "required": ["raster", "breaks"],
+            },
+        },
     ]

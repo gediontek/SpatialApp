@@ -133,6 +133,8 @@ LAYER_PRODUCING_TOOLS = {
     "interpolate", "repair_topology", "service_area",
     "reproject_layer", "split_feature", "merge_features",
     "extract_vertices", "temporal_filter",
+    # Raster layer-producing tools (v2.1 Plan 08)
+    "raster_profile", "raster_classify", "raster_statistics",
 }
 
 # Reuse OSM feature mappings from app.py
@@ -516,6 +518,23 @@ from nl_gis.handlers.routing import (  # noqa: E402,F401
 )
 
 
+def _raster_call(tool_name: str, params: dict, layer_store: dict | None):
+    """Lazy raster dispatcher — imports nl_gis.handlers.raster on demand so
+    rasterio isn't required at module load time."""
+    from nl_gis.handlers import raster as raster_mod
+    if tool_name == "raster_info":
+        return raster_mod.handle_raster_info(params)
+    if tool_name == "raster_value":
+        return raster_mod.handle_raster_value(params)
+    if tool_name == "raster_statistics":
+        return raster_mod.handle_raster_statistics(params, layer_store)
+    if tool_name == "raster_profile":
+        return raster_mod.handle_raster_profile(params)
+    if tool_name == "raster_classify":
+        return raster_mod.handle_raster_classify(params, layer_store)
+    raise ValueError(f"Unknown raster tool: {tool_name}")
+
+
 def dispatch_tool(tool_name: str, params: dict, layer_store: dict = None) -> dict:
     """Route a tool call to the appropriate handler.
 
@@ -605,10 +624,18 @@ def dispatch_tool(tool_name: str, params: dict, layer_store: dict = None) -> dic
         "extract_vertices": lambda p: handle_extract_vertices(p, layer_store),
         "temporal_filter": lambda p: handle_temporal_filter(p, layer_store),
         "attribute_statistics": lambda p: handle_attribute_statistics(p, layer_store),
+        # Raster analysis (v2.1 Plan 08)
+        "raster_info": lambda p: _raster_call("raster_info", p, layer_store),
+        "raster_value": lambda p: _raster_call("raster_value", p, layer_store),
+        "raster_statistics": lambda p: _raster_call("raster_statistics", p, layer_store),
+        "raster_profile": lambda p: _raster_call("raster_profile", p, layer_store),
+        "raster_classify": lambda p: _raster_call("raster_classify", p, layer_store),
     }
 
     if tool_name not in handlers:
         raise ValueError(f"Unknown tool: {tool_name}")
+
+    # (raster handlers imported lazily inside _raster_call below)
 
     result = handlers[tool_name](params)
     # Apply size guards to layer-producing tools so oversized results

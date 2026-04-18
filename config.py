@@ -101,6 +101,13 @@ class Config:
     # LLM cost budget
     MAX_TOKENS_PER_SESSION = _int_env('MAX_TOKENS_PER_SESSION', 100000)
 
+    # Raster (v2.1 Plan 08)
+    RASTER_DIR = os.environ.get(
+        'RASTER_DIR',
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sample_rasters'),
+    )
+    MAX_RASTER_SIZE_MB = _int_env('MAX_RASTER_SIZE_MB', 500)
+
     # Database
     DATABASE_PATH = os.environ.get('DATABASE_PATH',
         os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'spatialapp.db'))

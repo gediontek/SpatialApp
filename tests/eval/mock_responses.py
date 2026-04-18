@@ -245,6 +245,31 @@ MOCK_RESPONSES = {
             "input_layer": "buildings",
         }),
     ],
+
+    # === v2.1 Plan 08 — Raster analysis (S033-S037) ===
+    "S033": [
+        _tool_use("raster_info", {}),
+    ],
+    "S034": [
+        _tool_use("raster_value", {"raster": "geog_wgs84.tif", "lat": 40.758, "lon": -73.985}),
+    ],
+    "S035": [
+        _tool_use("raster_statistics", {"raster": "chicago_utm.tif"}),
+    ],
+    "S036": [
+        _tool_use("raster_profile", {
+            "raster": "chicago_utm.tif",
+            "from_location": "downtown Chicago",
+            "to_location": "O'Hare Airport",
+        }),
+    ],
+    "S037": [
+        _tool_use("raster_classify", {
+            "raster": "chicago_utm.tif",
+            "breaks": [100, 500],
+            "labels": ["low", "medium", "high"],
+        }),
+    ],
 }
 
 
