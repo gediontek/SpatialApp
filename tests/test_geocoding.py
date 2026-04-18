@@ -105,11 +105,15 @@ class TestReverseGeocode:
     @patch("nl_gis.handlers.navigation.requests.get")
     def test_network_error(self, mock_get, mock_cache):
         mock_cache.get.return_value = None
+        # Generic Exception takes the fallback path — Plan 05 M2 reworded the
+        # message so it doesn't leak exception details.
         mock_get.side_effect = Exception("Connection timeout")
 
         result = handle_reverse_geocode({"lat": 47.6, "lon": -122.3})
         assert "error" in result
-        assert "Reverse geocoding failed" in result["error"]
+        assert "unexpected issue" in result["error"].lower()
+        # Must not leak the exception text to users.
+        assert "Connection timeout" not in result["error"]
 
     def test_dispatch_reverse_geocode(self):
         """Test that reverse_geocode is registered in dispatch_tool."""

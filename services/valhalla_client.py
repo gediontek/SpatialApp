@@ -15,6 +15,7 @@ import polyline
 import requests
 
 from services.cache import valhalla_cache
+from services.circuit_breaker import CircuitOpenError, valhalla_breaker
 from services.rate_limiter import valhalla_limiter
 
 logger = logging.getLogger(__name__)
@@ -84,7 +85,8 @@ def _request_with_retry(url, json_data, timeout, max_retries=2):
     """Make HTTP POST with exponential backoff retry for transient errors.
 
     Retries on ConnectionError, Timeout, and HTTP 5xx responses.
-    Does NOT retry on 4xx client errors.
+    Does NOT retry on 4xx client errors. Protected by valhalla_breaker so
+    persistent failures stop hammering the service.
 
     Args:
         url: Request URL.
@@ -93,8 +95,15 @@ def _request_with_retry(url, json_data, timeout, max_retries=2):
         max_retries: Maximum number of retries (default 2).
 
     Returns:
-        requests.Response on success, None after all retries exhausted.
+        requests.Response on success, None after all retries exhausted or
+        when the circuit breaker is open.
     """
+    # Fast reject while the circuit is open — avoids a full retry loop
+    # against a known-dead service.
+    if valhalla_breaker.is_open():
+        logger.info("Valhalla circuit open — skipping request")
+        return None
+
     delays = [0.5, 1.0]
     for attempt in range(1 + max_retries):
         try:
@@ -107,6 +116,13 @@ def _request_with_retry(url, json_data, timeout, max_retries=2):
                 )
                 _time.sleep(delays[attempt] if attempt < len(delays) else delays[-1])
                 continue
+            # 2xx / 4xx / final-attempt 5xx all count as "the request completed."
+            # Only record success for non-5xx — 5xx still means the service is
+            # sick and the breaker should account for it.
+            if isinstance(status, int) and status >= 500:
+                valhalla_breaker.record_failure()
+            else:
+                valhalla_breaker.record_success()
             return response
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
             if attempt < max_retries:
@@ -120,7 +136,9 @@ def _request_with_retry(url, json_data, timeout, max_retries=2):
                     "Valhalla request failed after %d attempts: %s",
                     1 + max_retries, e,
                 )
+                valhalla_breaker.record_failure()
                 return None
+    valhalla_breaker.record_failure()
     return None
 
 

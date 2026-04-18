@@ -12,6 +12,11 @@ import requests
 from shapely.geometry import shape
 
 from config import Config
+from services.circuit_breaker import (
+    CircuitOpenError,
+    overpass_breaker,
+    valhalla_breaker,
+)
 from nl_gis.geo_utils import (
     ValidatedPoint,
     geodesic_area,
@@ -340,13 +345,19 @@ def handle_closest_facility(params: dict, layer_store: dict = None) -> dict:
 
     try:
         overpass_limiter.wait()
-        response = requests.get(
-            "https://overpass-api.de/api/interpreter",
-            params={"data": overpass_query},
-            timeout=Config.OSM_REQUEST_TIMEOUT,
-        )
-        response.raise_for_status()
-        osm_data = response.json()
+
+        def _fetch():
+            response = requests.get(
+                "https://overpass-api.de/api/interpreter",
+                params={"data": overpass_query},
+                timeout=Config.OSM_REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            return response.json()
+
+        osm_data = overpass_breaker.call(_fetch)
+    except CircuitOpenError as e:
+        return {"error": str(e)}
     except requests.Timeout:
         logger.warning("Overpass closest-facility timeout radius=%s feature=%s", max_radius_m, feature_type, exc_info=True)
         return {"error": "Search timed out. Try a smaller radius or more specific feature type."}

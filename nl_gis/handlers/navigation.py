@@ -11,6 +11,11 @@ import requests
 from config import Config
 from nl_gis.geo_utils import ValidatedPoint
 from services.cache import geocode_cache, overpass_cache
+from services.circuit_breaker import (
+    CircuitOpenError,
+    nominatim_breaker,
+    overpass_breaker,
+)
 from services.rate_limiter import nominatim_limiter, overpass_limiter
 
 logger = logging.getLogger(__name__)
@@ -35,14 +40,18 @@ def handle_geocode(params: dict) -> dict:
     try:
         nominatim_limiter.wait()
         url = "https://nominatim.openstreetmap.org/search"
-        resp = requests.get(
-            url,
-            params={"q": query, "format": "json", "limit": 1},
-            headers={"User-Agent": "SpatialLabeler/1.0"},
-            timeout=10,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+
+        def _fetch():
+            resp = requests.get(
+                url,
+                params={"q": query, "format": "json", "limit": 1},
+                headers={"User-Agent": "SpatialLabeler/1.0"},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+        data = nominatim_breaker.call(_fetch)
 
         if not data:
             return {"error": f"Location not found: {query}"}
@@ -58,6 +67,8 @@ def handle_geocode(params: dict) -> dict:
         }
         geocode_cache.set(query.lower().strip(), geo_result)
         return geo_result
+    except CircuitOpenError as e:
+        return {"error": str(e)}
     except requests.HTTPError as e:
         status = getattr(e.response, "status_code", None)
         logger.warning("Nominatim HTTP error: status=%s", status, exc_info=True)
@@ -147,13 +158,19 @@ def handle_fetch_osm(params: dict) -> dict:
 
     try:
         overpass_limiter.wait()
-        response = requests.get(
-            "https://overpass-api.de/api/interpreter",
-            params={"data": overpass_query},
-            timeout=(5, Config.OSM_REQUEST_TIMEOUT),
-        )
-        response.raise_for_status()
-        osm_data = response.json()
+
+        def _fetch():
+            response = requests.get(
+                "https://overpass-api.de/api/interpreter",
+                params={"data": overpass_query},
+                timeout=(5, Config.OSM_REQUEST_TIMEOUT),
+            )
+            response.raise_for_status()
+            return response.json()
+
+        osm_data = overpass_breaker.call(_fetch)
+    except CircuitOpenError as e:
+        return {"error": str(e)}
     except requests.Timeout:
         logger.warning("Overpass timeout for bbox=%s key=%s", bbox, key, exc_info=True)
         return {"error": "OSM request timed out. Try a smaller area or more specific feature type."}
@@ -283,9 +300,13 @@ def handle_reverse_geocode(params: dict) -> dict:
         nominatim_limiter.wait()
         url = f"https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json"
         headers = {"User-Agent": "SpatialApp/1.0"}
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        data = response.json()
+
+        def _fetch():
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            return response.json()
+
+        data = nominatim_breaker.call(_fetch)
 
         if "error" in data:
             return {"error": f"No result found for coordinates ({lat}, {lon})"}
@@ -300,6 +321,8 @@ def handle_reverse_geocode(params: dict) -> dict:
         }
         geocode_cache.set(cache_key, result)
         return result
+    except CircuitOpenError as e:
+        return {"error": str(e)}
     except requests.HTTPError as e:
         status = getattr(e.response, "status_code", None)
         logger.warning("Nominatim reverse HTTP error: status=%s", status, exc_info=True)
@@ -426,13 +449,19 @@ def handle_search_nearby(params: dict) -> dict:
 
     try:
         overpass_limiter.wait()
-        response = requests.get(
-            "https://overpass-api.de/api/interpreter",
-            params={"data": overpass_query},
-            timeout=Config.OSM_REQUEST_TIMEOUT,
-        )
-        response.raise_for_status()
-        osm_data = response.json()
+
+        def _fetch():
+            response = requests.get(
+                "https://overpass-api.de/api/interpreter",
+                params={"data": overpass_query},
+                timeout=Config.OSM_REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            return response.json()
+
+        osm_data = overpass_breaker.call(_fetch)
+    except CircuitOpenError as e:
+        return {"error": str(e)}
     except requests.Timeout:
         logger.warning("Overpass nearby timeout radius=%s feature=%s", radius_m, feature_type, exc_info=True)
         return {"error": "Search timed out. Try a smaller radius or more specific feature type."}
