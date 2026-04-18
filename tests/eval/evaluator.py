@@ -8,6 +8,7 @@ from collections import defaultdict
 from typing import Optional
 
 from tests.eval.reference_queries import ALL_QUERIES, REFERENCE_QUERIES
+from tests.eval.failure_taxonomy import FailureCategory, classify_failure
 
 
 def _build_query_index(queries):
@@ -79,6 +80,7 @@ class ToolSelectionEvaluator:
             "match": match,
             "expected_tools": expected,
             "actual_tools": actual_tools,
+            "actual_params": actual_params or {},
             "missing_tools": missing,
             "extra_tools": extra,
             "complexity": ref.get("complexity", "unknown"),
@@ -99,6 +101,10 @@ class ToolSelectionEvaluator:
             result["chain_order_correct"] = _is_subsequence(expected, actual_tools)
         else:
             result["chain_order_correct"] = None
+
+        # Failure classification: None for passing queries, category label otherwise
+        category = classify_failure(result)
+        result["failure_category"] = category.label if category else None
 
         return result
 
@@ -154,6 +160,8 @@ class ToolSelectionEvaluator:
         by_category = _group_accuracy(evaluations, "category")
         # Chain accuracy by complexity (multi-tool queries only)
         chain_by_complexity = _chain_accuracy_by_complexity(chain_eligible)
+        # Failure breakdown by taxonomy category
+        failure_breakdown = _failure_breakdown(evaluations)
 
         # Worst queries: non-full matches sorted by severity
         worst = [
@@ -187,6 +195,7 @@ class ToolSelectionEvaluator:
             "by_complexity": by_complexity,
             "by_category": by_category,
             "chain_by_complexity": chain_by_complexity,
+            "failure_breakdown": failure_breakdown,
             "worst_queries": worst,
             "evaluations": evaluations,
         }
@@ -260,6 +269,32 @@ class ToolSelectionEvaluator:
                         f"| {level} | {data['accuracy']:.1%} | {data['total']} |"
                     )
 
+        if summary["failure_breakdown"]:
+            total_failures = sum(
+                d["count"] for d in summary["failure_breakdown"].values()
+            )
+            lines.extend([
+                "",
+                "## Failure Classification",
+                "",
+                "| Category | Count | Percentage | Example Query IDs |",
+                "|----------|-------|------------|-------------------|",
+            ])
+            sorted_breakdown = sorted(
+                summary["failure_breakdown"].items(),
+                key=lambda kv: kv[1]["count"],
+                reverse=True,
+            )
+            for cat, data in sorted_breakdown:
+                pct = (
+                    100.0 * data["count"] / total_failures
+                    if total_failures else 0.0
+                )
+                examples = ", ".join(data["query_ids"][:3])
+                lines.append(
+                    f"| {cat} | {data['count']} | {pct:.1f}% | {examples} |"
+                )
+
         if summary["worst_queries"]:
             lines.extend([
                 "",
@@ -329,6 +364,23 @@ def _is_subsequence(expected: list, actual: list) -> bool:
     """
     it = iter(actual)
     return all(tool in it for tool in expected)
+
+
+def _failure_breakdown(evaluations: list[dict]) -> dict:
+    """Group failed evaluations by taxonomy category.
+
+    Returns {category_label: {"count": int, "query_ids": list[str]}}.
+    Passing queries (failure_category is None) are excluded.
+    """
+    groups: dict[str, list[str]] = defaultdict(list)
+    for e in evaluations:
+        cat = e.get("failure_category")
+        if cat:
+            groups[cat].append(e["query_id"])
+    return {
+        cat: {"count": len(qids), "query_ids": qids}
+        for cat, qids in groups.items()
+    }
 
 
 def _chain_accuracy_by_complexity(chain_eligible: list[dict]) -> dict:

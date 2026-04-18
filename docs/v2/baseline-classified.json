@@ -1,0 +1,2182 @@
+{
+  "timestamp": "2026-04-18T01:43:44.246056+00:00",
+  "mode": "live",
+  "provider": "gemini",
+  "model": "gemini-2.5-flash",
+  "query_count": 62,
+  "batch": {
+    "total": 62,
+    "full_match": 32,
+    "partial_match": 8,
+    "no_match": 22,
+    "accuracy": 0.516,
+    "param_accuracy": 0.571,
+    "param_checked_total": 35,
+    "param_matched": 20,
+    "chain_accuracy": 0.364,
+    "chain_eligible_total": 11,
+    "chain_correct": 4,
+    "by_complexity": {
+      "simple": {
+        "accuracy": 0.56,
+        "total": 50,
+        "full_match": 28
+      },
+      "moderate": {
+        "accuracy": 0.5,
+        "total": 8,
+        "full_match": 4
+      },
+      "complex": {
+        "accuracy": 0.0,
+        "total": 2,
+        "full_match": 0
+      },
+      "multi_step": {
+        "accuracy": 0.0,
+        "total": 2,
+        "full_match": 0
+      }
+    },
+    "by_category": {
+      "data_acquisition": {
+        "accuracy": 0.8,
+        "total": 5,
+        "full_match": 4
+      },
+      "measurement": {
+        "accuracy": 1.0,
+        "total": 3,
+        "full_match": 3
+      },
+      "spatial_analysis": {
+        "accuracy": 0.417,
+        "total": 12,
+        "full_match": 5
+      },
+      "geometry": {
+        "accuracy": 0.5,
+        "total": 10,
+        "full_match": 5
+      },
+      "overlay": {
+        "accuracy": 0.5,
+        "total": 4,
+        "full_match": 2
+      },
+      "routing": {
+        "accuracy": 0.333,
+        "total": 6,
+        "full_match": 2
+      },
+      "layer_management": {
+        "accuracy": 0.5,
+        "total": 4,
+        "full_match": 2
+      },
+      "import_export": {
+        "accuracy": 0.714,
+        "total": 7,
+        "full_match": 5
+      },
+      "annotation": {
+        "accuracy": 0.333,
+        "total": 3,
+        "full_match": 1
+      },
+      "visualization": {
+        "accuracy": 0.0,
+        "total": 2,
+        "full_match": 0
+      },
+      "data_quality": {
+        "accuracy": 0.6,
+        "total": 5,
+        "full_match": 3
+      },
+      "advanced": {
+        "accuracy": 0.0,
+        "total": 1,
+        "full_match": 0
+      }
+    },
+    "chain_by_complexity": {
+      "moderate": {
+        "accuracy": 0.571,
+        "total": 7,
+        "correct": 4
+      },
+      "complex": {
+        "accuracy": 0.0,
+        "total": 2,
+        "correct": 0
+      },
+      "multi_step": {
+        "accuracy": 0.0,
+        "total": 2,
+        "correct": 0
+      }
+    },
+    "failure_breakdown": {
+      "wrong_tool": {
+        "count": 20,
+        "query_ids": [
+          "Q002",
+          "Q010",
+          "Q011",
+          "Q012",
+          "Q013",
+          "Q014",
+          "Q015",
+          "Q018",
+          "Q021",
+          "S005",
+          "S006",
+          "S008",
+          "S009",
+          "S011",
+          "S012",
+          "S015",
+          "S020",
+          "S022",
+          "S029",
+          "S032"
+        ]
+      },
+      "right_tool_wrong_params": {
+        "count": 2,
+        "query_ids": [
+          "Q007",
+          "S010"
+        ]
+      },
+      "tool_description_misleading": {
+        "count": 1,
+        "query_ids": [
+          "Q009"
+        ]
+      },
+      "missing_chain_step": {
+        "count": 6,
+        "query_ids": [
+          "Q019",
+          "Q020",
+          "Q026",
+          "Q027",
+          "S023",
+          "S031"
+        ]
+      },
+      "extra_chain_step": {
+        "count": 3,
+        "query_ids": [
+          "Q023",
+          "Q030",
+          "S007"
+        ]
+      }
+    },
+    "worst_queries": [
+      {
+        "id": "Q002",
+        "query": "What place is at coordinates 40.7128, -74.0060?",
+        "match": "none",
+        "expected": [
+          "reverse_geocode"
+        ],
+        "actual": [],
+        "missing": [
+          "reverse_geocode"
+        ],
+        "extra": []
+      },
+      {
+        "id": "Q010",
+        "query": "Which district contains the point at 51.5074, -0.1278?",
+        "match": "none",
+        "expected": [
+          "point_in_polygon"
+        ],
+        "actual": [
+          "fetch_osm"
+        ],
+        "missing": [
+          "point_in_polygon"
+        ],
+        "extra": [
+          "fetch_osm"
+        ]
+      },
+      {
+        "id": "Q011",
+        "query": "Tag each store with its census tract",
+        "match": "none",
+        "expected": [
+          "point_in_polygon"
+        ],
+        "actual": [],
+        "missing": [
+          "point_in_polygon"
+        ],
+        "extra": []
+      },
+      {
+        "id": "Q012",
+        "query": "Are the crime points spatially clustered?",
+        "match": "none",
+        "expected": [
+          "spatial_statistics"
+        ],
+        "actual": [],
+        "missing": [
+          "spatial_statistics"
+        ],
+        "extra": []
+      },
+      {
+        "id": "Q013",
+        "query": "Run DBSCAN clustering on the restaurant data with 200m radius and minimum 3 points",
+        "match": "none",
+        "expected": [
+          "spatial_statistics"
+        ],
+        "actual": [],
+        "missing": [
+          "spatial_statistics"
+        ],
+        "extra": []
+      },
+      {
+        "id": "Q014",
+        "query": "Draw a boundary around the crime data points",
+        "match": "none",
+        "expected": [
+          "convex_hull"
+        ],
+        "actual": [],
+        "missing": [
+          "convex_hull"
+        ],
+        "extra": []
+      },
+      {
+        "id": "Q015",
+        "query": "Get the center points of all buildings",
+        "match": "none",
+        "expected": [
+          "centroid"
+        ],
+        "actual": [],
+        "missing": [
+          "centroid"
+        ],
+        "extra": []
+      },
+      {
+        "id": "Q018",
+        "query": "Merge the zoning polygons by zone_type",
+        "match": "none",
+        "expected": [
+          "dissolve"
+        ],
+        "actual": [],
+        "missing": [
+          "dissolve"
+        ],
+        "extra": []
+      },
+      {
+        "id": "Q019",
+        "query": "Create a 2km buffer around the hospital",
+        "match": "none",
+        "expected": [
+          "geocode",
+          "buffer"
+        ],
+        "actual": [],
+        "missing": [
+          "geocode",
+          "buffer"
+        ],
+        "extra": []
+      },
+      {
+        "id": "Q021",
+        "query": "Remove water areas from the land use layer",
+        "match": "none",
+        "expected": [
+          "difference"
+        ],
+        "actual": [],
+        "missing": [
+          "difference"
+        ],
+        "extra": []
+      },
+      {
+        "id": "Q027",
+        "query": "Show only buildings taller than 20 meters and highlight the commercial ones",
+        "match": "none",
+        "expected": [
+          "filter_layer",
+          "highlight_features"
+        ],
+        "actual": [],
+        "missing": [
+          "filter_layer",
+          "highlight_features"
+        ],
+        "extra": []
+      },
+      {
+        "id": "S005",
+        "query": "Show me all saved annotations",
+        "match": "none",
+        "expected": [
+          "get_annotations"
+        ],
+        "actual": [],
+        "missing": [
+          "get_annotations"
+        ],
+        "extra": []
+      },
+      {
+        "id": "S006",
+        "query": "Export all annotations as GeoJSON",
+        "match": "none",
+        "expected": [
+          "export_annotations"
+        ],
+        "actual": [],
+        "missing": [
+          "export_annotations"
+        ],
+        "extra": []
+      },
+      {
+        "id": "S008",
+        "query": "Classify the land cover types in the area",
+        "match": "none",
+        "expected": [
+          "classify_landcover"
+        ],
+        "actual": [],
+        "missing": [
+          "classify_landcover"
+        ],
+        "extra": []
+      },
+      {
+        "id": "S009",
+        "query": "Optimize the delivery route visiting these 5 warehouse locations",
+        "match": "none",
+        "expected": [
+          "optimize_route"
+        ],
+        "actual": [],
+        "missing": [
+          "optimize_route"
+        ],
+        "extra": []
+      },
+      {
+        "id": "S011",
+        "query": "Create Voronoi service areas from the fire station locations",
+        "match": "none",
+        "expected": [
+          "voronoi"
+        ],
+        "actual": [],
+        "missing": [
+          "voronoi"
+        ],
+        "extra": []
+      },
+      {
+        "id": "S012",
+        "query": "Add population data to the district polygons by matching district_id",
+        "match": "none",
+        "expected": [
+          "attribute_join"
+        ],
+        "actual": [],
+        "missing": [
+          "attribute_join"
+        ],
+        "extra": []
+      },
+      {
+        "id": "S015",
+        "query": "Show the 10-minute driving coverage from all fire stations",
+        "match": "none",
+        "expected": [
+          "service_area"
+        ],
+        "actual": [
+          "fetch_osm"
+        ],
+        "missing": [
+          "service_area"
+        ],
+        "extra": [
+          "fetch_osm"
+        ]
+      },
+      {
+        "id": "S020",
+        "query": "Show only the events between 2025-01-01 and 2025-12-31 from the events layer",
+        "match": "none",
+        "expected": [
+          "temporal_filter"
+        ],
+        "actual": [],
+        "missing": [
+          "temporal_filter"
+        ],
+        "extra": []
+      },
+      {
+        "id": "S022",
+        "query": "Compute the origin-destination matrix between the warehouses and customers layers",
+        "match": "none",
+        "expected": [
+          "od_matrix"
+        ],
+        "actual": [],
+        "missing": [
+          "od_matrix"
+        ],
+        "extra": []
+      },
+      {
+        "id": "S029",
+        "query": "Import this GeoParquet file as a parcels layer",
+        "match": "none",
+        "expected": [
+          "import_geoparquet"
+        ],
+        "actual": [],
+        "missing": [
+          "import_geoparquet"
+        ],
+        "extra": []
+      },
+      {
+        "id": "S032",
+        "query": "Compute the minimum bounding rectangle for all features in the buildings layer",
+        "match": "none",
+        "expected": [
+          "execute_code"
+        ],
+        "actual": [
+          "bounding_box"
+        ],
+        "missing": [
+          "execute_code"
+        ],
+        "extra": [
+          "bounding_box"
+        ]
+      },
+      {
+        "id": "Q009",
+        "query": "Which restaurants are within 500 meters of Central Park?",
+        "match": "partial",
+        "expected": [
+          "geocode",
+          "buffer",
+          "search_nearby",
+          "spatial_query"
+        ],
+        "actual": [
+          "geocode",
+          "buffer",
+          "buffer",
+          "search_nearby"
+        ],
+        "missing": [
+          "spatial_query"
+        ],
+        "extra": [
+          "buffer"
+        ]
+      },
+      {
+        "id": "Q020",
+        "query": "Show where parks and commercial zones overlap in downtown Seattle",
+        "match": "partial",
+        "expected": [
+          "fetch_osm",
+          "fetch_osm",
+          "intersection"
+        ],
+        "actual": [
+          "fetch_osm",
+          "fetch_osm"
+        ],
+        "missing": [
+          "intersection"
+        ],
+        "extra": []
+      },
+      {
+        "id": "Q023",
+        "query": "Plan a driving route from Times Square to Brooklyn Bridge",
+        "match": "partial",
+        "expected": [
+          "find_route"
+        ],
+        "actual": [
+          "find_route",
+          "map_command"
+        ],
+        "missing": [],
+        "extra": [
+          "map_command"
+        ]
+      },
+      {
+        "id": "Q026",
+        "query": "Find restaurants within 500m of Central Park and color them red",
+        "match": "partial",
+        "expected": [
+          "search_nearby",
+          "style_layer"
+        ],
+        "actual": [
+          "search_nearby"
+        ],
+        "missing": [
+          "style_layer"
+        ],
+        "extra": []
+      },
+      {
+        "id": "Q030",
+        "query": "Import this WKT polygon: POLYGON((-73.98 40.76, -73.97 40.76, -73.97 40.77, -73.98 40.77, -73.98 40.76))",
+        "match": "partial",
+        "expected": [
+          "import_wkt"
+        ],
+        "actual": [
+          "import_wkt",
+          "map_command"
+        ],
+        "missing": [],
+        "extra": [
+          "map_command"
+        ]
+      },
+      {
+        "id": "S007",
+        "query": "Create a heatmap of the crime incident points",
+        "match": "partial",
+        "expected": [
+          "heatmap"
+        ],
+        "actual": [
+          "heatmap",
+          "map_command"
+        ],
+        "missing": [],
+        "extra": [
+          "map_command"
+        ]
+      },
+      {
+        "id": "S023",
+        "query": "Check if the imported_parcels polygons are valid and fix any topology errors",
+        "match": "partial",
+        "expected": [
+          "validate_topology",
+          "repair_topology"
+        ],
+        "actual": [
+          "validate_topology"
+        ],
+        "missing": [
+          "repair_topology"
+        ],
+        "extra": []
+      },
+      {
+        "id": "S031",
+        "query": "Validate topology on the boundaries layer, and if there are issues, repair them into a clean version",
+        "match": "partial",
+        "expected": [
+          "validate_topology",
+          "repair_topology"
+        ],
+        "actual": [
+          "validate_topology"
+        ],
+        "missing": [
+          "repair_topology"
+        ],
+        "extra": []
+      }
+    ],
+    "evaluations": [
+      {
+        "query_id": "Q001",
+        "query": "Show me all parks in downtown Chicago",
+        "match": "full",
+        "expected_tools": [
+          "fetch_osm"
+        ],
+        "actual_tools": [
+          "fetch_osm"
+        ],
+        "actual_params": {
+          "fetch_osm": {
+            "location": "downtown Chicago",
+            "feature_type": "park",
+            "category_name": "downtown_chicago_parks"
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "data_acquisition",
+        "param_match": true,
+        "chain_order_correct": null,
+        "failure_category": null
+      },
+      {
+        "query_id": "Q002",
+        "query": "What place is at coordinates 40.7128, -74.0060?",
+        "match": "none",
+        "expected_tools": [
+          "reverse_geocode"
+        ],
+        "actual_tools": [],
+        "actual_params": {},
+        "missing_tools": [
+          "reverse_geocode"
+        ],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "data_acquisition",
+        "param_match": false,
+        "chain_order_correct": null,
+        "failure_category": "wrong_tool"
+      },
+      {
+        "query_id": "Q003",
+        "query": "Find restaurants near Times Square within 800 meters",
+        "match": "full",
+        "expected_tools": [
+          "search_nearby"
+        ],
+        "actual_tools": [
+          "search_nearby"
+        ],
+        "actual_params": {
+          "search_nearby": {
+            "feature_type": "restaurant",
+            "radius_m": 800,
+            "location": "Times Square"
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "data_acquisition",
+        "param_match": true,
+        "chain_order_correct": null,
+        "failure_category": null
+      },
+      {
+        "query_id": "Q004",
+        "query": "Geocode these addresses: 1600 Pennsylvania Ave, 350 Fifth Ave, 233 S Wacker Dr",
+        "match": "full",
+        "expected_tools": [
+          "batch_geocode"
+        ],
+        "actual_tools": [
+          "batch_geocode"
+        ],
+        "actual_params": {
+          "batch_geocode": {
+            "addresses": [
+              "1600 Pennsylvania Ave",
+              "350 Fifth Ave",
+              "233 S Wacker Dr"
+            ]
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "data_acquisition",
+        "param_match": null,
+        "chain_order_correct": null,
+        "failure_category": null
+      },
+      {
+        "query_id": "Q005",
+        "query": "Pan to Berlin, Germany and zoom to level 12",
+        "match": "full",
+        "expected_tools": [
+          "geocode",
+          "map_command"
+        ],
+        "actual_tools": [
+          "geocode",
+          "map_command"
+        ],
+        "actual_params": {
+          "geocode": {
+            "query": "Berlin, Germany"
+          },
+          "map_command": {
+            "lon": 13.3951309,
+            "action": "pan_and_zoom",
+            "lat": 52.5173885,
+            "zoom": 12
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "moderate",
+        "category": "data_acquisition",
+        "param_match": true,
+        "chain_order_correct": true,
+        "failure_category": null
+      },
+      {
+        "query_id": "Q006",
+        "query": "How far is it from the White House to the Capitol?",
+        "match": "full",
+        "expected_tools": [
+          "measure_distance"
+        ],
+        "actual_tools": [
+          "measure_distance"
+        ],
+        "actual_params": {
+          "measure_distance": {
+            "to_location": "The Capitol",
+            "from_location": "The White House"
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "measurement",
+        "param_match": null,
+        "chain_order_correct": null,
+        "failure_category": null
+      },
+      {
+        "query_id": "Q007",
+        "query": "What is the area of the parks layer?",
+        "match": "full",
+        "expected_tools": [
+          "calculate_area"
+        ],
+        "actual_tools": [
+          "calculate_area"
+        ],
+        "actual_params": {
+          "calculate_area": {
+            "layer_name": "parks layer"
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "measurement",
+        "param_match": false,
+        "chain_order_correct": null,
+        "failure_category": "right_tool_wrong_params"
+      },
+      {
+        "query_id": "Q008",
+        "query": "How many buildings are in downtown Seattle?",
+        "match": "full",
+        "expected_tools": [
+          "fetch_osm",
+          "aggregate"
+        ],
+        "actual_tools": [
+          "fetch_osm",
+          "aggregate"
+        ],
+        "actual_params": {
+          "fetch_osm": {
+            "location": "downtown Seattle",
+            "feature_type": "building",
+            "category_name": "downtown_seattle_buildings"
+          },
+          "aggregate": {
+            "layer_name": "building_downtown_seattle_buildings",
+            "operation": "count"
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "moderate",
+        "category": "measurement",
+        "param_match": true,
+        "chain_order_correct": true,
+        "failure_category": null
+      },
+      {
+        "query_id": "Q009",
+        "query": "Which restaurants are within 500 meters of Central Park?",
+        "match": "partial",
+        "expected_tools": [
+          "geocode",
+          "buffer",
+          "search_nearby",
+          "spatial_query"
+        ],
+        "actual_tools": [
+          "geocode",
+          "buffer",
+          "buffer",
+          "search_nearby"
+        ],
+        "actual_params": {
+          "geocode": {
+            "query": "Central Park"
+          },
+          "buffer": {
+            "distance_m": 500,
+            "output_name": "central_park_buffer",
+            "geometry": {
+              "coordinates": [
+                [
+                  [
+                    -73.9814075,
+                    40.7647275
+                  ],
+                  [
+                    -73.9496061,
+                    40.7647275
+                  ],
+                  [
+                    -73.9496061,
+                    40.8003135
+                  ],
+                  [
+                    -73.9814075,
+                    40.8003135
+                  ],
+                  [
+                    -73.9814075,
+                    40.7647275
+                  ]
+                ]
+              ],
+              "type": "Polygon"
+            }
+          },
+          "search_nearby": {
+            "lon": -73.9653627,
+            "radius_m": 700,
+            "feature_type": "restaurant",
+            "category_name": "restaurants_near_central_park",
+            "lat": 40.7827725
+          }
+        },
+        "missing_tools": [
+          "spatial_query"
+        ],
+        "extra_tools": [
+          "buffer"
+        ],
+        "complexity": "complex",
+        "category": "spatial_analysis",
+        "param_match": null,
+        "chain_order_correct": false,
+        "failure_category": "tool_description_misleading"
+      },
+      {
+        "query_id": "Q010",
+        "query": "Which district contains the point at 51.5074, -0.1278?",
+        "match": "none",
+        "expected_tools": [
+          "point_in_polygon"
+        ],
+        "actual_tools": [
+          "fetch_osm"
+        ],
+        "actual_params": {
+          "fetch_osm": {
+            "osm_value": "administrative",
+            "location": "London",
+            "category_name": "london_districts",
+            "osm_key": "boundary"
+          }
+        },
+        "missing_tools": [
+          "point_in_polygon"
+        ],
+        "extra_tools": [
+          "fetch_osm"
+        ],
+        "complexity": "simple",
+        "category": "spatial_analysis",
+        "param_match": false,
+        "chain_order_correct": null,
+        "failure_category": "wrong_tool"
+      },
+      {
+        "query_id": "Q011",
+        "query": "Tag each store with its census tract",
+        "match": "none",
+        "expected_tools": [
+          "point_in_polygon"
+        ],
+        "actual_tools": [],
+        "actual_params": {},
+        "missing_tools": [
+          "point_in_polygon"
+        ],
+        "extra_tools": [],
+        "complexity": "moderate",
+        "category": "spatial_analysis",
+        "param_match": false,
+        "chain_order_correct": null,
+        "failure_category": "wrong_tool"
+      },
+      {
+        "query_id": "Q012",
+        "query": "Are the crime points spatially clustered?",
+        "match": "none",
+        "expected_tools": [
+          "spatial_statistics"
+        ],
+        "actual_tools": [],
+        "actual_params": {},
+        "missing_tools": [
+          "spatial_statistics"
+        ],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "spatial_analysis",
+        "param_match": false,
+        "chain_order_correct": null,
+        "failure_category": "wrong_tool"
+      },
+      {
+        "query_id": "Q013",
+        "query": "Run DBSCAN clustering on the restaurant data with 200m radius and minimum 3 points",
+        "match": "none",
+        "expected_tools": [
+          "spatial_statistics"
+        ],
+        "actual_tools": [],
+        "actual_params": {},
+        "missing_tools": [
+          "spatial_statistics"
+        ],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "spatial_analysis",
+        "param_match": false,
+        "chain_order_correct": null,
+        "failure_category": "wrong_tool"
+      },
+      {
+        "query_id": "Q014",
+        "query": "Draw a boundary around the crime data points",
+        "match": "none",
+        "expected_tools": [
+          "convex_hull"
+        ],
+        "actual_tools": [],
+        "actual_params": {},
+        "missing_tools": [
+          "convex_hull"
+        ],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "geometry",
+        "param_match": null,
+        "chain_order_correct": null,
+        "failure_category": "wrong_tool"
+      },
+      {
+        "query_id": "Q015",
+        "query": "Get the center points of all buildings",
+        "match": "none",
+        "expected_tools": [
+          "centroid"
+        ],
+        "actual_tools": [],
+        "actual_params": {},
+        "missing_tools": [
+          "centroid"
+        ],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "geometry",
+        "param_match": null,
+        "chain_order_correct": null,
+        "failure_category": "wrong_tool"
+      },
+      {
+        "query_id": "Q016",
+        "query": "Simplify the coastline layer with tolerance 50 meters",
+        "match": "full",
+        "expected_tools": [
+          "simplify"
+        ],
+        "actual_tools": [
+          "simplify"
+        ],
+        "actual_params": {
+          "simplify": {
+            "layer_name": "coastline",
+            "tolerance": 50
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "geometry",
+        "param_match": true,
+        "chain_order_correct": null,
+        "failure_category": null
+      },
+      {
+        "query_id": "Q017",
+        "query": "Show the rectangular extent of the buildings layer",
+        "match": "full",
+        "expected_tools": [
+          "bounding_box"
+        ],
+        "actual_tools": [
+          "bounding_box"
+        ],
+        "actual_params": {
+          "bounding_box": {
+            "layer_name": "buildings layer"
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "geometry",
+        "param_match": null,
+        "chain_order_correct": null,
+        "failure_category": null
+      },
+      {
+        "query_id": "Q018",
+        "query": "Merge the zoning polygons by zone_type",
+        "match": "none",
+        "expected_tools": [
+          "dissolve"
+        ],
+        "actual_tools": [],
+        "actual_params": {},
+        "missing_tools": [
+          "dissolve"
+        ],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "geometry",
+        "param_match": false,
+        "chain_order_correct": null,
+        "failure_category": "wrong_tool"
+      },
+      {
+        "query_id": "Q019",
+        "query": "Create a 2km buffer around the hospital",
+        "match": "none",
+        "expected_tools": [
+          "geocode",
+          "buffer"
+        ],
+        "actual_tools": [],
+        "actual_params": {},
+        "missing_tools": [
+          "geocode",
+          "buffer"
+        ],
+        "extra_tools": [],
+        "complexity": "moderate",
+        "category": "geometry",
+        "param_match": false,
+        "chain_order_correct": false,
+        "failure_category": "missing_chain_step"
+      },
+      {
+        "query_id": "Q020",
+        "query": "Show where parks and commercial zones overlap in downtown Seattle",
+        "match": "partial",
+        "expected_tools": [
+          "fetch_osm",
+          "fetch_osm",
+          "intersection"
+        ],
+        "actual_tools": [
+          "fetch_osm",
+          "fetch_osm"
+        ],
+        "actual_params": {
+          "fetch_osm": {
+            "location": "downtown Seattle",
+            "feature_type": "commercial",
+            "category_name": "commercial_downtown_seattle"
+          }
+        },
+        "missing_tools": [
+          "intersection"
+        ],
+        "extra_tools": [],
+        "complexity": "complex",
+        "category": "overlay",
+        "param_match": null,
+        "chain_order_correct": false,
+        "failure_category": "missing_chain_step"
+      },
+      {
+        "query_id": "Q021",
+        "query": "Remove water areas from the land use layer",
+        "match": "none",
+        "expected_tools": [
+          "difference"
+        ],
+        "actual_tools": [],
+        "actual_params": {},
+        "missing_tools": [
+          "difference"
+        ],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "overlay",
+        "param_match": null,
+        "chain_order_correct": null,
+        "failure_category": "wrong_tool"
+      },
+      {
+        "query_id": "Q022",
+        "query": "What features are unique to each layer \u2014 parks vs green spaces?",
+        "match": "full",
+        "expected_tools": [
+          "symmetric_difference"
+        ],
+        "actual_tools": [
+          "symmetric_difference"
+        ],
+        "actual_params": {
+          "symmetric_difference": {
+            "layer_b": "green spaces",
+            "output_name": "unique_parks_green_spaces",
+            "layer_a": "parks"
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "overlay",
+        "param_match": null,
+        "chain_order_correct": null,
+        "failure_category": null
+      },
+      {
+        "query_id": "Q023",
+        "query": "Plan a driving route from Times Square to Brooklyn Bridge",
+        "match": "partial",
+        "expected_tools": [
+          "find_route"
+        ],
+        "actual_tools": [
+          "find_route",
+          "map_command"
+        ],
+        "actual_params": {
+          "find_route": {
+            "from_location": "Times Square, NYC",
+            "profile": "driving",
+            "to_location": "Brooklyn Bridge"
+          },
+          "map_command": {
+            "action": "fit_bounds",
+            "bbox": [
+              -74.013017,
+              40.706174,
+              -73.9859724,
+              40.757096
+            ]
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [
+          "map_command"
+        ],
+        "complexity": "simple",
+        "category": "routing",
+        "param_match": false,
+        "chain_order_correct": null,
+        "failure_category": "extra_chain_step"
+      },
+      {
+        "query_id": "Q024",
+        "query": "What areas can I reach within 15 minutes driving from downtown Portland?",
+        "match": "full",
+        "expected_tools": [
+          "isochrone"
+        ],
+        "actual_tools": [
+          "isochrone"
+        ],
+        "actual_params": {
+          "isochrone": {
+            "time_minutes": 15,
+            "profile": "driving",
+            "location": "downtown Portland"
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "routing",
+        "param_match": true,
+        "chain_order_correct": null,
+        "failure_category": null
+      },
+      {
+        "query_id": "Q025",
+        "query": "Find the 3 nearest hospitals to Times Square",
+        "match": "full",
+        "expected_tools": [
+          "closest_facility"
+        ],
+        "actual_tools": [
+          "closest_facility"
+        ],
+        "actual_params": {
+          "closest_facility": {
+            "location": "Times Square, NYC",
+            "count": 3,
+            "feature_type": "hospital"
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "routing",
+        "param_match": true,
+        "chain_order_correct": null,
+        "failure_category": null
+      },
+      {
+        "query_id": "Q026",
+        "query": "Find restaurants within 500m of Central Park and color them red",
+        "match": "partial",
+        "expected_tools": [
+          "search_nearby",
+          "style_layer"
+        ],
+        "actual_tools": [
+          "search_nearby"
+        ],
+        "actual_params": {
+          "search_nearby": {
+            "location": "Central Park",
+            "radius_m": 500,
+            "feature_type": "restaurant"
+          }
+        },
+        "missing_tools": [
+          "style_layer"
+        ],
+        "extra_tools": [],
+        "complexity": "multi_step",
+        "category": "layer_management",
+        "param_match": null,
+        "chain_order_correct": false,
+        "failure_category": "missing_chain_step"
+      },
+      {
+        "query_id": "Q027",
+        "query": "Show only buildings taller than 20 meters and highlight the commercial ones",
+        "match": "none",
+        "expected_tools": [
+          "filter_layer",
+          "highlight_features"
+        ],
+        "actual_tools": [],
+        "actual_params": {},
+        "missing_tools": [
+          "filter_layer",
+          "highlight_features"
+        ],
+        "extra_tools": [],
+        "complexity": "multi_step",
+        "category": "layer_management",
+        "param_match": null,
+        "chain_order_correct": false,
+        "failure_category": "missing_chain_step"
+      },
+      {
+        "query_id": "Q028",
+        "query": "Hide the roads layer, remove the old buildings layer, and show the parks layer",
+        "match": "full",
+        "expected_tools": [
+          "hide_layer",
+          "remove_layer",
+          "show_layer"
+        ],
+        "actual_tools": [
+          "hide_layer",
+          "remove_layer",
+          "show_layer"
+        ],
+        "actual_params": {
+          "hide_layer": {
+            "layer_name": "roads"
+          },
+          "remove_layer": {
+            "layer_name": "old buildings"
+          },
+          "show_layer": {
+            "layer_name": "parks"
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "moderate",
+        "category": "layer_management",
+        "param_match": null,
+        "chain_order_correct": true,
+        "failure_category": null
+      },
+      {
+        "query_id": "Q029",
+        "query": "Import this CSV of addresses as a map layer: name,lat,lon\\nHQ,40.7,-74.0\\nBranch,34.0,-118.2",
+        "match": "full",
+        "expected_tools": [
+          "import_csv"
+        ],
+        "actual_tools": [
+          "import_csv"
+        ],
+        "actual_params": {
+          "import_csv": {
+            "lat_column": "lat",
+            "lon_column": "lon",
+            "layer_name": "imported_addresses",
+            "csv_data": "name,lat,lon\nHQ,40.7,-74.0\nBranch,34.0,-118.2"
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "import_export",
+        "param_match": null,
+        "chain_order_correct": null,
+        "failure_category": null
+      },
+      {
+        "query_id": "Q030",
+        "query": "Import this WKT polygon: POLYGON((-73.98 40.76, -73.97 40.76, -73.97 40.77, -73.98 40.77, -73.98 40.76))",
+        "match": "partial",
+        "expected_tools": [
+          "import_wkt"
+        ],
+        "actual_tools": [
+          "import_wkt",
+          "map_command"
+        ],
+        "actual_params": {
+          "import_wkt": {
+            "layer_name": "wkt_import",
+            "wkt": "POLYGON((-73.98 40.76, -73.97 40.76, -73.97 40.77, -73.98 40.77, -73.98 40.76))"
+          },
+          "map_command": {
+            "action": "fit_bounds",
+            "bbox": [
+              -73.98,
+              40.76,
+              -73.97,
+              40.77
+            ]
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [
+          "map_command"
+        ],
+        "complexity": "simple",
+        "category": "import_export",
+        "param_match": null,
+        "chain_order_correct": null,
+        "failure_category": "extra_chain_step"
+      },
+      {
+        "query_id": "S001",
+        "query": "Export the buildings layer as a shapefile",
+        "match": "full",
+        "expected_tools": [
+          "export_layer"
+        ],
+        "actual_tools": [
+          "export_layer"
+        ],
+        "actual_params": {
+          "export_layer": {
+            "layer_name": "buildings",
+            "format": "shapefile"
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "import_export",
+        "param_match": true,
+        "chain_order_correct": null,
+        "failure_category": null
+      },
+      {
+        "query_id": "S002",
+        "query": "Import this GeoJSON as a new layer: {\"type\":\"FeatureCollection\",\"features\":[]}",
+        "match": "full",
+        "expected_tools": [
+          "import_layer"
+        ],
+        "actual_tools": [
+          "import_layer"
+        ],
+        "actual_params": {
+          "import_layer": {
+            "layer_name": "imported_geojson",
+            "geojson": {
+              "features": [],
+              "type": "FeatureCollection"
+            }
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "import_export",
+        "param_match": null,
+        "chain_order_correct": null,
+        "failure_category": null
+      },
+      {
+        "query_id": "S003",
+        "query": "Merge the parks layer and the green_spaces layer into one",
+        "match": "full",
+        "expected_tools": [
+          "merge_layers"
+        ],
+        "actual_tools": [
+          "merge_layers"
+        ],
+        "actual_params": {
+          "merge_layers": {
+            "operation": "union",
+            "layer_b": "green_spaces",
+            "output_name": "merged_green_spaces",
+            "layer_a": "parks"
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "layer_management",
+        "param_match": null,
+        "chain_order_correct": null,
+        "failure_category": null
+      },
+      {
+        "query_id": "S004",
+        "query": "Add an annotation marker at the Eiffel Tower saying 'Meeting point'",
+        "match": "full",
+        "expected_tools": [
+          "geocode",
+          "add_annotation"
+        ],
+        "actual_tools": [
+          "geocode",
+          "add_annotation"
+        ],
+        "actual_params": {
+          "geocode": {
+            "query": "Eiffel Tower"
+          },
+          "add_annotation": {
+            "geometry": {
+              "coordinates": [
+                2.2945006,
+                48.8582599
+              ],
+              "type": "Point"
+            },
+            "category_name": "Meeting point"
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "moderate",
+        "category": "annotation",
+        "param_match": null,
+        "chain_order_correct": true,
+        "failure_category": null
+      },
+      {
+        "query_id": "S005",
+        "query": "Show me all saved annotations",
+        "match": "none",
+        "expected_tools": [
+          "get_annotations"
+        ],
+        "actual_tools": [],
+        "actual_params": {},
+        "missing_tools": [
+          "get_annotations"
+        ],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "annotation",
+        "param_match": null,
+        "chain_order_correct": null,
+        "failure_category": "wrong_tool"
+      },
+      {
+        "query_id": "S006",
+        "query": "Export all annotations as GeoJSON",
+        "match": "none",
+        "expected_tools": [
+          "export_annotations"
+        ],
+        "actual_tools": [],
+        "actual_params": {},
+        "missing_tools": [
+          "export_annotations"
+        ],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "annotation",
+        "param_match": null,
+        "chain_order_correct": null,
+        "failure_category": "wrong_tool"
+      },
+      {
+        "query_id": "S007",
+        "query": "Create a heatmap of the crime incident points",
+        "match": "partial",
+        "expected_tools": [
+          "heatmap"
+        ],
+        "actual_tools": [
+          "heatmap",
+          "map_command"
+        ],
+        "actual_params": {
+          "heatmap": {
+            "layer_name": "crime incident points"
+          },
+          "map_command": {
+            "action": "fit_bounds"
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [
+          "map_command"
+        ],
+        "complexity": "simple",
+        "category": "visualization",
+        "param_match": null,
+        "chain_order_correct": null,
+        "failure_category": "extra_chain_step"
+      },
+      {
+        "query_id": "S008",
+        "query": "Classify the land cover types in the area",
+        "match": "none",
+        "expected_tools": [
+          "classify_landcover"
+        ],
+        "actual_tools": [],
+        "actual_params": {},
+        "missing_tools": [
+          "classify_landcover"
+        ],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "visualization",
+        "param_match": null,
+        "chain_order_correct": null,
+        "failure_category": "wrong_tool"
+      },
+      {
+        "query_id": "S009",
+        "query": "Optimize the delivery route visiting these 5 warehouse locations",
+        "match": "none",
+        "expected_tools": [
+          "optimize_route"
+        ],
+        "actual_tools": [],
+        "actual_params": {},
+        "missing_tools": [
+          "optimize_route"
+        ],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "routing",
+        "param_match": null,
+        "chain_order_correct": null,
+        "failure_category": "wrong_tool"
+      },
+      {
+        "query_id": "S010",
+        "query": "Cut the buildings to the city boundary",
+        "match": "full",
+        "expected_tools": [
+          "clip"
+        ],
+        "actual_tools": [
+          "clip"
+        ],
+        "actual_params": {
+          "clip": {
+            "clip_layer": "buildings",
+            "mask_layer": "city boundary"
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "overlay",
+        "param_match": false,
+        "chain_order_correct": null,
+        "failure_category": "right_tool_wrong_params"
+      },
+      {
+        "query_id": "S011",
+        "query": "Create Voronoi service areas from the fire station locations",
+        "match": "none",
+        "expected_tools": [
+          "voronoi"
+        ],
+        "actual_tools": [],
+        "actual_params": {},
+        "missing_tools": [
+          "voronoi"
+        ],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "geometry",
+        "param_match": null,
+        "chain_order_correct": null,
+        "failure_category": "wrong_tool"
+      },
+      {
+        "query_id": "S012",
+        "query": "Add population data to the district polygons by matching district_id",
+        "match": "none",
+        "expected_tools": [
+          "attribute_join"
+        ],
+        "actual_tools": [],
+        "actual_params": {},
+        "missing_tools": [
+          "attribute_join"
+        ],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "spatial_analysis",
+        "param_match": false,
+        "chain_order_correct": null,
+        "failure_category": "wrong_tool"
+      },
+      {
+        "query_id": "S013",
+        "query": "Find crime hot spots in the incidents layer using the count attribute",
+        "match": "full",
+        "expected_tools": [
+          "hot_spot_analysis"
+        ],
+        "actual_tools": [
+          "hot_spot_analysis"
+        ],
+        "actual_params": {
+          "hot_spot_analysis": {
+            "layer_name": "incidents",
+            "attribute": "count"
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "spatial_analysis",
+        "param_match": true,
+        "chain_order_correct": null,
+        "failure_category": null
+      },
+      {
+        "query_id": "S014",
+        "query": "Interpolate temperature readings from the weather_stations layer",
+        "match": "full",
+        "expected_tools": [
+          "interpolate"
+        ],
+        "actual_tools": [
+          "interpolate"
+        ],
+        "actual_params": {
+          "interpolate": {
+            "layer_name": "weather_stations",
+            "attribute": "temperature"
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "spatial_analysis",
+        "param_match": true,
+        "chain_order_correct": null,
+        "failure_category": null
+      },
+      {
+        "query_id": "S015",
+        "query": "Show the 10-minute driving coverage from all fire stations",
+        "match": "none",
+        "expected_tools": [
+          "service_area"
+        ],
+        "actual_tools": [
+          "fetch_osm"
+        ],
+        "actual_params": {
+          "fetch_osm": {
+            "feature_type": "fire_station",
+            "category_name": "fire_stations"
+          }
+        },
+        "missing_tools": [
+          "service_area"
+        ],
+        "extra_tools": [
+          "fetch_osm"
+        ],
+        "complexity": "simple",
+        "category": "routing",
+        "param_match": false,
+        "chain_order_correct": null,
+        "failure_category": "wrong_tool"
+      },
+      {
+        "query_id": "S016",
+        "query": "Describe the buildings layer \u2014 what's in it?",
+        "match": "full",
+        "expected_tools": [
+          "describe_layer"
+        ],
+        "actual_tools": [
+          "describe_layer"
+        ],
+        "actual_params": {
+          "describe_layer": {
+            "layer_name": "buildings"
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "data_quality",
+        "param_match": true,
+        "chain_order_correct": null,
+        "failure_category": null
+      },
+      {
+        "query_id": "S017",
+        "query": "Find duplicate features in the sensor_locations layer within 10 meters",
+        "match": "full",
+        "expected_tools": [
+          "detect_duplicates"
+        ],
+        "actual_tools": [
+          "detect_duplicates"
+        ],
+        "actual_params": {
+          "detect_duplicates": {
+            "layer_name": "sensor_locations",
+            "threshold_m": 10,
+            "output_name": "duplicate_sensors"
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "data_quality",
+        "param_match": true,
+        "chain_order_correct": null,
+        "failure_category": null
+      },
+      {
+        "query_id": "S018",
+        "query": "Clean the raw_data layer: remove nulls and fix attributes",
+        "match": "full",
+        "expected_tools": [
+          "clean_layer"
+        ],
+        "actual_tools": [
+          "clean_layer"
+        ],
+        "actual_params": {
+          "clean_layer": {
+            "layer_name": "raw_data"
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "data_quality",
+        "param_match": true,
+        "chain_order_correct": null,
+        "failure_category": null
+      },
+      {
+        "query_id": "S019",
+        "query": "Import this KML content as a waypoints layer: <kml>...</kml>",
+        "match": "full",
+        "expected_tools": [
+          "import_kml"
+        ],
+        "actual_tools": [
+          "import_kml"
+        ],
+        "actual_params": {
+          "import_kml": {
+            "kml_data": "<kml>...</kml>",
+            "layer_name": "waypoints"
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "import_export",
+        "param_match": null,
+        "chain_order_correct": null,
+        "failure_category": null
+      },
+      {
+        "query_id": "S020",
+        "query": "Show only the events between 2025-01-01 and 2025-12-31 from the events layer",
+        "match": "none",
+        "expected_tools": [
+          "temporal_filter"
+        ],
+        "actual_tools": [],
+        "actual_params": {},
+        "missing_tools": [
+          "temporal_filter"
+        ],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "spatial_analysis",
+        "param_match": false,
+        "chain_order_correct": null,
+        "failure_category": "wrong_tool"
+      },
+      {
+        "query_id": "S021",
+        "query": "Give me summary statistics for the height attribute in the buildings layer",
+        "match": "full",
+        "expected_tools": [
+          "attribute_statistics"
+        ],
+        "actual_tools": [
+          "attribute_statistics"
+        ],
+        "actual_params": {
+          "attribute_statistics": {
+            "layer_name": "buildings",
+            "attribute": "height"
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "spatial_analysis",
+        "param_match": true,
+        "chain_order_correct": null,
+        "failure_category": null
+      },
+      {
+        "query_id": "S022",
+        "query": "Compute the origin-destination matrix between the warehouses and customers layers",
+        "match": "none",
+        "expected_tools": [
+          "od_matrix"
+        ],
+        "actual_tools": [],
+        "actual_params": {},
+        "missing_tools": [
+          "od_matrix"
+        ],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "routing",
+        "param_match": null,
+        "chain_order_correct": null,
+        "failure_category": "wrong_tool"
+      },
+      {
+        "query_id": "S023",
+        "query": "Check if the imported_parcels polygons are valid and fix any topology errors",
+        "match": "partial",
+        "expected_tools": [
+          "validate_topology",
+          "repair_topology"
+        ],
+        "actual_tools": [
+          "validate_topology"
+        ],
+        "actual_params": {
+          "validate_topology": {
+            "layer_name": "imported_parcels"
+          }
+        },
+        "missing_tools": [
+          "repair_topology"
+        ],
+        "extra_tools": [],
+        "complexity": "moderate",
+        "category": "data_quality",
+        "param_match": false,
+        "chain_order_correct": false,
+        "failure_category": "missing_chain_step"
+      },
+      {
+        "query_id": "S024",
+        "query": "Tag the boundaries layer as being in EPSG:32632",
+        "match": "full",
+        "expected_tools": [
+          "reproject_layer"
+        ],
+        "actual_tools": [
+          "reproject_layer"
+        ],
+        "actual_params": {
+          "reproject_layer": {
+            "from_crs": 32632,
+            "layer_name": "boundaries"
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "spatial_analysis",
+        "param_match": true,
+        "chain_order_correct": null,
+        "failure_category": null
+      },
+      {
+        "query_id": "S025",
+        "query": "What coordinate system is the imported_data layer in?",
+        "match": "full",
+        "expected_tools": [
+          "detect_crs"
+        ],
+        "actual_tools": [
+          "detect_crs"
+        ],
+        "actual_params": {
+          "detect_crs": {
+            "layer_name": "imported_data"
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "spatial_analysis",
+        "param_match": true,
+        "chain_order_correct": null,
+        "failure_category": null
+      },
+      {
+        "query_id": "S026",
+        "query": "Split the first parcel in the parcels layer along this line: [[0,0],[1,1]]",
+        "match": "full",
+        "expected_tools": [
+          "split_feature"
+        ],
+        "actual_tools": [
+          "split_feature"
+        ],
+        "actual_params": {
+          "split_feature": {
+            "layer_name": "parcels",
+            "feature_index": 0,
+            "split_line": {
+              "coordinates": [
+                [
+                  0,
+                  0
+                ],
+                [
+                  1,
+                  1
+                ]
+              ],
+              "type": "LineString"
+            }
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "geometry",
+        "param_match": true,
+        "chain_order_correct": null,
+        "failure_category": null
+      },
+      {
+        "query_id": "S027",
+        "query": "Merge features in the zones layer that share the same zone_type value",
+        "match": "full",
+        "expected_tools": [
+          "merge_features"
+        ],
+        "actual_tools": [
+          "merge_features"
+        ],
+        "actual_params": {
+          "merge_features": {
+            "by": "zone_type",
+            "output_name": "merged_zones_by_type",
+            "layer_name": "zones"
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "geometry",
+        "param_match": true,
+        "chain_order_correct": null,
+        "failure_category": null
+      },
+      {
+        "query_id": "S028",
+        "query": "Extract the vertex points from the coastline layer",
+        "match": "full",
+        "expected_tools": [
+          "extract_vertices"
+        ],
+        "actual_tools": [
+          "extract_vertices"
+        ],
+        "actual_params": {
+          "extract_vertices": {
+            "layer_name": "coastline",
+            "output_name": "coastline_vertices"
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "geometry",
+        "param_match": true,
+        "chain_order_correct": null,
+        "failure_category": null
+      },
+      {
+        "query_id": "S029",
+        "query": "Import this GeoParquet file as a parcels layer",
+        "match": "none",
+        "expected_tools": [
+          "import_geoparquet"
+        ],
+        "actual_tools": [],
+        "actual_params": {},
+        "missing_tools": [
+          "import_geoparquet"
+        ],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "import_export",
+        "param_match": null,
+        "chain_order_correct": null,
+        "failure_category": "wrong_tool"
+      },
+      {
+        "query_id": "S030",
+        "query": "Export the buildings layer as GeoParquet",
+        "match": "full",
+        "expected_tools": [
+          "export_geoparquet"
+        ],
+        "actual_tools": [
+          "export_geoparquet"
+        ],
+        "actual_params": {
+          "export_geoparquet": {
+            "layer_name": "buildings"
+          }
+        },
+        "missing_tools": [],
+        "extra_tools": [],
+        "complexity": "simple",
+        "category": "import_export",
+        "param_match": true,
+        "chain_order_correct": null,
+        "failure_category": null
+      },
+      {
+        "query_id": "S031",
+        "query": "Validate topology on the boundaries layer, and if there are issues, repair them into a clean version",
+        "match": "partial",
+        "expected_tools": [
+          "validate_topology",
+          "repair_topology"
+        ],
+        "actual_tools": [
+          "validate_topology"
+        ],
+        "actual_params": {
+          "validate_topology": {
+            "layer_name": "boundaries"
+          }
+        },
+        "missing_tools": [
+          "repair_topology"
+        ],
+        "extra_tools": [],
+        "complexity": "moderate",
+        "category": "data_quality",
+        "param_match": false,
+        "chain_order_correct": false,
+        "failure_category": "missing_chain_step"
+      },
+      {
+        "query_id": "S032",
+        "query": "Compute the minimum bounding rectangle for all features in the buildings layer",
+        "match": "none",
+        "expected_tools": [
+          "execute_code"
+        ],
+        "actual_tools": [
+          "bounding_box"
+        ],
+        "actual_params": {
+          "bounding_box": {
+            "layer_name": "buildings"
+          }
+        },
+        "missing_tools": [
+          "execute_code"
+        ],
+        "extra_tools": [
+          "bounding_box"
+        ],
+        "complexity": "simple",
+        "category": "advanced",
+        "param_match": null,
+        "chain_order_correct": null,
+        "failure_category": "wrong_tool"
+      }
+    ]
+  }
+}
