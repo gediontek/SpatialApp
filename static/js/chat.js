@@ -362,6 +362,15 @@ var ChatPanel = (function() {
                     } else {
                         layerManager.addLayer(data.name, data.geojson, data.style || {});
                     }
+                    // Plan 05 M3: surface server-side truncation so the user
+                    // knows the map isn't showing the full result.
+                    if (data.truncated && data.original_count) {
+                        appendMessage('info',
+                            'Showing first ' + data.feature_count + ' of ' +
+                            data.original_count + ' features. ' +
+                            'Use filter_layer to narrow the result.'
+                        );
+                    }
                 }
                 break;
 

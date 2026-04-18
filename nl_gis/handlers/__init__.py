@@ -4,6 +4,7 @@ Shared helpers, constants, and dispatch function live here.
 Domain-specific handlers are in sub-modules.
 """
 
+import json
 import logging
 
 from shapely.geometry import shape, mapping
@@ -17,6 +18,105 @@ from nl_gis.geo_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Result size guards (Plan 05 M3)
+# ---------------------------------------------------------------------------
+
+# Feature-count thresholds.
+WARN_FEATURE_COUNT = 5000
+PAGINATE_FEATURE_COUNT = 10000
+# Hard refusal size (bytes). At 100MB a single SSE payload will stall the
+# browser and exhaust server memory during serialization.
+REFUSE_SIZE_BYTES = 100 * 1024 * 1024
+
+SIZE_THRESHOLDS = {
+    "warn_feature_count": WARN_FEATURE_COUNT,
+    "paginate_feature_count": PAGINATE_FEATURE_COUNT,
+    "refuse_size_bytes": REFUSE_SIZE_BYTES,
+}
+
+
+def estimate_geojson_size(geojson: dict) -> int:
+    """Estimate the serialized byte size of a GeoJSON FeatureCollection.
+
+    Samples the first 10 features to avoid paying O(n) serialization cost
+    on a guard check. Returns 0 for empty collections.
+    """
+    if not isinstance(geojson, dict):
+        return 0
+    features = geojson.get("features") or []
+    n = len(features)
+    if n == 0:
+        return 0
+    sample = features[: min(10, n)]
+    try:
+        sample_bytes = sum(len(json.dumps(f, default=str)) for f in sample)
+    except (TypeError, ValueError):
+        # Fall back to a conservative estimate if a feature isn't
+        # JSON-serializable — assume 1KB per feature.
+        return n * 1024
+    avg = sample_bytes / len(sample)
+    # 80 bytes of envelope for the FeatureCollection wrapper.
+    return int(n * avg) + 80
+
+
+def check_result_size(result: dict) -> dict:
+    """Apply size guards in-place to a tool result containing `geojson`.
+
+    - > WARN_FEATURE_COUNT:     add `size_warning` field.
+    - > PAGINATE_FEATURE_COUNT: truncate features, add `truncated` + `original_count`.
+    - > REFUSE_SIZE_BYTES:      empty the collection, add `error` field.
+
+    Non-layer results (no `geojson`) pass through unchanged.
+    """
+    if not isinstance(result, dict):
+        return result
+    geojson = result.get("geojson")
+    if not isinstance(geojson, dict):
+        return result
+    features = geojson.get("features")
+    if not isinstance(features, list):
+        return result
+
+    count = len(features)
+
+    # Refusal check first — before truncation so we bail loudly on huge payloads.
+    size_bytes = estimate_geojson_size(geojson)
+    if size_bytes > REFUSE_SIZE_BYTES:
+        size_mb = size_bytes / (1024 * 1024)
+        logger.warning(
+            "Refusing oversized layer result: ~%.0f MB (%d features)",
+            size_mb, count,
+        )
+        geojson["features"] = []
+        result["error"] = (
+            f"Result too large (~{size_mb:.0f} MB). Narrow your query — "
+            f"use a smaller area or more specific feature type."
+        )
+        result["refused_size_bytes"] = size_bytes
+        return result
+
+    # Truncate if past the pagination threshold.
+    if count > PAGINATE_FEATURE_COUNT:
+        geojson["features"] = features[:PAGINATE_FEATURE_COUNT]
+        result["truncated"] = True
+        result["original_count"] = count
+        result["feature_count"] = PAGINATE_FEATURE_COUNT
+        logger.info(
+            "Truncated layer result: %d -> %d features",
+            count, PAGINATE_FEATURE_COUNT,
+        )
+        # Fall through — also emit the size warning below.
+        count = PAGINATE_FEATURE_COUNT
+
+    if count > WARN_FEATURE_COUNT:
+        result["size_warning"] = (
+            f"Large result: {count} features. Map performance may be affected. "
+            f"Use filter_layer to narrow, or re-run with a smaller area."
+        )
+
+    return result
 
 # Tools that produce layers (used by chat.py for layer_add events)
 LAYER_PRODUCING_TOOLS = {
@@ -510,4 +610,9 @@ def dispatch_tool(tool_name: str, params: dict, layer_store: dict = None) -> dic
     if tool_name not in handlers:
         raise ValueError(f"Unknown tool: {tool_name}")
 
-    return handlers[tool_name](params)
+    result = handlers[tool_name](params)
+    # Apply size guards to layer-producing tools so oversized results
+    # never reach the browser without a warning / truncation.
+    if tool_name in LAYER_PRODUCING_TOOLS and isinstance(result, dict):
+        result = check_result_size(result)
+    return result

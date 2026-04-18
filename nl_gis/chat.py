@@ -877,6 +877,11 @@ class ChatSession:
                                 # Update session context for multi-turn awareness
                                 self._update_context(tool_name, tool_input, result)
 
+                            # Size-guard warning (Plan 05 M3): surface to the user
+                            # before the layer event so context arrives in order.
+                            if isinstance(result, dict) and result.get("size_warning"):
+                                yield {"type": "message", "text": result["size_warning"], "done": False}
+
                             # Handle special tool results
                             # Tools that produce layers
                             if tool_name in LAYER_PRODUCING_TOOLS and "geojson" in result:
@@ -903,6 +908,9 @@ class ChatSession:
                                     "geojson": result["geojson"],
                                     "style": style,
                                     "colors": result.get("colors"),  # For classification legend
+                                    "truncated": result.get("truncated", False),
+                                    "original_count": result.get("original_count"),
+                                    "feature_count": result.get("feature_count", len(result["geojson"].get("features", []))),
                                 }
 
                             # Map navigation commands
