@@ -10,6 +10,10 @@ from config import Config
 from nl_gis.tools import get_tool_definitions
 from nl_gis.handlers import dispatch_tool, LAYER_PRODUCING_TOOLS
 from nl_gis.llm_provider import create_provider, DEFAULT_MODELS
+from nl_gis.query_patterns import (
+    resolve_step_references,
+    validate_plan_chain,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -20,12 +24,24 @@ For this query, OUTPUT A PLAN instead of executing tools. Format as JSON:
 {
     "plan": [
         {"step": 1, "tool": "geocode", "params": {"query": "Chicago"}, "reason": "Find Chicago coordinates"},
-        {"step": 2, "tool": "fetch_osm", "params": {"feature_type": "park", "location": "Chicago"}, "reason": "Get parks in the area"},
-        {"step": 3, "tool": "style_layer", "params": {"layer_name": "parks_...", "color": "#00ff00"}, "reason": "Color parks green"}
+        {"step": 2, "tool": "buffer", "params": {"geometry": "$step1.bbox", "distance_m": 2000}, "reason": "Create 2km buffer around Chicago"},
+        {"step": 3, "tool": "fetch_osm", "params": {"feature_type": "park", "location": "Chicago"}, "reason": "Fetch parks in the area"},
+        {"step": 4, "tool": "spatial_query", "params": {"source_layer": "$step3.layer_name", "target_layer": "$step2.layer_name", "predicate": "within"}, "reason": "Filter parks that fall inside the buffer"}
     ],
-    "estimated_steps": 3,
-    "summary": "Find and display parks in Chicago, colored green"
+    "estimated_steps": 4,
+    "summary": "Find parks within 2km of central Chicago"
 }
+
+PARAMETER THREADING:
+- Use `$stepN.field` strings to reference a prior step's output.
+  Example: `"source_layer": "$step3.layer_name"` means "use the layer_name
+  that step 3 produces".
+- Supported output fields by tool:
+    geocode → lat, lon, bbox, display_name
+    fetch_osm / search_nearby / buffer / filter_layer / spatial_query /
+    intersection / difference / import_* / merge_layers / etc. → layer_name
+    find_route → layer_name, geometry, distance_km
+- The plan executor resolves these references at dispatch time.
 
 Do NOT execute any tools. Only output the plan as a JSON code block."""
 
@@ -589,16 +605,42 @@ class ChatSession:
             self._lock.release()
 
     def _execute_plan_inner(self, plan_steps: list) -> Generator[dict, None, None]:
-        """Internal plan execution (called under lock)."""
+        """Internal plan execution (called under lock).
+
+        Supports parameter threading via `$stepN.field` references (see
+        `nl_gis.query_patterns.resolve_step_references`) and pre-execution
+        chain validation (`validate_plan_chain`) that surfaces type-mismatch
+        warnings without blocking execution.
+        """
         tool_metrics = []
+
+        # Pre-flight: warn about type-level chain issues before any tool runs.
+        validation_warnings = validate_plan_chain(plan_steps)
+        if validation_warnings:
+            warning_text = "Plan validation warnings:\n- " + "\n- ".join(validation_warnings)
+            logger.info("Plan validation: %d warnings", len(validation_warnings))
+            yield {"type": "message", "text": warning_text, "done": False}
+
+        # step_outputs[step_num] = result dict — used to resolve $stepN.field
+        step_outputs: dict[int, dict] = {}
 
         for step in plan_steps:
             tool_name = step.get("tool")
-            params = step.get("params", {})
+            raw_params = step.get("params", {}) or {}
             step_num = step.get("step", 0)
 
             if not tool_name:
                 yield {"type": "error", "text": f"Step {step_num}: missing tool name."}
+                continue
+
+            # Resolve $stepN.field references against prior step outputs.
+            try:
+                params = resolve_step_references(raw_params, step_outputs)
+            except ValueError as e:
+                yield {"type": "error", "text": f"Step {step_num}: {e}"}
+                # Store a placeholder so downstream refs that point at this
+                # step fail with a clear message instead of silently hanging.
+                step_outputs[step_num] = {"error": str(e)}
                 continue
 
             yield {"type": "tool_start", "tool": tool_name, "input": params, "step": step_num}
@@ -610,6 +652,8 @@ class ChatSession:
             except Exception as e:
                 logger.error(f"Plan execution: tool {tool_name} failed: {e}", exc_info=True)
                 result = {"error": f"Tool '{tool_name}' encountered an internal error."}
+
+            step_outputs[step_num] = result if isinstance(result, dict) else {"result": result}
 
             yield {"type": "tool_result", "tool": tool_name, "result": result, "step": step_num}
 
