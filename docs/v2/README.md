@@ -19,7 +19,7 @@ v2.1 raises the NL-GIS pipeline from ~85% tool-selection accuracy (v2.0 baseline
 | 02 | [tool-descriptions](02-tool-descriptions-plan.md) | Tool description engineering for 64 tools (finishes A3 from v1) | Planned |
 | 03 | [complex-queries](03-complex-queries-plan.md) | Multi-step reasoning, multi-agent decomposition (successor to v1 D1) | Planned |
 | 04 | [context-awareness](04-context-awareness-plan.md) | Session/layer context reuse across turns | Planned |
-| 05 | [error-recovery](05-error-recovery-plan.md) | Retry, graceful degradation, user-facing recovery | Planned |
+| 05 | [error-recovery](05-error-recovery-plan.md) | Retry, graceful degradation, circuit breaker, result-size guards | ✅ **Done** (M1–M5 complete, 24 new tests) |
 | 06 | [eval-framework](06-eval-framework-plan.md) | Deepens v1 A4 — CI-integrated accuracy regression gates | Planned |
 | 07 | [provider-tuning](07-provider-tuning-plan.md) | Prompt + model tuning, fine-tuning (successor to v1 D2) | Planned |
 | 08 | [raster-analysis](08-raster-analysis-plan.md) | Elevation/DEM, slope/aspect, viewshed (successor to v1 C1) | Planned |
