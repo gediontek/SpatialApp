@@ -58,7 +58,7 @@ def get_tool_definitions() -> list:
         },
         {
             "name": "reverse_geocode",
-            "description": "Convert geographic coordinates (latitude, longitude) into a human-readable address or place name. Use when the user asks 'What's at these coordinates?' or 'What place is at lat/lon?'.",
+            "description": "Convert geographic coordinates (latitude, longitude) into a human-readable address or place name. USE WHEN: the user provides numeric lat/lon pairs and asks 'what is at these coordinates?', 'what place is at X, Y?', 'identify this location', 'what address is this?'. Example: '40.7128, -74.0060' → reverse_geocode.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -136,7 +136,7 @@ def get_tool_definitions() -> list:
         },
         {
             "name": "calculate_area",
-            "description": "Calculate the geodesic area of polygons. Accepts either a layer name (to calculate area of all features in that layer) or a GeoJSON geometry. Returns area in square meters, square kilometers, and acres.",
+            "description": "Calculate the geodesic area of polygons. USE WHEN: 'what is the total area of X?', 'how many square meters/km/acres?', 'measure the area of this region', 'size of the park layer'. Pass `layer_name` for a named existing layer (e.g., layer_name='parks'). Do not pass both layer_name and geometry. Returns area in square meters, square kilometers, and acres.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -955,7 +955,7 @@ def get_tool_definitions() -> list:
         },
         {
             "name": "difference",
-            "description": "Subtract layer B from layer A. Returns a new layer containing the area of layer A that does NOT overlap with layer B. Useful for removing one region from another (e.g., land minus water).",
+            "description": "Subtract layer B from layer A. Returns a new layer containing the area of layer A that does NOT overlap with layer B. USE WHEN: 'remove water from land', 'subtract one area from another', 'what's in A but not B', 'exclude flood zones from parks'. Keeps features OUTSIDE the mask.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -1000,7 +1000,7 @@ def get_tool_definitions() -> list:
         # ---- Geometry Tools ----
         {
             "name": "convex_hull",
-            "description": "Compute the convex hull (smallest enclosing convex polygon) of all features in a layer. Useful for 'draw boundary around data', 'create an envelope around crime locations', or 'show the extent of these points'.",
+            "description": "Compute the convex hull (smallest enclosing convex polygon) of all features in a layer. USE WHEN: 'draw boundary around these points', 'wrap the data in a shape', 'create an envelope around crime locations', 'outline the cluster', 'show the footprint of scattered points'. Returns the tightest convex polygon — like wrapping a rubber band.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -1018,7 +1018,7 @@ def get_tool_definitions() -> list:
         },
         {
             "name": "centroid",
-            "description": "Extract the centroid (center point) of each feature in a layer. Returns a new point layer preserving original properties. Useful for 'get building centers', 'find center of each polygon', or converting polygons to representative points.",
+            "description": "Extract the centroid (center point) of each feature in a layer. Returns a new point layer preserving original properties. USE WHEN: 'get building centers', 'find the center of each polygon', 'convert polygons to points', 'place a marker at the middle of each feature', 'representative point for each shape'. One center point per feature.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -1078,7 +1078,7 @@ def get_tool_definitions() -> list:
         },
         {
             "name": "dissolve",
-            "description": "Merge features by a shared attribute value. All features with the same attribute value are combined into a single geometry. Useful for 'merge polygons by district', 'combine zones by type', 'aggregate boundaries by category'.",
+            "description": "Merge features within a SINGLE layer that share an attribute value into combined geometries. USE WHEN: 'dissolve polygons by X', 'merge zones by type', 'combine districts by region', 'aggregate boundaries by category', 'collapse features with the same value'. Requires a `by` attribute. Works within ONE layer — use merge_layers to combine TWO layers.",
             "input_schema": {
                 "type": "object",
                 "properties": {

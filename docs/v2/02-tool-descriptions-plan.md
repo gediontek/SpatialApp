@@ -1,10 +1,46 @@
-# Prompt 2: Tool Description Engineering Plan
+# Prompt 2: Tool Description Engineering Plan (RE-SCOPED 2026-04-18)
 
-**Objective**: Improve tool descriptions in `nl_gis/tools.py` and system prompt in `nl_gis/chat.py` to achieve >=85% NL-to-GIS accuracy, with zero "wrong tool" failures on basic (single-tool) queries.
+> **STATUS — rescoped for Gemini 2.5 Flash after experimental evidence.**
+> The original plan's 85% accuracy target and aggressive prompt-enrichment
+> approach regressed the baseline by −4.8 percentage points on Gemini 2.5
+> Flash (51.6% → 46.8%). The model entered analysis paralysis under the
+> heavy COMMON CONFUSIONS / NEVER-DO / CHAIN VALIDATION rule set. Eight
+> basic queries that had been firing cleanly started returning no tool.
+>
+> See lessons-learned entry `llm-tool-selection-plans-must-account-for-model-sensitivity`
+> and commit `ec1c899` for the experimental result.
 
-**Scope**: ~200-400 lines of code changes across 2 files (`nl_gis/tools.py`, `nl_gis/chat.py`), plus test updates in `tests/eval/reference_queries.py`. 1-2 focused days.
+**Re-scoped objective**: Modestly improve NL-GIS accuracy on **Gemini 2.5 Flash**
+through **surgical description rewrites only** — targeting the specific tools
+that failed with weak activation in the classified baseline. No SYSTEM_PROMPT
+enrichment. No NEVER-DO rules. No CHAIN VALIDATION RULES.
 
-**Depends on**: Prompt 1 (accuracy audit baseline + failure taxonomy). The failure taxonomy classifies every eval failure into one of: wrong tool chosen, wrong parameters, missing chain, ambiguous query misinterpreted, or tool description misleading.
+**Re-scoped target**: 55-60% tool-selection accuracy on Gemini 2.5 Flash
+(vs 51.6% baseline). The plan's original 85% target assumed a Claude-class
+model and is deferred to Plan 07 (provider tuning), where the aggressive
+prompt enrichment can be A/B-tested against Claude.
+
+**Scope**: `nl_gis/tools.py` description edits only, ~100 lines across ~8
+tools identified in `failure-patterns.md`. No `nl_gis/chat.py` changes.
+No new test scaffolding (M5 eval already exists).
+
+**Depends on**: Prompt 1 baseline (`docs/v2/baseline-classified.json`) and
+failure classification (`docs/v2/failure-patterns.md`).
+
+**Tools to rewrite** (target list from `failure-patterns.md`):
+| Tool | Baseline failure | Pattern |
+|------|-----------------|---------|
+| `point_in_polygon` | Q010, Q011 | ✅ Shipped in commit `ec1c899` |
+| `spatial_statistics` | Q012, Q013 | ✅ Shipped in commit `ec1c899` |
+| `reverse_geocode` | Q002 | Pending — USE WHEN trigger phrases |
+| `convex_hull` | Q014 | Pending — USE WHEN trigger phrases |
+| `centroid` | Q015 | Pending — USE WHEN trigger phrases |
+| `dissolve` | Q018 | Pending — USE WHEN trigger phrases |
+| `difference` | Q021 | Pending — USE WHEN trigger phrases |
+| `calculate_area` | Q007 (params) | Pending — add concrete param example |
+
+**Process**: Apply the remaining edits in one batch, re-run Gemini eval,
+accept the delta if net non-negative. No iteration if it regresses.
 
 **Key files**:
 - `nl_gis/tools.py` — 64 tool schemas (1602 lines), each with `name`, `description`, `input_schema`
