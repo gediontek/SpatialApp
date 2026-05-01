@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 _sid_user_map = {}
 _sid_user_lock = threading.Lock()
 
+# v2.1 Plan 09: Track which collab session each SID belongs to.
+# Mapping: sid -> session_id. Cleared on disconnect / leave_collab.
+_sid_to_collab: dict[str, str] = {}
+
 
 def register_websocket_events(socketio):
     """Register all Socket.IO event handlers on the given socketio instance.
@@ -82,9 +86,259 @@ def register_websocket_events(socketio):
     @socketio.on('disconnect')
     def handle_disconnect():
         """Clean up per-SID state and log disconnection."""
+        sid = request.sid
+        # Capture user_id before we drop the mapping
         with _sid_user_lock:
-            _sid_user_map.pop(request.sid, None)
-        logger.info("WebSocket disconnected: sid=%s", request.sid)
+            user_id = _sid_user_map.pop(sid, None)
+            collab_id = _sid_to_collab.pop(sid, None)
+        # v2.1 Plan 09: clean collab session membership
+        if collab_id and user_id:
+            _leave_collab_session(collab_id, user_id, sid, socketio)
+        logger.info("WebSocket disconnected: sid=%s", sid)
+
+    # ------------------------------------------------------------------
+    # v2.1 Plan 09: Real-time collaboration events
+    # ------------------------------------------------------------------
+
+    @socketio.on('join_collab')
+    def handle_join_collab(data):
+        """Add this SID's user to a collab session and broadcast user_joined.
+
+        Args: {"session_id": str, "user_name": str (optional)}
+        """
+        from blueprints.collab import assign_color
+        from config import Config
+
+        if not isinstance(data, dict) or 'session_id' not in data:
+            emit('collab_error', {'message': 'session_id is required'})
+            return
+        session_id = data['session_id']
+        if not isinstance(session_id, str) or not session_id.startswith('collab_'):
+            emit('collab_error', {'message': 'invalid session_id'})
+            return
+
+        with _sid_user_lock:
+            user_id = _sid_user_map.get(request.sid, 'anonymous')
+
+        user_name = data.get('user_name')
+        if not isinstance(user_name, str) or not user_name.strip():
+            user_name = user_id
+        user_name = user_name.strip()[:80]
+
+        with state.collab_lock:
+            record = state.collab_sessions.get(session_id)
+            if record is None:
+                emit('collab_error', {'message': 'session not found'})
+                return
+            users = record.setdefault('users', {})
+            cap = int(Config.COLLAB_MAX_USERS_PER_SESSION)
+            # If the user is rejoining, just update their SID + name
+            if user_id in users:
+                users[user_id]['sid'] = request.sid
+                users[user_id]['name'] = user_name
+                color = users[user_id].get('color') or assign_color(record)
+                users[user_id]['color'] = color
+            else:
+                if len(users) >= cap:
+                    emit('collab_error', {'message': 'session full'})
+                    return
+                color = assign_color(record)
+                users[user_id] = {
+                    'name': user_name,
+                    'color': color,
+                    'cursor': None,
+                    'sid': request.sid,
+                    'joined_at': time.time(),
+                    'last_cursor_ts': 0.0,
+                }
+            record['last_active'] = time.time()
+
+            # Snapshot for broadcast (after exiting lock)
+            user_list = [
+                {
+                    'user_id': uid, 'name': u['name'], 'color': u['color'],
+                    'joined_at': u['joined_at'],
+                }
+                for uid, u in users.items()
+            ]
+            history_snapshot = list(record.get('layer_history', []))
+            chat_snapshot = list(record.get('chat_messages', []))
+
+        with _sid_user_lock:
+            _sid_to_collab[request.sid] = session_id
+        join_room(session_id)
+
+        # Tell the joiner about the current state
+        emit('collab_state', {
+            'session_id': session_id,
+            'users': user_list,
+            'layer_history': history_snapshot,
+            'chat_history': chat_snapshot,
+            'self_user_id': user_id,
+            'color': color,
+        })
+
+        # Tell everyone (including the joiner) that this user joined
+        socketio.emit(
+            'user_joined',
+            {
+                'session_id': session_id,
+                'user_id': user_id,
+                'name': user_name,
+                'color': color,
+            },
+            room=session_id,
+            namespace='/',
+        )
+        logger.info("collab join: sid=%s session=%s user=%s", request.sid, session_id, user_id)
+
+    @socketio.on('leave_collab')
+    def handle_leave_collab(data):
+        """Explicit leave (separate from disconnect)."""
+        if not isinstance(data, dict):
+            return
+        session_id = data.get('session_id')
+        with _sid_user_lock:
+            user_id = _sid_user_map.get(request.sid, 'anonymous')
+            _sid_to_collab.pop(request.sid, None)
+        if session_id and user_id:
+            _leave_collab_session(session_id, user_id, request.sid, socketio)
+
+    @socketio.on('cursor_move')
+    def handle_cursor_move(data):
+        """Throttled cursor broadcast."""
+        from config import Config
+
+        if not isinstance(data, dict):
+            return
+        try:
+            lat = float(data['lat'])
+            lon = float(data['lon'])
+        except (KeyError, TypeError, ValueError):
+            return
+        if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0):
+            return
+
+        with _sid_user_lock:
+            user_id = _sid_user_map.get(request.sid, 'anonymous')
+            session_id = _sid_to_collab.get(request.sid)
+        if not session_id:
+            return
+
+        throttle_s = int(Config.COLLAB_CURSOR_THROTTLE_MS) / 1000.0
+        now = time.time()
+
+        with state.collab_lock:
+            record = state.collab_sessions.get(session_id)
+            if record is None:
+                return
+            users = record.get('users', {})
+            user_entry = users.get(user_id)
+            if user_entry is None:
+                return
+            last_ts = user_entry.get('last_cursor_ts', 0.0)
+            if now - last_ts < throttle_s:
+                return
+            user_entry['last_cursor_ts'] = now
+            user_entry['cursor'] = {'lat': lat, 'lon': lon}
+            record['last_active'] = now
+            color = user_entry.get('color')
+            name = user_entry.get('name')
+
+        socketio.emit(
+            'cursor_update',
+            {
+                'session_id': session_id,
+                'user_id': user_id,
+                'name': name,
+                'color': color,
+                'lat': lat,
+                'lon': lon,
+            },
+            room=session_id,
+            namespace='/',
+            include_self=False,
+        )
+
+    @socketio.on('layer_remove')
+    def handle_layer_remove(data):
+        """Broadcast a layer removal across the collab session."""
+        from blueprints.collab import append_layer_history
+
+        if not isinstance(data, dict):
+            return
+        layer_name = data.get('layer_name')
+        if not isinstance(layer_name, str) or not layer_name:
+            return
+        with _sid_user_lock:
+            user_id = _sid_user_map.get(request.sid, 'anonymous')
+            session_id = _sid_to_collab.get(request.sid)
+        if not session_id:
+            return
+
+        with state.collab_lock:
+            record = state.collab_sessions.get(session_id)
+            if record is None:
+                return
+            append_layer_history(record, {
+                'user': user_id,
+                'action': 'remove',
+                'layer_name': layer_name,
+                'timestamp': time.time(),
+            })
+            record['last_active'] = time.time()
+
+        # Also remove from layer_store so future tools don't see a ghost layer
+        with state.layer_lock:
+            state.layer_store.pop(layer_name, None)
+
+        socketio.emit(
+            'layer_removed',
+            {'session_id': session_id, 'user_id': user_id, 'layer_name': layer_name},
+            room=session_id,
+            namespace='/',
+        )
+
+    @socketio.on('layer_style')
+    def handle_layer_style(data):
+        """Broadcast a layer-style change."""
+        from blueprints.collab import append_layer_history
+
+        if not isinstance(data, dict):
+            return
+        layer_name = data.get('layer_name')
+        style = data.get('style')
+        if not isinstance(layer_name, str) or not isinstance(style, dict):
+            return
+
+        with _sid_user_lock:
+            user_id = _sid_user_map.get(request.sid, 'anonymous')
+            session_id = _sid_to_collab.get(request.sid)
+        if not session_id:
+            return
+
+        with state.collab_lock:
+            record = state.collab_sessions.get(session_id)
+            if record is None:
+                return
+            append_layer_history(record, {
+                'user': user_id,
+                'action': 'style',
+                'layer_name': layer_name,
+                'style': style,
+                'timestamp': time.time(),
+            })
+            record['last_active'] = time.time()
+
+        socketio.emit(
+            'layer_styled',
+            {
+                'session_id': session_id, 'user_id': user_id,
+                'layer_name': layer_name, 'style': style,
+            },
+            room=session_id,
+            namespace='/',
+        )
 
     @socketio.on('join_session')
     def handle_join_session(data):
@@ -214,3 +468,38 @@ def _evict_layers_ws():
     """Evict layers if needed. Call under layer_lock."""
     from blueprints.layers import _evict_layers_if_needed
     _evict_layers_if_needed()
+
+
+def _leave_collab_session(session_id: str, user_id: str, sid: str, socketio):
+    """Remove a user from a collab session and notify peers."""
+    departed = False
+    name = None
+    remaining = 0
+    with state.collab_lock:
+        record = state.collab_sessions.get(session_id)
+        if record is None:
+            return
+        users = record.get('users', {})
+        # Only remove if this SID was the active one — handles multi-tab race
+        existing = users.get(user_id)
+        if existing and existing.get('sid') == sid:
+            users.pop(user_id, None)
+            departed = True
+            name = existing.get('name')
+        remaining = len(users)
+        record['last_active'] = time.time()
+
+    if departed:
+        socketio.emit(
+            'user_left',
+            {
+                'session_id': session_id,
+                'user_id': user_id,
+                'name': name,
+                'remaining_users': remaining,
+            },
+            room=session_id,
+            namespace='/',
+        )
+        logger.info("collab leave: sid=%s session=%s user=%s remaining=%s",
+                    sid, session_id, user_id, remaining)

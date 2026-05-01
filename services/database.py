@@ -124,6 +124,18 @@ def init_db():
         )
     """)
 
+    # Real-time collaboration sessions (v2.1 Plan 09)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS collab_sessions (
+            session_id TEXT PRIMARY KEY,
+            owner_user_id TEXT NOT NULL,
+            session_name TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            session_state TEXT DEFAULT '{}'
+        )
+    """)
+
     conn.execute("""
         CREATE TABLE IF NOT EXISTS query_metrics (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -176,7 +188,7 @@ def init_db():
     logger.info("Database initialized at %s", DB_PATH)
 
 
-_ALLOWED_TABLES = {"users", "annotations", "layers", "chat_sessions", "query_metrics"}
+_ALLOWED_TABLES = {"users", "annotations", "layers", "chat_sessions", "query_metrics", "collab_sessions"}
 _ALLOWED_COLUMNS = {"user_id", "username", "api_token", "category_name", "color",
                     "source", "geometry_json", "properties_json", "geojson",
                     "feature_count", "style_json", "messages_json", "session_id",
@@ -680,6 +692,101 @@ def get_metrics_summary(user_id: str = None) -> dict:
 from services.db_interface import DatabaseInterface
 
 
+# ============================================================
+# Collaboration session CRUD (v2.1 Plan 09)
+# ============================================================
+
+def save_collab_session(session_id: str, state_dict: dict, owner_user_id: str = "anonymous",
+                        session_name: str | None = None) -> None:
+    """Persist a collaboration session's serializable state.
+
+    `state_dict` should be a JSON-safe dict. We strip socket IDs since
+    they're transient — they don't help on resume.
+    """
+    payload = dict(state_dict)
+    # Sanitize per-user transient fields
+    if "users" in payload and isinstance(payload["users"], dict):
+        clean_users = {}
+        for uid, u in payload["users"].items():
+            if not isinstance(u, dict):
+                continue
+            clean_users[uid] = {
+                k: v for k, v in u.items()
+                if k not in {"sid", "last_cursor_ts"}
+            }
+        payload["users"] = clean_users
+    body = json.dumps(payload, default=str)
+    conn = get_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO collab_sessions
+                (session_id, owner_user_id, session_name, last_active, session_state)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)
+            ON CONFLICT(session_id) DO UPDATE SET
+                last_active = CURRENT_TIMESTAMP,
+                session_state = excluded.session_state,
+                session_name = COALESCE(excluded.session_name, session_name)
+            """,
+            (session_id, owner_user_id, session_name, body),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def get_collab_session(session_id: str) -> dict | None:
+    """Retrieve a persisted collab session by id, or None if missing."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT session_id, owner_user_id, session_name, created_at, last_active, session_state "
+        "FROM collab_sessions WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()
+    if not row:
+        return None
+    try:
+        state = json.loads(row["session_state"]) if row["session_state"] else {}
+    except (json.JSONDecodeError, TypeError):
+        state = {}
+    return {
+        "session_id": row["session_id"],
+        "owner_user_id": row["owner_user_id"],
+        "session_name": row["session_name"],
+        "created_at": row["created_at"],
+        "last_active": row["last_active"],
+        "state": state,
+    }
+
+
+def delete_collab_session(session_id: str) -> int:
+    conn = get_connection()
+    try:
+        cur = conn.execute("DELETE FROM collab_sessions WHERE session_id = ?", (session_id,))
+        conn.commit()
+        return cur.rowcount or 0
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def list_collab_sessions(owner_user_id: str | None = None) -> list[dict]:
+    conn = get_connection()
+    if owner_user_id:
+        rows = conn.execute(
+            "SELECT session_id, owner_user_id, session_name, created_at, last_active "
+            "FROM collab_sessions WHERE owner_user_id = ? ORDER BY last_active DESC",
+            (owner_user_id,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT session_id, owner_user_id, session_name, created_at, last_active "
+            "FROM collab_sessions ORDER BY last_active DESC",
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 class Database(DatabaseInterface):
     """SQLite implementation of DatabaseInterface.
 
@@ -779,6 +886,21 @@ class Database(DatabaseInterface):
 
     def get_user_layers(self, user_id):
         return get_user_layers(user_id)
+
+    # -- Collaboration sessions (v2.1 Plan 09) ---------------------------
+
+    def save_collab_session(self, session_id, state_dict,
+                            owner_user_id="anonymous", session_name=None):
+        return save_collab_session(session_id, state_dict, owner_user_id, session_name)
+
+    def get_collab_session(self, session_id):
+        return get_collab_session(session_id)
+
+    def delete_collab_session(self, session_id):
+        return delete_collab_session(session_id)
+
+    def list_collab_sessions(self, owner_user_id=None):
+        return list_collab_sessions(owner_user_id)
 
     # -- Query Metrics ---------------------------------------------------
 

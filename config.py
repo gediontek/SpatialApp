@@ -117,3 +117,9 @@ class Config:
         os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'spatialapp.db'))
     DATABASE_BACKEND = os.environ.get('DATABASE_BACKEND', 'sqlite')  # 'sqlite' or 'postgres'
     DATABASE_URL = os.environ.get('DATABASE_URL', '')  # PostgreSQL connection string
+
+    # Real-time collaboration (v2.1 Plan 09)
+    COLLAB_MAX_USERS_PER_SESSION = _int_env('COLLAB_MAX_USERS_PER_SESSION', 10)
+    COLLAB_CURSOR_THROTTLE_MS = _int_env('COLLAB_CURSOR_THROTTLE_MS', 100)
+    COLLAB_SESSION_TTL_SECONDS = _int_env('COLLAB_SESSION_TTL_SECONDS', 86400)  # 24h
+    COLLAB_LAYER_HISTORY_CAP = _int_env('COLLAB_LAYER_HISTORY_CAP', 1000)

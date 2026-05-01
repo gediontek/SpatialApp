@@ -118,6 +118,7 @@ def create_app(testing=False):
     from blueprints.chat import chat_bp
     from blueprints.layers import layers_bp
     from blueprints.dashboard import dashboard_bp
+    from blueprints.collab import collab_bp  # v2.1 Plan 09
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(annotation_bp)
@@ -125,6 +126,7 @@ def create_app(testing=False):
     app.register_blueprint(chat_bp)
     app.register_blueprint(layers_bp)
     app.register_blueprint(dashboard_bp)
+    app.register_blueprint(collab_bp)
 
     # CSRF exemptions for API endpoints
     csrf.exempt(osm_bp.name + '.api_auto_classify')
@@ -133,6 +135,7 @@ def create_app(testing=False):
     csrf.exempt(layers_bp.name + '.api_delete_layer')
     csrf.exempt(auth_bp.name + '.api_register')
     csrf.exempt(dashboard_bp.name + '.api_delete_session')
+    csrf.exempt(collab_bp.name + '.api_collab_create')
 
     # ------------------------------------------------------------------
     # Error handlers

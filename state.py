@@ -31,3 +31,20 @@ db = None
 
 # SocketIO (set by create_app when flask-socketio is available) --------
 socketio = None
+
+# Real-time collaboration (v2.1 Plan 09) -------------------------------
+# Schema:
+#   collab_sessions[session_id] = {
+#     "owner": str, "name": str | None,
+#     "users": {user_id: {"name": str, "color": str, "cursor": {lat, lon} | None,
+#                          "joined_at": float, "sid": str | None,
+#                          "last_cursor_ts": float}},
+#     "created_at": float,
+#     "last_active": float,
+#     "layer_history": [{"user": str, "action": "add"|"remove"|"style",
+#                         "layer_name": str, "timestamp": float, ...}],
+#     "chat_messages": [{"user_id": str, "user_name": str,
+#                          "role": str, "text": str, "timestamp": float}],
+#   }
+collab_sessions = {}
+collab_lock = threading.Lock()
