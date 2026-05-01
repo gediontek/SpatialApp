@@ -6,6 +6,7 @@ import hmac
 import logging
 import os
 import shutil
+import time
 from datetime import datetime, timezone
 from functools import wraps
 
@@ -15,6 +16,27 @@ from config import Config
 import state
 
 auth_bp = Blueprint('auth', __name__)
+
+# Process start time for uptime reporting (v2.1 Plan 13 M4.3.1)
+_PROCESS_START_TIME = time.time()
+
+
+def _read_version() -> str:
+    """Resolve a version string. Tries (1) VERSION file, (2) env, (3) git."""
+    version_file = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "VERSION"
+    )
+    try:
+        with open(version_file, "r", encoding="utf-8") as fh:
+            v = fh.read().strip()
+            if v:
+                return v
+    except OSError:
+        pass
+    env_v = os.environ.get("APP_VERSION")
+    if env_v:
+        return env_v
+    return "dev"
 
 
 # ------------------------------------------------------------------
@@ -135,10 +157,21 @@ def api_health():
         authenticated = True
 
     if not authenticated:
-        return jsonify({"status": "ok", "timestamp": timestamp})
+        return jsonify({
+            "status": "ok",
+            "timestamp": timestamp,
+            "uptime_seconds": round(time.time() - _PROCESS_START_TIME, 1),
+            "version": _read_version(),
+        })
 
     # Full details for authenticated requests
-    health = {"status": "ok", "timestamp": timestamp, "checks": {}}
+    health = {
+        "status": "ok",
+        "timestamp": timestamp,
+        "uptime_seconds": round(time.time() - _PROCESS_START_TIME, 1),
+        "version": _read_version(),
+        "checks": {},
+    }
 
     # Database check
     if state.db:
@@ -178,4 +211,27 @@ def api_health():
         session_count = len(state.chat_sessions)
     health["checks"]["sessions"] = {"count": session_count}
 
+    # Readiness flag — true if DB + LLM provider both initialized.
+    db_ok = health["checks"]["database"]["status"] == "ok"
+    llm_ok = health["checks"]["llm"]["status"] == "configured"
+    health["ready"] = db_ok and llm_ok
+
     return jsonify(health)
+
+
+@auth_bp.route('/api/health/ready')
+def api_health_ready():
+    """Kubernetes-style readiness probe.
+
+    Returns 200 only when DB is initialized and the LLM provider key is
+    configured. Otherwise 503 — load balancer should not route traffic.
+    """
+    db_ok = state.db is not None
+    llm_ok = bool(Config.get_llm_api_key())
+    body = {
+        "ready": db_ok and llm_ok,
+        "checks": {"database": db_ok, "llm": llm_ok},
+        "uptime_seconds": round(time.time() - _PROCESS_START_TIME, 1),
+    }
+    code = 200 if body["ready"] else 503
+    return jsonify(body), code

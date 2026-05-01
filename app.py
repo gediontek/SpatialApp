@@ -180,11 +180,11 @@ def create_app(testing=False):
         return _metrics.format_prometheus(), 200, {'Content-Type': 'text/plain; charset=utf-8'}
 
     # ------------------------------------------------------------------
-    # CORS: restrict to same-origin only
+    # CORS + security headers (v2.1 Plan 13 M2.3)
     # ------------------------------------------------------------------
     @app.after_request
     def add_cors_headers(response):
-        """Set CORS headers restricting access to same-origin requests."""
+        """Set CORS + security headers."""
         from services.metrics import metrics as _metrics
         # Record HTTP request metrics (skip the /metrics endpoint itself)
         if request.path != '/metrics':
@@ -202,6 +202,29 @@ def create_app(testing=False):
                 response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-CSRFToken'
                 response.headers['Access-Control-Allow-Credentials'] = 'true'
                 response.headers['Access-Control-Max-Age'] = '600'
+
+        # Security headers — applied to ALL responses, not just CORS.
+        response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+        response.headers.setdefault('X-Frame-Options', 'DENY')
+        response.headers.setdefault('X-XSS-Protection', '0')
+        response.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
+        # CSP allows the CDNs the existing templates already use.
+        response.headers.setdefault(
+            'Content-Security-Policy',
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' cdn.jsdelivr.net unpkg.com; "
+            "style-src 'self' 'unsafe-inline' unpkg.com cdn.jsdelivr.net; "
+            "img-src 'self' data: blob: https://*.tile.openstreetmap.org "
+            "https://server.arcgisonline.com https://*.basemaps.cartocdn.com; "
+            "connect-src 'self' ws: wss:; "
+            "font-src 'self' data:;",
+        )
+        # HSTS only if behind HTTPS reverse proxy.
+        if request.headers.get('X-Forwarded-Proto') == 'https':
+            response.headers.setdefault(
+                'Strict-Transport-Security',
+                'max-age=31536000; includeSubDomains',
+            )
         return response
 
     # ------------------------------------------------------------------

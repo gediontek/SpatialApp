@@ -86,3 +86,8 @@ data/*.db
 data/*.db-wal
 data/*.db-shm
 tests/eval/reports/
+
+# v2.1 Plan 12: runtime artifacts written by autolabel handlers
+OSM_auto_label/data/training_*.geojson
+OSM_auto_label/data/training_*.csv
+OSM_auto_label/data/custom_seeds_*.json
