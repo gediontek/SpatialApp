@@ -58,7 +58,7 @@ def run_mock_evaluation(queries, query_ids=None):
     return results
 
 
-def run_live_evaluation(queries, query_ids=None):
+def run_live_evaluation(queries, query_ids=None, provider_name=None):
     """Run evaluation using real LLM API.
 
     Sends each query through ChatSession and extracts tool selections.
@@ -66,6 +66,10 @@ def run_live_evaluation(queries, query_ids=None):
     Args:
         queries: List of reference query dicts.
         query_ids: Optional list of specific query IDs to evaluate.
+        provider_name: Optional provider override ('anthropic', 'openai',
+            'gemini'). When provided, temporarily overrides
+            Config.LLM_PROVIDER for this call so a single binary can
+            sweep multiple providers in one invocation. Restored on exit.
 
     Returns:
         List of result dicts.
@@ -77,6 +81,10 @@ def run_live_evaluation(queries, query_ids=None):
         print("ERROR: Cannot import ChatSession/Config. Run from project root.", file=sys.stderr)
         sys.exit(1)
 
+    original_provider = Config.LLM_PROVIDER
+    if provider_name:
+        Config.LLM_PROVIDER = provider_name
+
     if not Config.get_llm_api_key():
         provider = Config.LLM_PROVIDER
         expected_key = {
@@ -84,6 +92,7 @@ def run_live_evaluation(queries, query_ids=None):
             "gemini": "GEMINI_API_KEY",
             "openai": "OPENAI_API_KEY",
         }.get(provider.lower(), f"<key for {provider}>")
+        Config.LLM_PROVIDER = original_provider  # restore before bailing
         print(
             f"ERROR: LLM_PROVIDER={provider} but {expected_key} is empty. "
             f"Set it in .env to run --live.",
@@ -130,7 +139,77 @@ def run_live_evaluation(queries, query_ids=None):
         # Reset session for next query (fresh context)
         session = ChatSession()
 
+    # Restore original provider regardless of success/early exit
+    Config.LLM_PROVIDER = original_provider
     return results
+
+
+def compare_providers(results_a: dict, results_b: dict) -> dict:
+    """Compare two provider eval batch results side-by-side.
+
+    Args:
+        results_a / results_b: Dicts shaped like
+            {"provider": str, "batch": <ToolSelectionEvaluator.evaluate_batch output>,
+             "raw": [<run_*_evaluation results>]}.
+
+    Returns dict with overall delta, per-category deltas, and per-query
+    disagreements (cases where the two providers selected different tool
+    chains).
+    """
+    provider_a = results_a.get("provider", "A")
+    provider_b = results_b.get("provider", "B")
+
+    overall = {
+        "provider_a": provider_a,
+        "provider_b": provider_b,
+        "accuracy_a": results_a["batch"].get("accuracy", 0.0),
+        "accuracy_b": results_b["batch"].get("accuracy", 0.0),
+        "delta": (results_b["batch"].get("accuracy", 0.0)
+                  - results_a["batch"].get("accuracy", 0.0)),
+    }
+
+    # Per-category accuracy: read from batch.by_category if present
+    category_deltas = {}
+    cats_a = results_a["batch"].get("by_category", {}) or {}
+    cats_b = results_b["batch"].get("by_category", {}) or {}
+    for cat in sorted(set(cats_a) | set(cats_b)):
+        a = cats_a.get(cat, {}).get("accuracy", 0.0)
+        b = cats_b.get(cat, {}).get("accuracy", 0.0)
+        category_deltas[cat] = {
+            "accuracy_a": a, "accuracy_b": b, "delta": b - a,
+        }
+
+    # Per-query disagreements
+    by_id_a = {r["query_id"]: r for r in results_a.get("raw", []) or []}
+    by_id_b = {r["query_id"]: r for r in results_b.get("raw", []) or []}
+    disagreements = []
+    for qid in sorted(set(by_id_a) | set(by_id_b)):
+        ta = by_id_a.get(qid, {}).get("actual_tools", [])
+        tb = by_id_b.get(qid, {}).get("actual_tools", [])
+        if list(ta) != list(tb):
+            disagreements.append({
+                "query_id": qid,
+                f"{provider_a}_tools": list(ta),
+                f"{provider_b}_tools": list(tb),
+            })
+
+    return {
+        "overall": overall,
+        "category_deltas": category_deltas,
+        "disagreements": disagreements,
+    }
+
+
+def check_parity(comparison: dict, threshold: float) -> list[str]:
+    """Return a list of category names whose abs(delta) exceeds threshold.
+
+    Empty list = parity holds. Non-empty = CI should fail.
+    """
+    over = []
+    for cat, scores in (comparison.get("category_deltas") or {}).items():
+        if abs(scores.get("delta", 0.0)) > threshold:
+            over.append(cat)
+    return over
 
 
 def main():
@@ -158,6 +237,16 @@ def main():
                         help="Fail if any category drops more than 5% from baseline.")
     parser.add_argument("--save-report", action="store_true",
                         help="Write a timestamped markdown report to tests/eval/reports/.")
+    # v2.1 Plan 07
+    parser.add_argument("--provider", type=str, default=None,
+                        choices=["anthropic", "openai", "gemini", "all"],
+                        help="Provider override for --live. 'all' runs each provider sequentially "
+                             "and emits a comparison report.")
+    parser.add_argument("--parity-threshold", type=float, default=0.05,
+                        help="Maximum allowable per-category accuracy delta when --provider=all "
+                             "is combined with --ci. Default 0.05.")
+    parser.add_argument("--provider-summary", action="store_true",
+                        help="After eval, print a 10-line per-provider capability summary.")
 
     args = parser.parse_args()
 
@@ -179,10 +268,93 @@ def main():
     if uncovered:
         print(f"WARNING: {len(uncovered)} tools not covered: {sorted(uncovered)}", file=sys.stderr)
 
+    # ------------------------------------------------------------------
+    # Multi-provider sweep (v2.1 Plan 07)
+    # ------------------------------------------------------------------
+    if args.live and args.provider == "all":
+        evaluator = ToolSelectionEvaluator(queries)
+        per_provider: list[dict] = []
+        for prov in ("anthropic", "openai", "gemini"):
+            print(f"Running LIVE evaluation [provider={prov}]...", file=sys.stderr)
+            try:
+                raw = run_live_evaluation(queries, query_ids, provider_name=prov)
+            except SystemExit:
+                # run_live_evaluation already logged the missing-key error;
+                # skip this provider so the others still run.
+                print(f"  Skipping {prov}: missing API key", file=sys.stderr)
+                continue
+            per_provider.append({
+                "provider": prov,
+                "raw": raw,
+                "batch": evaluator.evaluate_batch(raw),
+            })
+
+        if len(per_provider) < 2:
+            print("ERROR: --provider all needs at least 2 providers with API keys configured.",
+                  file=sys.stderr)
+            sys.exit(1)
+
+        comparisons = []
+        # Pairwise compare the first provider against each other
+        base = per_provider[0]
+        for other in per_provider[1:]:
+            comparisons.append(compare_providers(base, other))
+
+        # Print summary
+        print("\n=== Provider Comparison ===")
+        print(f"  {base['provider']}: {base['batch']['accuracy']:.1%}")
+        for other in per_provider[1:]:
+            print(f"  {other['provider']}: {other['batch']['accuracy']:.1%}")
+        for cmp in comparisons:
+            over_threshold = check_parity(cmp, args.parity_threshold)
+            tag = " (parity OK)" if not over_threshold else f" (over threshold: {over_threshold})"
+            print(
+                f"  Δ {cmp['overall']['provider_a']} → {cmp['overall']['provider_b']}: "
+                f"{cmp['overall']['delta']:+.1%}{tag}",
+            )
+
+        if args.save_report:
+            REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            path = REPORTS_DIR / f"comparison_{stamp}.md"
+            with open(path, "w") as f:
+                f.write("# Provider Comparison\n\n")
+                for p in per_provider:
+                    f.write(f"- **{p['provider']}**: tool acc {p['batch']['accuracy']:.1%}\n")
+                f.write("\n## Pairwise deltas\n\n")
+                for cmp in comparisons:
+                    f.write(f"### {cmp['overall']['provider_a']} → {cmp['overall']['provider_b']}\n\n")
+                    f.write(f"- Overall delta: {cmp['overall']['delta']:+.1%}\n\n")
+                    f.write("| Category | A | B | Δ |\n|---|---:|---:|---:|\n")
+                    for cat, scores in cmp["category_deltas"].items():
+                        f.write(f"| {cat} | {scores['accuracy_a']:.1%} | {scores['accuracy_b']:.1%} | {scores['delta']:+.1%} |\n")
+                    if cmp["disagreements"]:
+                        f.write("\nDisagreements (first 10):\n\n")
+                        for d in cmp["disagreements"][:10]:
+                            f.write(f"- {d['query_id']}\n")
+                    f.write("\n")
+            print(f"  Comparison report → {path}", file=sys.stderr)
+
+        # CI parity gate
+        if args.ci:
+            for cmp in comparisons:
+                over = check_parity(cmp, args.parity_threshold)
+                if over:
+                    print(json.dumps({
+                        "ok": False,
+                        "reason": "parity",
+                        "categories": over,
+                        "delta": cmp["overall"]["delta"],
+                    }))
+                    sys.exit(1)
+            print(json.dumps({"ok": True, "providers": [p["provider"] for p in per_provider]}))
+        return  # Skip the single-provider report path below
+
     # Run evaluation
     if args.live:
-        print("Running LIVE evaluation...", file=sys.stderr)
-        results = run_live_evaluation(queries, query_ids)
+        print(f"Running LIVE evaluation [provider={args.provider or 'config-default'}]...",
+              file=sys.stderr)
+        results = run_live_evaluation(queries, query_ids, provider_name=args.provider)
     else:
         print("Running MOCK evaluation...", file=sys.stderr)
         results = run_mock_evaluation(queries, query_ids)

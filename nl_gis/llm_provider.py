@@ -4,6 +4,7 @@ Supports Anthropic (Claude), Google Gemini, and OpenAI-compatible providers.
 Each provider normalizes its responses to a common format consumed by ChatSession.
 """
 
+import copy
 import json
 import logging
 import uuid
@@ -12,6 +13,90 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Provider hint application (v2.1 Plan 07)
+#
+# Tool definitions may carry a `provider_hints` field, e.g.
+#     "provider_hints": {
+#         "openai":  {"description_suffix": " IMPORTANT: not search_nearby."},
+#         "anthropic": {"description_suffix": ""},
+#         "gemini":  {"description_suffix": ""},
+#     }
+# At call time, each provider appends the matching suffix to the tool's
+# description so the underlying API only sees a single, provider-tuned
+# description string. The base description in tools.py is unchanged.
+# ---------------------------------------------------------------------------
+
+
+def apply_provider_hints(tools: list, provider_name: str) -> list:
+    """Return a deep-copy of `tools` with `provider_hints[provider_name].
+    description_suffix` appended to each tool's description.
+
+    Tools without hints are returned unchanged. The original list is not
+    mutated. The `provider_hints` field itself is stripped from the
+    output so it never reaches the upstream API.
+    """
+    if not tools:
+        return tools
+    pn = (provider_name or "").lower()
+    out = []
+    for tool in tools:
+        copied = copy.deepcopy(tool)
+        hints = copied.pop("provider_hints", None)
+        if isinstance(hints, dict) and pn in hints:
+            suffix = hints[pn].get("description_suffix") if isinstance(hints[pn], dict) else None
+            if suffix:
+                copied["description"] = (copied.get("description") or "") + " " + suffix
+        out.append(copied)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Per-provider behavioral notes (v2.1 Plan 07 M5)
+# Documents observed differences. Read by the eval comparison report and by
+# anyone debugging routing between providers.
+# ---------------------------------------------------------------------------
+
+PROVIDER_NOTES: dict[str, dict[str, list[str]]] = {
+    "anthropic": {
+        "strengths": [
+            "Strong tool chaining: respects layer_name references between calls.",
+            "Conservative on parameter invention; sticks to declared schema.",
+        ],
+        "weaknesses": [
+            "Can occasionally over-invoke geocode when bbox already known.",
+        ],
+        "tuning_applied": [
+            "ANTHROPIC_ADDENDUM emphasizes layer_name continuity.",
+        ],
+    },
+    "openai": {
+        "strengths": [
+            "Fast tool selection on simple queries (single-tool calls).",
+        ],
+        "weaknesses": [
+            "Tendency to parallelize sequential tool chains.",
+            "Conflates closest_facility with search_nearby on 'nearest N' queries.",
+        ],
+        "tuning_applied": [
+            "OPENAI_ADDENDUM rules against parallel chaining.",
+            "provider_hints suffix on closest_facility forbids search_nearby substitution.",
+        ],
+    },
+    "gemini": {
+        "strengths": [
+            "Default budget-friendly provider for this project (cost note in memory).",
+        ],
+        "weaknesses": [
+            "Can return string-typed coordinates unless guided to numbers.",
+        ],
+        "tuning_applied": [
+            "GEMINI_ADDENDUM specifies number-typed coordinates.",
+        ],
+    },
+}
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +166,7 @@ class AnthropicProvider(LLMProvider):
             model=model,
             max_tokens=max_tokens,
             system=system,
-            tools=tools,
+            tools=apply_provider_hints(tools, "anthropic"),
             messages=messages,
         )
 
@@ -115,6 +200,7 @@ class GeminiProvider(LLMProvider):
 
     def _convert_tools(self, tools: list) -> list:
         """Convert Anthropic-format tool defs to Gemini function declarations."""
+        tools = apply_provider_hints(tools, "gemini")
         declarations = []
         for tool in tools:
             schema = tool["input_schema"].copy()
@@ -244,6 +330,7 @@ class OpenAIProvider(LLMProvider):
 
     def _convert_tools(self, tools: list) -> list:
         """Convert Anthropic-format tool defs to OpenAI function format."""
+        tools = apply_provider_hints(tools, "openai")
         result = []
         for tool in tools:
             result.append({

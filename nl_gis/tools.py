@@ -268,6 +268,12 @@ def get_tool_definitions() -> list:
         {
             "name": "search_nearby",
             "description": "Search for OSM features near a point within a given radius. Uses Overpass API 'around' filter. Returns a GeoJSON FeatureCollection added as a map layer. Use search_nearby for point-radius queries ('cafes near Times Square'); use fetch_osm for bbox area queries ('all parks in Chicago').",
+            # v2.1 Plan 07: redirect "nearest N" to closest_facility on OpenAI.
+            "provider_hints": {
+                "openai": {
+                    "description_suffix": "Use this for ALL features within radius. For 'N nearest' / 'top N closest' use closest_facility instead.",
+                },
+            },
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -855,6 +861,13 @@ def get_tool_definitions() -> list:
         {
             "name": "closest_facility",
             "description": "Find the nearest N features of a given type from a point. Searches using Overpass API, calculates geodesic distance from the center point to each result, and returns the closest ones sorted by distance. Each feature includes distance_m in its properties. Use for 'find the 3 nearest hospitals', 'closest pharmacies to my location'.",
+            # v2.1 Plan 07: provider hints — disambiguates from search_nearby
+            # for OpenAI which tends to conflate the two.
+            "provider_hints": {
+                "openai": {
+                    "description_suffix": "IMPORTANT: Use closest_facility (NOT search_nearby) when the user asks for the 'N nearest', 'N closest', or 'top N' features. search_nearby returns ALL features in a radius without ranking; closest_facility returns the N nearest sorted by distance.",
+                },
+            },
             "input_schema": {
                 "type": "object",
                 "properties": {

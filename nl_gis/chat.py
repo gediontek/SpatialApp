@@ -45,6 +45,56 @@ PARAMETER THREADING:
 
 Do NOT execute any tools. Only output the plan as a JSON code block."""
 
+# ---------------------------------------------------------------------------
+# Provider-specific addenda (v2.1 Plan 07)
+#
+# Appended to SYSTEM_PROMPT only when the active provider matches. Address
+# measured behavioral differences without bloating the base prompt.
+# ---------------------------------------------------------------------------
+
+OPENAI_ADDENDUM = """
+
+PROVIDER NOTES (OpenAI):
+- You are running through the OpenAI tool-call format. Prefer SEQUENTIAL tool calls when one tool's output feeds another's input — do NOT parallelize a buffer + spatial_query combination, run them in order.
+- When the user says "nearest", "closest", or "N nearest", use `closest_facility`, NOT `search_nearby` (which is radius-based).
+- Parameter naming: pass place names in `location`, not `query`, except for `geocode` which uses `query`.
+- DO NOT invent tools. Only call tools defined in the tools list.
+"""
+
+ANTHROPIC_ADDENDUM = """
+
+PROVIDER NOTES (Anthropic):
+- Tool chaining: when an upstream tool returns a `layer_name`, downstream tools should reference that exact name in their `layer_name` parameter.
+"""
+
+GEMINI_ADDENDUM = """
+
+PROVIDER NOTES (Gemini):
+- Function-call output format is normalized to the same shape as OpenAI tool calls. Pass coordinates as numbers (not strings) to avoid type-coercion failures on the server.
+- Bounding boxes are 'south,west,north,east' as a single comma-separated string.
+"""
+
+PROVIDER_ADDENDA: dict[str, str] = {
+    "openai": OPENAI_ADDENDUM,
+    "anthropic": ANTHROPIC_ADDENDUM,
+    "gemini": GEMINI_ADDENDUM,
+}
+
+
+def get_system_prompt(provider_name: str | None = None) -> str:
+    """Return SYSTEM_PROMPT with the matching provider addendum appended.
+
+    Unknown / empty provider names get the base prompt only — never crash
+    a chat session because someone wired up a new provider.
+    """
+    if not provider_name:
+        return SYSTEM_PROMPT
+    addendum = PROVIDER_ADDENDA.get(provider_name.lower(), "")
+    if not addendum:
+        return SYSTEM_PROMPT
+    return SYSTEM_PROMPT + addendum
+
+
 SYSTEM_PROMPT = """You are a GIS assistant for SpatialApp. You translate natural language into spatial operations on a Leaflet.js map using 50 tools.
 
 RESPONSE RULES:
@@ -494,7 +544,7 @@ class ChatSession:
             return
 
         # Build system prompt with map state (same as _process_message_inner)
-        system = SYSTEM_PROMPT
+        system = get_system_prompt(getattr(Config, "LLM_PROVIDER", None))
         state_parts = []
         if map_context:
             if "bounds" in map_context:
@@ -750,7 +800,7 @@ class ChatSession:
             self._recently_referenced_layers.clear()
 
         # Build dynamic system prompt with map state and session context
-        system = SYSTEM_PROMPT
+        system = get_system_prompt(getattr(Config, "LLM_PROVIDER", None))
         state_parts = []
 
         # Map state
