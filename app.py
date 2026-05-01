@@ -6,8 +6,9 @@ Shared mutable state lives in state.py.
 
 import logging
 import os
+import secrets
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, g
 from flask_wtf.csrf import CSRFProtect
 
 from config import Config
@@ -68,6 +69,24 @@ def create_app(testing=False):
     csrf = CSRFProtect(app)
     # Store csrf on app for blueprint access
     app.extensions['csrf'] = csrf
+
+    # ------------------------------------------------------------------
+    # CSP nonce (v2.1 Plan 13 follow-up — removes 'unsafe-inline' from
+    # script-src). Nonce is generated per request and exposed to Jinja
+    # templates so each <script> tag (and nonce'd handlers) can carry
+    # the nonce attribute.
+    # ------------------------------------------------------------------
+    @app.before_request
+    def _generate_csp_nonce():
+        g.csp_nonce = secrets.token_urlsafe(16)
+
+    @app.context_processor
+    def _inject_csp_nonce():
+        # `g` is request-bound; only meaningful inside a request.
+        try:
+            return {"csp_nonce": getattr(g, "csp_nonce", "")}
+        except RuntimeError:
+            return {"csp_nonce": ""}
 
     # Ensure directories exist
     os.makedirs(Config.LABELS_FOLDER, exist_ok=True)
@@ -209,10 +228,15 @@ def create_app(testing=False):
         response.headers.setdefault('X-XSS-Protection', '0')
         response.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
         # CSP allows the CDNs the existing templates already use.
+        # Nonce-based script-src + 'strict-dynamic' replaces 'unsafe-inline'.
+        # Modern browsers honor the nonce and ignore both 'unsafe-inline'
+        # and the host allowlist; older browsers fall back to the hosts.
+        nonce = getattr(g, "csp_nonce", "")
+        nonce_token = f" 'nonce-{nonce}' 'strict-dynamic'" if nonce else ""
         response.headers.setdefault(
             'Content-Security-Policy',
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' cdn.jsdelivr.net unpkg.com; "
+            f"script-src 'self'{nonce_token} cdn.jsdelivr.net unpkg.com; "
             "style-src 'self' 'unsafe-inline' unpkg.com cdn.jsdelivr.net; "
             "img-src 'self' data: blob: https://*.tile.openstreetmap.org "
             "https://server.arcgisonline.com https://*.basemaps.cartocdn.com; "

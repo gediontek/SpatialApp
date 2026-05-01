@@ -24,6 +24,9 @@ FROM python:3.11-slim AS runtime
 WORKDIR /app
 
 # Runtime needs the GDAL + spatialindex shared libs (no -dev versions).
+# Package name is tied to the base image's Debian release:
+#   python:3.11-slim → Debian 12 bookworm → GDAL 3.6.2 → libgdal32
+#   (SONAME libgdal.so.32; bump when upgrading the python:3.x base.)
 # curl is kept only for the docker HEALTHCHECK below.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends libgdal32 libspatialindex6 curl \

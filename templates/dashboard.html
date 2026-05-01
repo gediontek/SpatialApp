@@ -224,7 +224,7 @@
         </div>
     </div>
 
-    <script>
+    <script nonce="{{ csp_nonce }}">
         (function() {
             var token = localStorage.getItem('api_token') || '';
             var headers = {'Content-Type': 'application/json'};

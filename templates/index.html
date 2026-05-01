@@ -25,9 +25,25 @@
         <p id="loading-text">Loading...</p>
     </div>
 
-    <!-- Mobile toggle buttons -->
-    <button class="mobile-sidebar-toggle" id="mobileSidebarToggle" onclick="document.getElementById('sidebar').classList.toggle('mobile-hidden'); this.textContent = document.getElementById('sidebar').classList.contains('mobile-hidden') ? 'Open Panel' : 'Close Panel';">Close Panel</button>
-    <button class="mobile-layer-toggle" id="mobileLayerToggle" onclick="document.getElementById('layerPanel').classList.toggle('mobile-collapsed'); this.textContent = document.getElementById('layerPanel').classList.contains('mobile-collapsed') ? 'Layers' : 'Hide Layers';">Layers</button>
+    <!-- Mobile toggle buttons (handlers attached below in nonced script) -->
+    <button class="mobile-sidebar-toggle" id="mobileSidebarToggle">Close Panel</button>
+    <button class="mobile-layer-toggle" id="mobileLayerToggle">Layers</button>
+    <script nonce="{{ csp_nonce }}">
+        (function() {
+            var sb = document.getElementById('mobileSidebarToggle');
+            if (sb) sb.addEventListener('click', function() {
+                var panel = document.getElementById('sidebar');
+                panel.classList.toggle('mobile-hidden');
+                sb.textContent = panel.classList.contains('mobile-hidden') ? 'Open Panel' : 'Close Panel';
+            });
+            var ly = document.getElementById('mobileLayerToggle');
+            if (ly) ly.addEventListener('click', function() {
+                var panel = document.getElementById('layerPanel');
+                panel.classList.toggle('mobile-collapsed');
+                ly.textContent = panel.classList.contains('mobile-collapsed') ? 'Layers' : 'Hide Layers';
+            });
+        })();
+    </script>
 
     <div id="map-container">
         <div id="sidebar">
@@ -35,7 +51,7 @@
             <div id="dashboard-link" style="display:none; margin-bottom: 10px;">
                 <a href="/dashboard" style="font-size: 13px; color: #007bff; text-decoration: none;">View Dashboard</a>
             </div>
-            <script>
+            <script nonce="{{ csp_nonce }}">
                 (function() {
                     var token = localStorage.getItem('api_token');
                     if (token) {
@@ -204,21 +220,21 @@
         <div id="attributeTable"></div>
     </div>
     <!-- Leaflet JS -->
-    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script nonce="{{ csp_nonce }}" src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
     <!-- Leaflet.draw JS -->
-    <script src="https://unpkg.com/leaflet-draw/dist/leaflet.draw.js"></script>
+    <script nonce="{{ csp_nonce }}" src="https://unpkg.com/leaflet-draw/dist/leaflet.draw.js"></script>
     <!-- Leaflet.markercluster JS -->
-    <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+    <script nonce="{{ csp_nonce }}" src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
     <!-- jQuery -->
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script nonce="{{ csp_nonce }}" src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <!-- Markdown rendering for chat -->
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+    <script nonce="{{ csp_nonce }}" src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script nonce="{{ csp_nonce }}" src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
     <!-- Socket.IO client (optional WebSocket transport for chat) -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script>
+    <script nonce="{{ csp_nonce }}" src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script>
     <!-- Custom JS -->
-    <script src="{{ url_for('static', filename='js/layers.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/chat.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    <script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='js/layers.js') }}"></script>
+    <script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='js/chat.js') }}"></script>
+    <script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>
 </html>

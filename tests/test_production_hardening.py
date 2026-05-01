@@ -57,6 +57,34 @@ class TestSecurityHeaders:
         # Map tile origins
         assert 'tile.openstreetmap.org' in csp
 
+    def test_csp_no_unsafe_inline_on_scripts(self, client):
+        """Audit follow-up: 'unsafe-inline' must not appear in script-src.
+
+        Style-src still uses 'unsafe-inline' (Leaflet sets per-element
+        styles); script-src is the dangerous one.
+        """
+        r = client.get('/api/health')
+        csp = r.headers.get('Content-Security-Policy', '')
+        # Pull just the script-src directive
+        script_src = next(
+            (d.strip() for d in csp.split(';') if d.strip().startswith('script-src')),
+            '',
+        )
+        assert script_src, "script-src directive missing"
+        assert "'unsafe-inline'" not in script_src
+
+    def test_csp_uses_nonce_for_scripts(self, client):
+        r = client.get('/api/health')
+        csp = r.headers.get('Content-Security-Policy', '')
+        assert "'nonce-" in csp
+        assert "'strict-dynamic'" in csp
+
+    def test_csp_nonce_is_per_request(self, client):
+        r1 = client.get('/api/health').headers['Content-Security-Policy']
+        r2 = client.get('/api/health').headers['Content-Security-Policy']
+        # Each response has a fresh nonce
+        assert r1 != r2
+
     def test_hsts_only_when_proxied_https(self, client):
         # Without X-Forwarded-Proto, HSTS must NOT be set
         r = client.get('/api/health')
