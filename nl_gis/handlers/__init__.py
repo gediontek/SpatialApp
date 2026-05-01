@@ -139,6 +139,8 @@ LAYER_PRODUCING_TOOLS = {
     "clip_to_bbox", "generalize", "import_auto",
     # v2.1 Plan 11: visualize_3d returns annotated polygons as a layer
     "visualize_3d",
+    # v2.1 Plan 12: classification produces a layer
+    "classify_area", "predict_labels",
 }
 
 # Reuse OSM feature mappings from app.py
@@ -530,6 +532,13 @@ from nl_gis.handlers.visualization import (  # noqa: E402,F401
     handle_animate_layer,
     handle_visualize_3d,
 )
+from nl_gis.handlers.autolabel import (  # noqa: E402,F401
+    handle_classify_area,
+    handle_predict_labels,
+    handle_train_classifier,
+    handle_export_training_data,
+    handle_evaluate_classifier,
+)
 
 
 def _raster_call(tool_name: str, params: dict, layer_store: dict | None):
@@ -654,6 +663,12 @@ def dispatch_tool(tool_name: str, params: dict, layer_store: dict = None) -> dic
         "chart": lambda p: handle_chart(p, layer_store),
         "animate_layer": lambda p: handle_animate_layer(p, layer_store),
         "visualize_3d": lambda p: handle_visualize_3d(p, layer_store),
+        # OSM auto-label (v2.1 Plan 12)
+        "classify_area": lambda p: handle_classify_area(p, layer_store),
+        "predict_labels": lambda p: handle_predict_labels(p, layer_store),
+        "train_classifier": lambda p: handle_train_classifier(p, layer_store),
+        "export_training_data": lambda p: handle_export_training_data(p, layer_store),
+        "evaluate_classifier": lambda p: handle_evaluate_classifier(p, layer_store),
     }
 
     if tool_name not in handlers:

@@ -1822,4 +1822,66 @@ def get_tool_definitions() -> list:
                 "required": ["layer_name"],
             },
         },
+        # v2.1 Plan 12: ML landcover classification (OSM_auto_label bridge)
+        {
+            "name": "classify_area",
+            "description": "Download OSM landcover features for a place or bbox, then run the ML landcover classifier (builtup_area, water, forest, farmland, grassland, bare_earth, aquaculture). USE WHEN: 'classify landuse in Paris', 'auto-label this area's landcover', 'what type of land use is around this region'. Returns a styled layer with `predicted_label` per feature. Requires OSM auto-label dependencies (gensim, osmnx).",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string", "description": "Place name (e.g. 'Paris, France'). Either location or bbox is required."},
+                    "bbox": {"type": "string", "description": "'south,west,north,east' bounding box in decimal degrees."},
+                    "output_name": {"type": "string", "description": "Output layer name. Default 'classified_area'."},
+                },
+            },
+        },
+        {
+            "name": "predict_labels",
+            "description": "Run the ML landcover classifier on features in an existing layer. USE WHEN: 'classify the parks layer', 'predict landcover for these features'. Adds a `predicted_label` to each feature. Requires gensim.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {"type": "string", "description": "Existing layer to classify. Required."},
+                    "output_name": {"type": "string", "description": "Output layer name. Defaults to '<layer>_classified'."},
+                },
+                "required": ["layer_name"],
+            },
+        },
+        {
+            "name": "train_classifier",
+            "description": "Update the landcover classifier's seed categories from user-corrected annotations. USE WHEN: 'fine-tune on my labels', 'retrain on the corrections I made'. Saves a custom seed file. (Note: this is seed-update, not full ML retraining.)",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {"type": "string", "description": "Layer with user-corrected labels."},
+                    "label_attribute": {"type": "string", "description": "Property holding the ground-truth label (default 'category_name')."},
+                    "output_model_name": {"type": "string", "description": "Name for the saved seed file."},
+                },
+                "required": ["layer_name"],
+            },
+        },
+        {
+            "name": "export_training_data",
+            "description": "Export user annotations as a labeled GeoJSON or CSV training set (consumable by the landcover classifier). USE WHEN: 'export my labels for training', 'save annotations as training data'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "format": {"type": "string", "enum": ["geojson", "csv"]},
+                    "output_name": {"type": "string", "description": "Output file name (saved under OSM_auto_label/data/)."},
+                },
+            },
+        },
+        {
+            "name": "evaluate_classifier",
+            "description": "Compute accuracy, per-class precision/recall/F1, and a confusion matrix on a layer that has both ground-truth and predicted labels. USE WHEN: 'how accurate is the classifier', 'evaluate predictions vs my labels'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {"type": "string"},
+                    "label_attribute": {"type": "string", "description": "Ground-truth property (default 'category_name')."},
+                    "predicted_attribute": {"type": "string", "description": "Predicted property (default 'predicted_label')."},
+                },
+                "required": ["layer_name"],
+            },
+        },
     ]

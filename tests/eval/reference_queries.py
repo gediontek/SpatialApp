@@ -692,6 +692,47 @@ SUPPLEMENTARY_QUERIES = [
         "expected_params": {"visualize_3d": {"layer_name": "buildings"}},
         "category": "visualization",
     },
+    # ----- v2.1 Plan 12 OSM auto-label -----
+    {
+        "id": "S046",
+        "query": "Classify the landcover in Addis Ababa",
+        "complexity": "simple",
+        "expected_tools": ["classify_area"],
+        "expected_params": {"classify_area": {"location": "Addis Ababa"}},
+        "category": "autolabel",
+    },
+    {
+        "id": "S047",
+        "query": "Run landcover classification on the parks layer",
+        "complexity": "simple",
+        "expected_tools": ["predict_labels"],
+        "expected_params": {"predict_labels": {"layer_name": "parks"}},
+        "category": "autolabel",
+    },
+    {
+        "id": "S048",
+        "query": "Train the classifier on my user-labeled annotations",
+        "complexity": "simple",
+        "expected_tools": ["train_classifier"],
+        "expected_params": {"train_classifier": {"layer_name": "annotations"}},
+        "category": "autolabel",
+    },
+    {
+        "id": "S049",
+        "query": "Export my annotations as labeled training data",
+        "complexity": "simple",
+        "expected_tools": ["export_training_data"],
+        "expected_params": {"export_training_data": {"format": "geojson"}},
+        "category": "autolabel",
+    },
+    {
+        "id": "S050",
+        "query": "How accurate is the classifier on this layer?",
+        "complexity": "simple",
+        "expected_tools": ["evaluate_classifier"],
+        "expected_params": {"evaluate_classifier": {"layer_name": "predictions"}},
+        "category": "autolabel",
+    },
 ]
 
 # Full query set = primary + supplementary
@@ -741,6 +782,9 @@ ALL_TOOLS = [
     "clip_to_bbox", "generalize", "export_gpkg", "import_auto",
     # Visualization (v2.1 Plan 11)
     "choropleth_map", "chart", "animate_layer", "visualize_3d",
+    # OSM auto-label (v2.1 Plan 12)
+    "classify_area", "predict_labels", "train_classifier",
+    "export_training_data", "evaluate_classifier",
 ]
 
 

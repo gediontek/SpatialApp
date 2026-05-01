@@ -311,6 +311,31 @@ MOCK_RESPONSES = {
     "S045": [
         _tool_use("visualize_3d", {"layer_name": "buildings"}),
     ],
+
+    # === v2.1 Plan 12 — OSM auto-label (S046-S050) ===
+    "S046": [
+        _tool_use("classify_area", {"location": "Addis Ababa", "output_name": "addis_landcover"}),
+    ],
+    "S047": [
+        _tool_use("predict_labels", {"layer_name": "parks", "output_name": "parks_classified"}),
+    ],
+    "S048": [
+        _tool_use("train_classifier", {
+            "layer_name": "annotations",
+            "label_attribute": "category_name",
+            "output_model_name": "user_seeds",
+        }),
+    ],
+    "S049": [
+        _tool_use("export_training_data", {"format": "geojson", "output_name": "user_training"}),
+    ],
+    "S050": [
+        _tool_use("evaluate_classifier", {
+            "layer_name": "predictions",
+            "label_attribute": "category_name",
+            "predicted_attribute": "predicted_label",
+        }),
+    ],
 }
 
 
