@@ -657,6 +657,41 @@ SUPPLEMENTARY_QUERIES = [
         "expected_tools": ["import_auto"],
         "category": "data_pipeline",
     },
+    # ----- v2.1 Plan 11 visualization -----
+    {
+        "id": "S042",
+        "query": "Color the neighborhoods by population density using natural breaks",
+        "complexity": "simple",
+        "expected_tools": ["choropleth_map"],
+        "expected_params": {
+            "choropleth_map": {"layer_name": "neighborhoods", "attribute": "population_density"},
+        },
+        "category": "visualization",
+    },
+    {
+        "id": "S043",
+        "query": "Make a pie chart of building types in downtown Chicago",
+        "complexity": "simple",
+        "expected_tools": ["chart"],
+        "expected_params": {"chart": {"chart_type": "pie"}},
+        "category": "visualization",
+    },
+    {
+        "id": "S044",
+        "query": "Animate the construction permits layer from 2020 to 2024 cumulatively",
+        "complexity": "simple",
+        "expected_tools": ["animate_layer"],
+        "expected_params": {"animate_layer": {"layer_name": "permits", "cumulative": True}},
+        "category": "visualization",
+    },
+    {
+        "id": "S045",
+        "query": "Show buildings in 3D extruded by their height",
+        "complexity": "simple",
+        "expected_tools": ["visualize_3d"],
+        "expected_params": {"visualize_3d": {"layer_name": "buildings"}},
+        "category": "visualization",
+    },
 ]
 
 # Full query set = primary + supplementary
@@ -704,6 +739,8 @@ ALL_TOOLS = [
     "raster_classify",
     # Data pipeline (v2.1 Plan 10)
     "clip_to_bbox", "generalize", "export_gpkg", "import_auto",
+    # Visualization (v2.1 Plan 11)
+    "choropleth_map", "chart", "animate_layer", "visualize_3d",
 ]
 
 

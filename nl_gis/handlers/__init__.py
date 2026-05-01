@@ -137,6 +137,8 @@ LAYER_PRODUCING_TOOLS = {
     "raster_profile", "raster_classify", "raster_statistics",
     # Data pipeline layer producers (v2.1 Plan 10)
     "clip_to_bbox", "generalize", "import_auto",
+    # v2.1 Plan 11: visualize_3d returns annotated polygons as a layer
+    "visualize_3d",
 }
 
 # Reuse OSM feature mappings from app.py
@@ -522,6 +524,12 @@ from nl_gis.handlers.routing import (  # noqa: E402,F401
     handle_service_area,
     handle_od_matrix,
 )
+from nl_gis.handlers.visualization import (  # noqa: E402,F401
+    handle_choropleth_map,
+    handle_chart,
+    handle_animate_layer,
+    handle_visualize_3d,
+)
 
 
 def _raster_call(tool_name: str, params: dict, layer_store: dict | None):
@@ -641,6 +649,11 @@ def dispatch_tool(tool_name: str, params: dict, layer_store: dict = None) -> dic
         "generalize": lambda p: handle_generalize(p, layer_store),
         "export_gpkg": lambda p: handle_export_gpkg(p, layer_store),
         "import_auto": lambda p: handle_import_auto(p, layer_store),
+        # Visualization (v2.1 Plan 11)
+        "choropleth_map": lambda p: handle_choropleth_map(p, layer_store),
+        "chart": lambda p: handle_chart(p, layer_store),
+        "animate_layer": lambda p: handle_animate_layer(p, layer_store),
+        "visualize_3d": lambda p: handle_visualize_3d(p, layer_store),
     }
 
     if tool_name not in handlers:

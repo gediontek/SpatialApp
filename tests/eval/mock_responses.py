@@ -284,6 +284,33 @@ MOCK_RESPONSES = {
     "S041": [
         _tool_use("import_auto", {"data": "{\"type\":\"FeatureCollection\",\"features\":[]}"}),
     ],
+
+    # === v2.1 Plan 11 — Visualization (S042-S045) ===
+    "S042": [
+        _tool_use("choropleth_map", {
+            "layer_name": "neighborhoods",
+            "attribute": "population_density",
+            "method": "natural_breaks",
+            "num_classes": 5,
+        }),
+    ],
+    "S043": [
+        _tool_use("chart", {
+            "layer_name": "buildings_downtown",
+            "attribute": "building_type",
+            "chart_type": "pie",
+        }),
+    ],
+    "S044": [
+        _tool_use("animate_layer", {
+            "layer_name": "permits",
+            "time_attribute": "issue_year",
+            "cumulative": True,
+        }),
+    ],
+    "S045": [
+        _tool_use("visualize_3d", {"layer_name": "buildings"}),
+    ],
 }
 
 

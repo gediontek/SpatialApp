@@ -1736,12 +1736,19 @@ def handle_interpolate(params: dict, layer_store: dict = None) -> dict:
     # Convert contour collections to GeoJSON polygons
     from shapely.geometry import Polygon as ShapelyPolygon
 
+    # matplotlib >= 3.10 removed ContourSet.collections; iterate paths directly.
+    # For contourf, get_paths() returns one Path per level interval (in level order).
+    if hasattr(contour_set, "collections"):
+        path_groups = [list(c.get_paths()) for c in contour_set.collections]
+    else:
+        path_groups = [[p] for p in contour_set.get_paths()]
+
     contour_features = []
-    for i, collection in enumerate(contour_set.collections):
+    for i, paths in enumerate(path_groups):
         level_min = float(contour_set.levels[i])
         level_max = float(contour_set.levels[i + 1]) if i + 1 < len(contour_set.levels) else level_min
 
-        for path in collection.get_paths():
+        for path in paths:
             # Each path may have multiple polygons (with holes)
             for polygon_coords in path.to_polygons():
                 if len(polygon_coords) < 3:

@@ -1750,4 +1750,76 @@ def get_tool_definitions() -> list:
                 "required": ["raster", "breaks"],
             },
         },
+        # v2.1 Plan 11: visualization
+        {
+            "name": "choropleth_map",
+            "description": "Color a layer by a numeric attribute split into class breaks. USE WHEN: 'color neighborhoods by population', 'map by income', 'shade tracts by density'. Returns class breaks, a per-feature color map, and legend metadata. Prefer this over `style_layer` when the user wants graduated/classified colors.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {"type": "string", "description": "Layer to classify. Required."},
+                    "attribute": {"type": "string", "description": "Numeric attribute to classify on. Required."},
+                    "method": {
+                        "type": "string",
+                        "enum": ["quantile", "equal_interval", "natural_breaks", "manual"],
+                        "description": "Classification method. Default 'quantile'. 'natural_breaks' uses jenkspy if available; falls back to quantile.",
+                    },
+                    "color_ramp": {
+                        "description": "Named ramp ('sequential', 'diverging', 'qualitative') or a custom hex array.",
+                    },
+                    "num_classes": {"type": "integer", "minimum": 2, "maximum": 9, "description": "Number of classes (2-9). Default 5."},
+                    "breaks": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "description": "Manual breaks (used only when method='manual'). Must be sorted ascending.",
+                    },
+                },
+                "required": ["layer_name", "attribute"],
+            },
+        },
+        {
+            "name": "chart",
+            "description": "Aggregate layer attributes into a chart dataset (bar, pie, histogram, scatter) ready for Chart.js rendering. USE WHEN: 'pie chart of building types', 'histogram of road lengths', 'scatter plot of area vs population', 'bar chart by category'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {"type": "string", "description": "Layer with the attributes."},
+                    "attribute": {"type": "string", "description": "Primary attribute (Y-axis for bar/pie/scatter; values for histogram)."},
+                    "chart_type": {"type": "string", "enum": ["bar", "pie", "histogram", "scatter"]},
+                    "group_by": {"type": "string", "description": "bar/pie only: attribute to group rows by (defaults to `attribute`)."},
+                    "aggregation": {"type": "string", "enum": ["count", "sum", "mean"], "description": "bar/pie only: how to reduce within a group. Default 'count'."},
+                    "x_attribute": {"type": "string", "description": "scatter only: X-axis attribute."},
+                    "num_bins": {"type": "integer", "description": "histogram only: bin count. Default 10."},
+                },
+                "required": ["layer_name", "attribute", "chart_type"],
+            },
+        },
+        {
+            "name": "animate_layer",
+            "description": "Group features by a temporal attribute into ordered time steps for animation. USE WHEN: 'animate permits 2020-2024', 'show how cases spread over time', 'play through monthly snapshots'. Returns time_steps with feature indices the frontend animates through. Caps at 100 unique steps; bins above that.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {"type": "string"},
+                    "time_attribute": {"type": "string", "description": "Property holding a date/time value."},
+                    "interval_ms": {"type": "integer", "description": "Animation step duration in ms (default 1000)."},
+                    "cumulative": {"type": "boolean", "description": "If true, each step shows all features up to and including that time."},
+                },
+                "required": ["layer_name", "time_attribute"],
+            },
+        },
+        {
+            "name": "visualize_3d",
+            "description": "Annotate polygon features with a computed `_height_m` for 3D extrusion (rendered by OSMBuildings or deck.gl on the frontend). USE WHEN: 'show buildings in 3D', 'extrude by height', '3D footprints'. Falls back to building:levels * multiplier, then a default_height.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "layer_name": {"type": "string"},
+                    "height_attribute": {"type": "string", "description": "Property name with the height in meters (default 'height')."},
+                    "height_multiplier": {"type": "number", "description": "Multiplier when falling back to building:levels (default 3.0)."},
+                    "default_height": {"type": "number", "description": "Fallback height in meters (default 10)."},
+                },
+                "required": ["layer_name"],
+            },
+        },
     ]
