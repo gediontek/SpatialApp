@@ -77,7 +77,14 @@ class TestSecurityHeaders:
         r = client.get('/api/health')
         csp = r.headers.get('Content-Security-Policy', '')
         assert "'nonce-" in csp
-        assert "'strict-dynamic'" in csp
+
+    def test_csp_allows_all_template_cdns(self, client):
+        r = client.get('/api/health')
+        csp = r.headers.get('Content-Security-Policy', '')
+        # Every script src host actually used in templates/ must be allowed
+        for host in ("cdn.jsdelivr.net", "unpkg.com",
+                     "code.jquery.com", "cdnjs.cloudflare.com"):
+            assert host in csp, f"CSP is missing {host}"
 
     def test_csp_nonce_is_per_request(self, client):
         r1 = client.get('/api/health').headers['Content-Security-Policy']

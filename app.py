@@ -227,21 +227,30 @@ def create_app(testing=False):
         response.headers.setdefault('X-Frame-Options', 'DENY')
         response.headers.setdefault('X-XSS-Protection', '0')
         response.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
-        # CSP allows the CDNs the existing templates already use.
-        # Nonce-based script-src + 'strict-dynamic' replaces 'unsafe-inline'.
-        # Modern browsers honor the nonce and ignore both 'unsafe-inline'
-        # and the host allowlist; older browsers fall back to the hosts.
+        # CSP: explicit host allowlist for every CDN the templates load,
+        # plus a per-request nonce for inline scripts. NO 'unsafe-inline'
+        # on script-src (audit fix). Inline handlers were refactored to
+        # addEventListener inside nonced blocks. 'strict-dynamic' was
+        # tried earlier but blocked too much — explicit hosts are
+        # safer for the current set of templates.
         nonce = getattr(g, "csp_nonce", "")
-        nonce_token = f" 'nonce-{nonce}' 'strict-dynamic'" if nonce else ""
+        nonce_token = f" 'nonce-{nonce}'" if nonce else ""
         response.headers.setdefault(
             'Content-Security-Policy',
             "default-src 'self'; "
-            f"script-src 'self'{nonce_token} cdn.jsdelivr.net unpkg.com; "
+            f"script-src 'self'{nonce_token} "
+            "cdn.jsdelivr.net unpkg.com code.jquery.com cdnjs.cloudflare.com; "
             "style-src 'self' 'unsafe-inline' unpkg.com cdn.jsdelivr.net; "
-            "img-src 'self' data: blob: https://*.tile.openstreetmap.org "
+            # img-src must include the Leaflet/plugin CDNs since they
+            # serve sprite sheets, draw-control icons, and layer icons
+            # alongside the JS bundle.
+            "img-src 'self' data: blob: "
+            "https://unpkg.com https://cdn.jsdelivr.net "
+            "https://*.tile.openstreetmap.org "
             "https://server.arcgisonline.com https://*.basemaps.cartocdn.com; "
             "connect-src 'self' ws: wss:; "
-            "font-src 'self' data:;",
+            "font-src 'self' data:; "
+            "worker-src 'self' blob:;",
         )
         # HSTS only if behind HTTPS reverse proxy.
         if request.headers.get('X-Forwarded-Proto') == 'https':
