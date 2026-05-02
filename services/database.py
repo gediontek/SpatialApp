@@ -7,6 +7,8 @@ This module provides both module-level functions (legacy API) and a
 Database class that implements DatabaseInterface for the new abstraction layer.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import os

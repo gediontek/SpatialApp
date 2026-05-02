@@ -271,57 +271,26 @@ def fetch_osm_data():
         response = http_requests.get(
             overpass_url,
             params={'data': overpass_query},
-            timeout=Config.OSM_REQUEST_TIMEOUT
+            headers={"User-Agent": "SpatialApp/1.0 (https://github.com/gediontek/SpatialApp)"},
+            timeout=Config.OSM_REQUEST_TIMEOUT,
         )
         response.raise_for_status()
         osm_data = response.json()
 
-        geojson_data = {
-            "type": "FeatureCollection",
-            "features": []
-        }
+        # Use the shared converter which handles BOTH formats:
+        #   - `out geom`  → inline coords on each way / relation member
+        #   - `out body + >` → separate node elements + node-id refs
+        # The previous in-route parser only handled the legacy form, so
+        # the modern `out geom qt` query above was producing zero
+        # features even when Overpass returned 200.
+        from nl_gis.handlers import _osm_to_geojson
+        geojson_data = _osm_to_geojson(osm_data, category_name, feature_type)
 
-        if 'elements' in osm_data:
-            nodes = {
-                node['id']: (node['lon'], node['lat'])
-                for node in osm_data['elements']
-                if node['type'] == 'node'
-            }
-
-            for element in osm_data['elements']:
-                if element['type'] == 'way':
-                    coords = [nodes[node_id] for node_id in element.get('nodes', []) if node_id in nodes]
-                    if len(coords) < 3:
-                        continue
-
-                    # Ensure polygon is closed
-                    if coords[0] != coords[-1]:
-                        coords.append(coords[0])
-
-                    # Calculate bbox
-                    lons = [c[0] for c in coords]
-                    lats = [c[1] for c in coords]
-                    bbox_feature = [[min(lons), min(lats)], [max(lons), min(lats)],
-                                    [max(lons), max(lats)], [min(lons), max(lats)]]
-
-                    osm_tags = element.get('tags', {})
-
-                    geojson_data['features'].append({
-                        "type": "Feature",
-                        "geometry": {
-                            "type": "Polygon",
-                            "coordinates": [coords]
-                        },
-                        "properties": {
-                            "category_name": category_name,
-                            "feature_type": feature_type,
-                            "osm_id": element.get('id'),
-                            "osm_tags": osm_tags,
-                            "bbox": bbox_feature
-                        }
-                    })
-        else:
-            current_app.logger.warning("No OSM data found for the given parameters.")
+        if not geojson_data["features"]:
+            current_app.logger.warning(
+                "No OSM features parsed for feature_type=%s in bbox=%s",
+                feature_type, sanitized_bbox,
+            )
 
         current_app.logger.info(f"Fetched {len(geojson_data['features'])} {feature_type} features with category '{category_name}'")
         return jsonify(geojson_data)

@@ -4,6 +4,8 @@ Shared helpers, constants, and dispatch function live here.
 Domain-specific handlers are in sub-modules.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 

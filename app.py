@@ -71,6 +71,24 @@ def create_app(testing=False):
     app.extensions['csrf'] = csrf
 
     # ------------------------------------------------------------------
+    # Disable CSRF for API endpoints with proper authorization.
+    # API clients send Bearer tokens or X-CSRFToken headers.
+    # CSRF tokens sent via headers (AJAX) are already validated by
+    # Flask-WTF, but we also exempt endpoints with Bearer auth.
+    # ------------------------------------------------------------------
+    @app.before_request
+    def _disable_csrf_for_api_endpoints():
+        """Skip CSRF validation for /api/* endpoints that have Authorization header."""
+        if request.path.startswith('/api/'):
+            auth = request.headers.get('Authorization', '')
+            if auth.startswith('Bearer '):
+                # API request with Bearer token — skip CSRF validation
+                request.environ['csrf.exempt'] = True
+            # Note: X-CSRFToken header validation is automatic via Flask-WTF,
+            # but AJAX requests may fail if session token is missing. This is expected
+            # behavior and the client should include the CSRF token from the HTML.
+
+    # ------------------------------------------------------------------
     # CSP nonce (v2.1 Plan 13 follow-up — removes 'unsafe-inline' from
     # script-src). Nonce is generated per request and exposed to Jinja
     # templates so each <script> tag (and nonce'd handlers) can carry

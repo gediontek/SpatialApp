@@ -163,6 +163,7 @@ def handle_fetch_osm(params: dict) -> dict:
             response = requests.get(
                 "https://overpass-api.de/api/interpreter",
                 params={"data": overpass_query},
+                headers={"User-Agent": "SpatialApp/1.0 (https://github.com/gediontek/SpatialApp)"},
                 timeout=(5, Config.OSM_REQUEST_TIMEOUT),
             )
             response.raise_for_status()
@@ -454,6 +455,7 @@ def handle_search_nearby(params: dict) -> dict:
             response = requests.get(
                 "https://overpass-api.de/api/interpreter",
                 params={"data": overpass_query},
+                headers={"User-Agent": "SpatialApp/1.0 (https://github.com/gediontek/SpatialApp)"},
                 timeout=Config.OSM_REQUEST_TIMEOUT,
             )
             response.raise_for_status()

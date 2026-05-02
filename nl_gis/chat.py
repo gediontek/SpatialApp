@@ -1,5 +1,7 @@
 """LLM integration for NL-to-GIS chat (multi-provider)."""
 
+from __future__ import annotations
+
 import json
 import logging
 import time

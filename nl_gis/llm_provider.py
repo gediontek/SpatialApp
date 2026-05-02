@@ -274,12 +274,24 @@ class GeminiProvider(LLMProvider):
         gemini_tools = [types.Tool(function_declarations=self._convert_tools(tools))]
         contents = self._convert_messages(messages, system)
 
-        config = types.GenerateContentConfig(
+        # Gemini 2.5 Flash/Pro have thinking ON by default; with a large
+        # system prompt + 82 tools (~22K input tokens) the entire
+        # max_output_tokens budget is consumed by thinking and zero tokens
+        # remain for the actual function call. Disable thinking for the
+        # tool-calling path — the model has explicit tools, no need to
+        # ruminate before picking one.
+        config_kwargs = dict(
             system_instruction=system,
             tools=gemini_tools,
             max_output_tokens=max_tokens,
             temperature=0.2,
         )
+        if hasattr(types, "ThinkingConfig"):
+            try:
+                config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+            except Exception:
+                logger.debug("Could not set ThinkingConfig; falling back to defaults", exc_info=True)
+        config = types.GenerateContentConfig(**config_kwargs)
 
         response = self.client.models.generate_content(
             model=model,
@@ -290,7 +302,7 @@ class GeminiProvider(LLMProvider):
         content = []
         has_tool_call = False
 
-        if response.candidates and response.candidates[0].content:
+        if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
             for part in response.candidates[0].content.parts:
                 if part.function_call:
                     fc = part.function_call
@@ -306,11 +318,18 @@ class GeminiProvider(LLMProvider):
                     content.append(TextBlock(text=part.text))
 
         usage_meta = getattr(response, "usage_metadata", None)
+        input_tokens = 0
+        output_tokens = 0
+        
+        if usage_meta:
+            input_tokens = getattr(usage_meta, "prompt_token_count", None) or 0
+            output_tokens = getattr(usage_meta, "candidates_token_count", None) or 0
+        
         return LLMResponse(
             content=content,
             stop_reason="tool_use" if has_tool_call else "end_turn",
-            input_tokens=getattr(usage_meta, "prompt_token_count", 0) if usage_meta else 0,
-            output_tokens=getattr(usage_meta, "candidates_token_count", 0) if usage_meta else 0,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
         )
 
 

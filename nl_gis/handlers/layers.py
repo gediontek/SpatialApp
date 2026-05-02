@@ -5,6 +5,8 @@ ERROR PATHS (audit 2026-04-17 for v2.1 Plan 05 M1):
     No exception-detail leaks; size-guards apply to import/merge operations.
 """
 
+from __future__ import annotations
+
 import base64
 import logging
 import xml.etree.ElementTree as ET
