@@ -426,6 +426,15 @@ def register_websocket_events(socketio):
         with _sid_user_lock:
             user_id = _sid_user_map.get(request.sid, 'anonymous')
 
+        # Audit N12: per-user rate limit (shares chat_limiter bucket
+        # with REST /api/chat so a client cannot bypass the cap by
+        # routing requests through WebSocket.)
+        from services.rate_limiter import chat_limiter
+        if not chat_limiter.allow(user_id):
+            emit('chat_event', {'type': 'error',
+                                'text': 'Chat rate limit exceeded (60 msg/min). Slow down.'})
+            return
+
         # Get or create chat session (reuse existing helper)
         from blueprints.chat import _get_chat_session, _persist_chat_session
 

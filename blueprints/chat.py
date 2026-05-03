@@ -265,9 +265,18 @@ def api_chat():
 @chat_bp.route('/api/chat/execute-plan', methods=['POST'])
 @require_api_token
 def api_execute_plan():
-    """Execute a previously generated plan step by step. Returns SSE event stream."""
+    """Execute a previously generated plan step by step. Returns SSE event stream.
+
+    Audit N12: per-user rate limit (shares the chat_limiter bucket so
+    plan-execute calls count against the same 60/min cap).
+    """
     from flask import current_app
+    from services.rate_limiter import chat_limiter
     import time as _time
+
+    user_id = getattr(g, 'user_id', 'anonymous')
+    if not chat_limiter.allow(user_id):
+        return jsonify(error='Chat rate limit exceeded (60 req/min). Slow down.'), 429
 
     data = request.get_json(silent=True)
     if not data or 'plan_steps' not in data:
