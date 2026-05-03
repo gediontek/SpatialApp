@@ -11,7 +11,7 @@ import logging
 import time
 import uuid
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, g
 
 import state
 from blueprints.auth import require_api_token
@@ -103,8 +103,10 @@ def api_collab_create():
 
 
 @collab_bp.route('/api/collab/<session_id>/info', methods=['GET'])
+@require_api_token
 def api_collab_info(session_id: str):
-    """Public read of session metadata (owner + connected users)."""
+    """Read of session metadata. Audit N6: requires auth so a UUID-guess
+    cannot enumerate session owners + chat counts."""
     if not session_id.startswith("collab_"):
         return jsonify(error="Invalid session id"), 400
 
@@ -153,8 +155,14 @@ def api_collab_info(session_id: str):
 
 
 @collab_bp.route('/api/collab/<session_id>/resume', methods=['GET'])
+@require_api_token
 def api_collab_resume(session_id: str):
-    """Restore an in-memory session record from DB and return its state."""
+    """Restore an in-memory session record from DB and return its state.
+
+    Audit N6: requires auth and owner-or-creator check. Resume mutates
+    state.collab_sessions; a UUID-guesser must not be able to spawn
+    in-memory records owned by an arbitrary user.
+    """
     if not session_id.startswith("collab_"):
         return jsonify(error="Invalid session id"), 400
     if state.db is None:
@@ -166,6 +174,11 @@ def api_collab_resume(session_id: str):
         return jsonify(error="Failed to load session"), 500
     if not row:
         return jsonify(error="Session not found"), 404
+    # Audit N6: only the recorded owner may restore.
+    requester = getattr(g, 'user_id', 'anonymous')
+    owner = row.get("owner_user_id", "anonymous")
+    if owner != requester:
+        return jsonify(error="Session not found"), 404  # avoid existence leak
 
     persisted = row.get("state") or {}
     record = _new_session_record(row.get("owner_user_id", "anonymous"),
@@ -189,13 +202,24 @@ def api_collab_resume(session_id: str):
 
 
 @collab_bp.route('/api/collab/<session_id>/export', methods=['GET'])
+@require_api_token
 def api_collab_export(session_id: str):
-    """Export the workflow (NL commands + layer ops) as JSON."""
+    """Export the workflow (NL commands + layer ops) as JSON.
+
+    Audit N6: requires auth and owner check — exporting another user's
+    chat history + layer ops without auth was a privacy leak.
+    """
     if not session_id.startswith("collab_"):
         return jsonify(error="Invalid session id"), 400
 
+    requester = getattr(g, 'user_id', 'anonymous')
+    record = None
+    owner = None
     with state.collab_lock:
-        record = state.collab_sessions.get(session_id)
+        live = state.collab_sessions.get(session_id)
+        if live is not None:
+            record = live
+            owner = live.get("owner")
 
     if record is None and state.db is not None:
         try:
@@ -205,9 +229,12 @@ def api_collab_export(session_id: str):
         if not row:
             return jsonify(error="Session not found"), 404
         record = row.get("state") or {}
+        owner = row.get("owner_user_id", "anonymous")
 
     if record is None:
         return jsonify(error="Session not found"), 404
+    if owner is not None and owner != requester:
+        return jsonify(error="Session not found"), 404  # avoid existence leak
 
     chat = record.get("chat_messages", []) or []
     layer_history = record.get("layer_history", []) or []
