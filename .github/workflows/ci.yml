@@ -29,6 +29,32 @@ jobs:
           TESTING: 1
           DISABLE_CLEANUP_TIMER: 1
 
+      - name: Run adversarial harness (regression guards)
+        run: pytest tests/harness/ -v --tb=short
+        env:
+          TESTING: 1
+          DISABLE_CLEANUP_TIMER: 1
+
+  security_audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Audit pinned dependencies for known CVEs
+        # `--strict` makes any audit finding fail the job. Use --ignore-vuln
+        # to allow specific CVEs with a comment rationale before it lands
+        # in main; do not silently lower the bar.
+        run: pip-audit --strict --requirement requirements.txt
+
   lint:
     runs-on: ubuntu-latest
     steps:

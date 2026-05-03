@@ -1,0 +1,22 @@
+# Pre-commit hooks for SpatialApp.
+# Install: `pre-commit install` (after `pip install pre-commit`).
+# The harness hook runs the adversarial regression suite — keeps fixes
+# from regressing silently between commits.
+repos:
+  - repo: local
+    hooks:
+      - id: harness
+        name: pytest tests/harness/ (security regression guards)
+        entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && python3 -m pytest tests/harness/ -q --no-header'
+        language: system
+        # Harness is fast (~3s) so we run on every commit, not just push.
+        stages: [commit]
+        pass_filenames: false
+        always_run: true
+
+      - id: ruff
+        name: ruff lint (E, F, W)
+        entry: ruff check . --select E,F,W --ignore E501
+        language: system
+        types: [python]
+        pass_filenames: false
