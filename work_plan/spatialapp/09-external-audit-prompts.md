@@ -233,7 +233,7 @@ prior audit's coverage gaps were noted in these regions):
    - Error messages: any 500 response that leaks stack traces or path info?
 
 For EACH new finding:
-- ID: N2, N3, ... (N1 is already taken by test-env contamination — see prior list above; start from N2)
+- ID: N19, N20, ... (N1-N18 are already taken — see `12-next-audit-input.md` §1.1 for the full list; start from N19)
 - Severity: Critical / High / Medium / Low
 - File:line
 - Symptom (one sentence)

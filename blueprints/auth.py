@@ -151,7 +151,12 @@ def api_health():
     """
     timestamp = datetime.now(timezone.utc).isoformat()
 
-    # Check if a valid token is provided for detailed view
+    # Check if a valid token is provided for detailed view.
+    # Audit N10 follow-up: also set g.user_id on success so the per-user
+    # filters below (layers, sessions, annotation_count) actually scope
+    # to the requester. Without this, every authed user appeared as
+    # 'anonymous' to the filter and saw 0 layers / 0 sessions even when
+    # they owned them.
     auth = request.headers.get('Authorization', '')
     token = auth[7:] if auth.startswith('Bearer ') else ''
     authenticated = False
@@ -160,12 +165,16 @@ def api_health():
         if state.db:
             user = state.db.get_user_by_token(token)
             if user:
+                g.user_id = user['user_id']
                 authenticated = True
         # Shared token check
         if not authenticated and Config.CHAT_API_TOKEN and hmac.compare_digest(token, Config.CHAT_API_TOKEN):
+            g.user_id = 'anonymous'  # shared token has no per-user identity
             authenticated = True
     elif not Config.CHAT_API_TOKEN:
-        # No token configured -- open access, show details
+        # No token configured -- open access, show details. user_id stays
+        # at the request-default of 'anonymous'.
+        g.user_id = 'anonymous'
         authenticated = True
 
     if not authenticated:
