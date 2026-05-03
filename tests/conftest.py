@@ -3,6 +3,15 @@
 import os
 from pathlib import Path
 
+# Audit N1: clear ALL LLM provider keys for the entire test process so
+# no test silently makes a live API call. Individual test files used to
+# clear only ANTHROPIC_API_KEY, leaving GEMINI_API_KEY live (which then
+# routed real Gemini traffic). Tests that need a provider must mock or
+# explicitly re-set inside the test scope.
+for _llm_key in ('ANTHROPIC_API_KEY', 'OPENAI_API_KEY',
+                 'GEMINI_API_KEY', 'GOOGLE_API_KEY'):
+    os.environ[_llm_key] = ''
+
 # Audit M3: point RASTER_DIR at the committed test fixture before any
 # `from config import Config` import in test files. config.py:105 reads
 # RASTER_DIR from env at import time; setting it here makes the bundled

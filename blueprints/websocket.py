@@ -29,6 +29,25 @@ _sid_user_lock = threading.Lock()
 # Mapping: sid -> session_id. Cleared on disconnect / leave_collab.
 _sid_to_collab: dict[str, str] = {}
 
+# Audit M2 + N4: per-chat-session cooperative-cancel flags. When the
+# Stop button on the frontend emits 'chat_abort', the handler sets the
+# flag here; the in-flight _process loop checks it after each event and
+# bails out. Read/write under chat_session_id; eventual stale entries
+# are cleaned up by `_check_and_clear_chat_abort`.
+_chat_abort_flags: dict[str, bool] = {}
+_chat_abort_lock = threading.Lock()
+
+
+def _request_chat_abort(session_id: str) -> None:
+    with _chat_abort_lock:
+        _chat_abort_flags[session_id] = True
+
+
+def _check_and_clear_chat_abort(session_id: str) -> bool:
+    """Return True if abort was requested. Always clears the flag."""
+    with _chat_abort_lock:
+        return _chat_abort_flags.pop(session_id, False)
+
 
 def register_websocket_events(socketio):
     """Register all Socket.IO event handlers on the given socketio instance.
@@ -262,7 +281,12 @@ def register_websocket_events(socketio):
 
     @socketio.on('layer_remove')
     def handle_layer_remove(data):
-        """Broadcast a layer removal across the collab session."""
+        """Broadcast a layer removal across the collab session.
+
+        Audit N2: ownership-checked. A WebSocket client cannot wipe a
+        layer they do not own. Without this check, the C4 isolation fix
+        was bypassable through the collab WebSocket path.
+        """
         from blueprints.collab import append_layer_history
 
         if not isinstance(data, dict):
@@ -274,6 +298,15 @@ def register_websocket_events(socketio):
             user_id = _sid_user_map.get(request.sid, 'anonymous')
             session_id = _sid_to_collab.get(request.sid)
         if not session_id:
+            return
+
+        # Per-user isolation (audit N2 — bypass guard for C4).
+        owner = state.layer_owners.get(layer_name)
+        if owner is not None and owner != user_id:
+            logger.warning(
+                "WS layer_remove rejected: sid=%s user=%s tried to remove "
+                "layer %r owned by %s", request.sid, user_id, layer_name, owner,
+            )
             return
 
         with state.collab_lock:
@@ -288,9 +321,11 @@ def register_websocket_events(socketio):
             })
             record['last_active'] = time.time()
 
-        # Also remove from layer_store so future tools don't see a ghost layer
+        # Also remove from layer_store + owners map so future tools
+        # don't see a ghost layer.
         with state.layer_lock:
             state.layer_store.pop(layer_name, None)
+            state.layer_owners.pop(layer_name, None)
 
         socketio.emit(
             'layer_removed',
@@ -414,7 +449,12 @@ def register_websocket_events(socketio):
                     if event_type == 'error':
                         had_error = True
 
-                    # Store layer in server-side store (with lock)
+                    # Store layer in server-side store (with lock).
+                    # Audit N3: tag ownership in state.layer_owners so the
+                    # C4 isolation filter on /api/layers actually returns
+                    # this layer to its owner. Without the tag the layer
+                    # defaults to 'anonymous' and is invisible to authed
+                    # callers.
                     if event_type == 'layer_add':
                         layer_name = event.get('name')
                         geojson = event.get('geojson')
@@ -426,7 +466,21 @@ def register_websocket_events(socketio):
                                     logger.warning("DB save failed (layer via WS): %s", db_err)
                             with state.layer_lock:
                                 state.layer_store[layer_name] = geojson
+                                state.layer_owners[layer_name] = user_id
                                 _evict_layers_ws()
+
+                    # Audit N4: cooperative cancellation. If the user
+                    # clicked Stop on the frontend, the chat_abort handler
+                    # set the flag; bail out of the loop and tell the room.
+                    if _check_and_clear_chat_abort(session_id):
+                        logger.info("WS chat aborted by user: session=%s", session_id)
+                        socketio.emit(
+                            'chat_event',
+                            {'type': 'aborted', 'text': 'Chat aborted by user'},
+                            room=session_id,
+                            namespace='/',
+                        )
+                        break
 
                     # Emit event to session room
                     socketio.emit('chat_event', event, room=session_id, namespace='/')
@@ -462,6 +516,25 @@ def register_websocket_events(socketio):
 
         # Use socketio.start_background_task for thread safety
         socketio.start_background_task(_process)
+
+    @socketio.on('chat_abort')
+    def handle_chat_abort(data):
+        """Cooperative-cancel an in-flight chat for this session (audit M2 + N4).
+
+        The frontend Stop button emits this event. The in-flight _process
+        loop checks _chat_abort_flags after each event and bails out.
+        Args: {"session_id": str}
+        """
+        if not isinstance(data, dict):
+            return
+        session_id = data.get('session_id')
+        if not isinstance(session_id, str) or not session_id.strip():
+            return
+        _request_chat_abort(session_id)
+        logger.info("chat_abort requested: sid=%s session=%s",
+                    request.sid, session_id)
+        emit('chat_event', {'type': 'abort_acknowledged',
+                            'session_id': session_id})
 
 
 def _evict_layers_ws():
