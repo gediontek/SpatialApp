@@ -66,3 +66,53 @@ class RateLimiter:
 nominatim_limiter = RateLimiter("nominatim", min_interval_seconds=1.0)  # Nominatim policy
 overpass_limiter = RateLimiter("overpass", min_interval_seconds=2.0)    # Be gentle
 valhalla_limiter = RateLimiter("valhalla_public", min_interval_seconds=1.0)  # FOSSGIS policy
+
+
+class PerKeyRateLimiter:
+    """Sliding-window per-key rate limiter for inbound requests.
+
+    Tracks recent timestamps per key (typically a client IP) and rejects
+    when the window would exceed `max_requests`. Thread-safe. In-memory
+    only — counters reset on process restart and are not shared across
+    workers; for multi-worker deployments use Redis or nginx limit_req.
+
+    Audit N11: applied to /api/register to prevent bot-creates / token
+    exhaustion / username enumeration.
+    """
+
+    def __init__(self, name: str, max_requests: int, window_seconds: int):
+        self.name = name
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self._events: dict[str, list[float]] = {}
+        self._lock = threading.Lock()
+
+    def allow(self, key: str) -> bool:
+        """Return True if the key may proceed; record the event when True."""
+        now = time.time()
+        cutoff = now - self.window_seconds
+        with self._lock:
+            history = self._events.setdefault(key, [])
+            # Drop expired
+            while history and history[0] < cutoff:
+                history.pop(0)
+            if len(history) >= self.max_requests:
+                return False
+            history.append(now)
+            # Drop the bucket entirely if it ever empties to bound memory.
+            if not history:
+                self._events.pop(key, None)
+            return True
+
+    def reset(self, key: str = None) -> None:
+        """Reset state. Useful in tests."""
+        with self._lock:
+            if key is None:
+                self._events.clear()
+            else:
+                self._events.pop(key, None)
+
+
+# 5 registrations per IP per hour — covers typical UX (forgot-token scenarios)
+# while blocking unattended bot-create loops. Tunable via env if needed later.
+register_limiter = PerKeyRateLimiter("register", max_requests=5, window_seconds=3600)

@@ -93,8 +93,20 @@ def require_api_token(f):
 
 @auth_bp.route('/api/register', methods=['POST'])
 def api_register():
-    """Register a new user. Returns user_id and API token."""
+    """Register a new user. Returns user_id and API token.
+
+    Audit N11: per-IP rate limit (5 / hour) blocks bot-create loops.
+    """
     from flask import current_app
+    from services.rate_limiter import register_limiter
+
+    # Per-IP throttle. request.remote_addr falls back to 'unknown' when
+    # the client header is unparseable; behind a real proxy use
+    # X-Forwarded-For after configuring trusted proxies upstream.
+    client_ip = request.remote_addr or 'unknown'
+    if not register_limiter.allow(client_ip):
+        return jsonify(error='Too many registration attempts. Try again later.'), 429
+
     if not state.db:
         return jsonify(error='Database not available'), 500
 
