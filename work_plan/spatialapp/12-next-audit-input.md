@@ -1,8 +1,9 @@
 # SpatialApp v2 — Input package for next external audit
 
 **Status:** **DRAFT — actively updated each cycle.** Submit only when the user invokes external audit.
-**Last updated:** 2026-05-03 (cycle 4 — 16 findings beyond the original audit, all closed; N15 was a verification with no fix needed)
+**Last updated:** 2026-05-03 (cycle 4 + auditor-1 follow-up — 17 findings beyond the original audit, all closed; N15 was a verification with no fix needed)
 **Updated by:** autonomous /auto-solve cycle
+**Repo state:** branch `main`, **18 commits ahead of origin** (run `git log origin/main..HEAD --oneline` to enumerate). Working tree clean. **Next external auditor: new finding IDs MUST start at N18 — IDs N1-N17 are taken.** Latest commit at draft time: `336a9ed`.
 **Companion docs:**
 - [`07-v2-audit-findings.md`](07-v2-audit-findings.md) — original external audit (12 findings)
 - [`08-v2-bugfree-plan.md`](08-v2-bugfree-plan.md) — Acceptance-First Hardening plan (v1.2)
@@ -42,21 +43,23 @@
 | N13 | Low (pre-emptive) | `LLMCache.make_key` did not include `user_id` → cross-user cache leak risk if/when wired into `nl_gis/chat.py` | `6a78e74` |
 | N14 | Medium | WS `layer_style` accepted unbounded `style` dict + had no throttle → broadcast amplification DoS; cap 256 char name, 8 KB style, 10 ev/sec/user/session | `8d72500` |
 | N15 | — | `/api/usage` cross-user check — verified clean (already gates by `entry["user_id"]`) | (no fix) |
-| N16 | Medium | WS `chat_message` `context` dict was unbounded → amplified LLM cost + log bloat; validate session_id + active_layers cap 256 + total ≤ 16 KB | `<this commit>` |
-| N17 | Low | `/.well-known/security.txt` (RFC 9116) added with `SECURITY_CONTACT` env var | `<this commit>` |
+| N16 | Medium | WS `chat_message` `context` dict was unbounded → amplified LLM cost + log bloat; validate session_id + active_layers cap 256 + total ≤ 16 KB | `737c48d` |
+| N17 | Low | `/.well-known/security.txt` (RFC 9116) added with `SECURITY_CONTACT` env var | `737c48d` |
+| N18 | High | C1 sandbox child env stripped HOME/PYTHONPATH so harshly that macOS user-site / non-`.venv` layouts could not import shapely+numpy → switch to copy-and-deny env (still strips secrets); RCE harness gains EXECUTE_CORPUS that actually runs each allowed snippet | `336a9ed` |
 
-**Total: 28 findings closed** (12 audit + 16 self-discovered post-fix; N15 was a clean check).
+**Total: 29 findings closed** (12 audit + 17 self-discovered post-fix; N15 was a clean check).
 
 ### 1.2 Test infrastructure added
 
-- `tests/harness/` directory — opt-in adversarial suite (`pytest -m harness`):
+- `tests/harness/` directory — opt-in adversarial suite (`pytest -m harness`), **51 passed / 1 skipped at draft time**:
   - `test_csrf_enforcement.py` — 15-route property test, distinguishes CSRF rejection (sentinel HTTP 419) from other 400s
-  - `test_rce_sandbox.py` — 14-payload deny corpus + 7-payload allow corpus
+  - `test_rce_sandbox.py` — 14-payload deny corpus + 7-payload allow corpus + **5 EXECUTE_CORPUS tests** (added after N18; previous AST-only coverage missed an env regression)
   - `test_multi_user_isolation.py` — 6 scenario tests (layer/annotation/chat-session, 2-user fixture)
   - `test_secret_validation.py` — 3 cases on `Config.validate()`
   - `test_layer_store_identity.py` — 4 ChatSession identity invariants
   - `test_provider_mixed_content.py` — 3 OpenAI converter cases
   - `test_env_isolation.py` — 4 LLM key guards
+  - `test_register_rate_limit.py` — 4 cases for N11 (per-key limiter primitive + endpoint enforcement + per-IP isolation)
 - `tests/conftest.py` — root-level: clears LLM keys + sets `RASTER_DIR` to fixture dir before any `Config` import.
 - `tests/fixtures/raster/geog_wgs84.tif` — committed 611-byte WGS84 raster.
 
@@ -64,13 +67,13 @@
 
 | | Before (pre-session) | After (current) |
 |---|---|---|
-| Pre-existing tests | 1,437 passed / 31 skipped | **1,503 passed / 7 skipped** |
-| Harness tests | 0 | **44 (all green)** |
+| Full suite (`pytest -q --ignore=tests/e2e`) | 1,437 passed / 31 skipped | **1,512 passed / 8 skipped** (verified 2026-05-03 after N18) |
+| Harness suite (`pytest -m harness`) | 0 | **51 passed / 1 skipped** (1 intentional placeholder) |
 | Net regressions | — | **0** |
 
 ## 2. What the auditor should focus on
 
-The previous audit explicitly self-reported ~85% surface coverage. The 21 closed findings teach what classes of bug to expect; this section names the surface still under-audited.
+The previous audit explicitly self-reported ~85% surface coverage. The 29 closed findings teach what classes of bug to expect; this section names the surface still under-audited.
 
 ### 2.1 High-leverage areas for the next audit
 
@@ -112,7 +115,7 @@ The previous audit explicitly self-reported ~85% surface coverage. The 21 closed
 (Updated each cycle as I find/fix more.)
 
 ### Cycle 0 — done
-Completed the 21 findings above. Repo on `main`, 7 unpushed commits (`ed21e66` → `d68d5e4`).
+Completed the original 12 audit findings + 9 self-discovered (N1-N9). Repo on `main`, started this rolling work on top of those.
 
 ### Cycle 1 — done
 - ✅ **Anthropic + Gemini provider symmetry of M4 — clean.** Anthropic uses native message format (no converter; passthrough). Gemini's `_convert_messages` already iterates ALL block types (text + tool_use + tool_result) and emits each as a part — so no symmetric drop bug exists. M4 was OpenAI-converter-specific.
@@ -143,6 +146,16 @@ Completed the 21 findings above. Repo on `main`, 7 unpushed commits (`ed21e66` �
 - ⏭ DB concurrency / index races — single-worker dev safe; multi-worker production needs operational fix (gunicorn preload + once-only migration), not a code fix.
 - ⏭ Dependency CVE sweep — operational, not code; recommend running `pip-audit` in CI.
 
+### Auditor-1 follow-up (2026-05-03) — done
+External reviewer caught 5 issues in the doc + a real C1 regression. All addressed:
+- ✅ N18 (the regression) — see §1.1.
+- ✅ Stale `<this commit>` placeholders in N16/N17 → real shas (`737c48d`).
+- ✅ "next IDs start at N10" → corrected to N18 in header.
+- ✅ "44 harness tests" → corrected to 51; `test_register_rate_limit.py` added to §1.2 list.
+- ✅ "21 closed findings" → corrected to 29 throughout.
+- ✅ "1,503 passed / 7 skipped" → corrected to verified `1,512 passed / 8 skipped`.
+- ✅ "7 unpushed commits" → corrected to 18 in header.
+
 ### Cycle 5 — possible next directions
 - [ ] Replace placeholder `SECURITY_CONTACT` default with a real inbox before any deploy
 - [ ] Add `pip-audit` step to GitHub Actions CI
@@ -154,15 +167,15 @@ Completed the 21 findings above. Repo on `main`, 7 unpushed commits (`ed21e66` �
 ## 4. Suggested external prompts to use
 
 Use [`09-external-audit-prompts.md`](09-external-audit-prompts.md) Prompts 1, 3, 5 as the primary input. Recommended adjustments for this round:
-- Prompt 3 (findings completeness) — the "previous findings" list now includes N1-N9; new findings start at N10.
+- Prompt 3 (findings completeness) — the "previous findings" list NOW INCLUDES N1-N17 + N18; **new findings MUST start at N19**. The `09-external-audit-prompts.md` file currently still says "start at N2" (its own numbering predates the rolling work) — override that with this file when handing it to the reviewer.
 - Add a new explicit focus area: "the ten under-audited surfaces in §2.1 of `12-next-audit-input.md`" — reviewer should sweep those before generic ones.
 - Provide the auditor with the current commit sha (use `git log -1 --oneline`) so they can re-run the same probes against the same code.
 
 ## 5. Submission checklist (for when you DO audit)
 
-- [ ] Push the 7+ unpushed commits OR generate a `git format-patch` bundle for the auditor.
-- [ ] Confirm `pytest -m harness` is green on a clean checkout.
-- [ ] Confirm `pytest --ignore=tests/e2e` is green (1,503 passed / 7 skipped baseline).
+- [ ] Push the 18+ unpushed commits OR generate a `git format-patch` bundle for the auditor.
+- [ ] Confirm `pytest -m harness` is green on a clean checkout (current: 51 passed / 1 skipped).
+- [ ] Confirm `pytest --ignore=tests/e2e` is green (current verified: **1,512 passed / 8 skipped** as of commit `336a9ed`).
 - [ ] Hand the auditor: this doc, `09-external-audit-prompts.md` Prompts 1+3+5, and the current commit sha.
-- [ ] Tell the auditor: "do not re-flag any ID in §1.1; new findings start at N10."
+- [ ] Tell the auditor: "do not re-flag any ID in §1.1; **new findings start at N19**."
 - [ ] Budget: 1-2 reviewer hours per prompt; total ~6 hours.
