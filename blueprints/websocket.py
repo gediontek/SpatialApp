@@ -37,6 +37,11 @@ _sid_to_collab: dict[str, str] = {}
 _chat_abort_flags: dict[str, bool] = {}
 _chat_abort_lock = threading.Lock()
 
+# Audit N14: per-user-per-collab-session throttle on layer_style events
+# so a single client cannot flood the room with style updates.
+from services.rate_limiter import PerKeyRateLimiter as _PerKeyLimiter
+_layer_style_limiter = _PerKeyLimiter("ws_layer_style", max_requests=10, window_seconds=1)
+
 
 def _request_chat_abort(session_id: str) -> None:
     with _chat_abort_lock:
@@ -336,7 +341,14 @@ def register_websocket_events(socketio):
 
     @socketio.on('layer_style')
     def handle_layer_style(data):
-        """Broadcast a layer-style change."""
+        """Broadcast a layer-style change.
+
+        Audit N14:
+          - cap layer_name length (256) and style dict serialized size (8KB)
+            to prevent broadcast amplification DoS;
+          - throttle per-user-per-session at 10 events/sec to prevent
+            flooding the room.
+        """
         from blueprints.collab import append_layer_history
 
         if not isinstance(data, dict):
@@ -345,11 +357,24 @@ def register_websocket_events(socketio):
         style = data.get('style')
         if not isinstance(layer_name, str) or not isinstance(style, dict):
             return
+        # N14: cap input sizes.
+        if len(layer_name) > 256:
+            return
+        try:
+            style_size = len(json.dumps(style))
+        except (TypeError, ValueError):
+            return
+        if style_size > 8 * 1024:
+            return
 
         with _sid_user_lock:
             user_id = _sid_user_map.get(request.sid, 'anonymous')
             session_id = _sid_to_collab.get(request.sid)
         if not session_id:
+            return
+
+        # N14: per-user-per-session throttle, 10 events/sec.
+        if not _layer_style_limiter.allow(f"{session_id}:{user_id}"):
             return
 
         with state.collab_lock:
