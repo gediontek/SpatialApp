@@ -123,9 +123,18 @@ def _persist_chat_session(session_id: str, session, user_id: str = "anonymous"):
 @chat_bp.route('/api/chat', methods=['POST'])
 @require_api_token
 def api_chat():
-    """Process a natural language message and return SSE event stream."""
+    """Process a natural language message and return SSE event stream.
+
+    Audit N12: per-user rate limit (60 msg/min) caps automated bursts
+    that would otherwise burn LLM provider tokens.
+    """
     from flask import current_app
+    from services.rate_limiter import chat_limiter
     import time as _time
+
+    user_id = getattr(g, 'user_id', 'anonymous')
+    if not chat_limiter.allow(user_id):
+        return jsonify(error='Chat rate limit exceeded (60 msg/min). Slow down.'), 429
 
     data = request.get_json(silent=True)
     if not data or 'message' not in data:
@@ -139,7 +148,6 @@ def api_chat():
 
     session_id = data.get('session_id', 'default')
     map_context = data.get('context', {})
-    user_id = getattr(g, 'user_id', 'anonymous')
 
     plan_mode = data.get('plan_mode', False)
 

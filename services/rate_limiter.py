@@ -116,3 +116,8 @@ class PerKeyRateLimiter:
 # 5 registrations per IP per hour — covers typical UX (forgot-token scenarios)
 # while blocking unattended bot-create loops. Tunable via env if needed later.
 register_limiter = PerKeyRateLimiter("register", max_requests=5, window_seconds=3600)
+
+# Per-user chat throttle. 60 messages per minute is well above any human
+# typing rate but caps automated bursts that would otherwise burn provider
+# tokens. Audit N12.
+chat_limiter = PerKeyRateLimiter("chat", max_requests=60, window_seconds=60)
