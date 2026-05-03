@@ -232,7 +232,8 @@
     <script nonce="{{ csp_nonce }}" src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
     <!-- Socket.IO client (optional WebSocket transport for chat) -->
     <script nonce="{{ csp_nonce }}" src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script>
-    <!-- Custom JS -->
+    <!-- Custom JS — auth.js MUST load first (provides window.SpatialAuth + authedFetch) -->
+    <script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='js/auth.js') }}"></script>
     <script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='js/layers.js') }}"></script>
     <script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='js/chat.js') }}"></script>
     <script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='js/main.js') }}"></script>

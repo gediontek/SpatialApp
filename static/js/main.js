@@ -1,12 +1,12 @@
 $(document).ready(function() {
-    // CSRF token for AJAX requests
-    var csrfToken = $('meta[name="csrf-token"]').attr('content');
-
-    // Configure AJAX to include CSRF token
+    // Audit H1: centralized auth — attach BOTH CSRF token AND
+    // Authorization: Bearer (when present) on every state-mutating
+    // jQuery ajax. Helper lives in static/js/auth.js (loaded earlier
+    // by templates/index.html).
     $.ajaxSetup({
         beforeSend: function(xhr, settings) {
-            if (!/^(GET|HEAD|OPTIONS|TRACE)$/i.test(settings.type) && !this.crossDomain) {
-                xhr.setRequestHeader("X-CSRFToken", csrfToken);
+            if (window.SpatialAuth && typeof window.SpatialAuth.authedAjaxBeforeSend === 'function') {
+                window.SpatialAuth.authedAjaxBeforeSend(xhr, settings);
             }
         }
     });

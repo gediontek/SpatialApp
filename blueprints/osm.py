@@ -410,21 +410,33 @@ def api_auto_classify():
             'colors': CATEGORY_COLORS,
         }, None, None
 
+    # Audit H4: with-statement on ThreadPoolExecutor blocks at __exit__
+    # until the worker finishes, so future.result(timeout=...) does not
+    # actually bound request time. Use a module-level executor and
+    # explicitly cancel; the worker thread is daemonic and will be
+    # garbage-collected. For hard kills, swap to subprocess-based worker.
+    import threading
+    cancel_event = threading.Event()
+    executor = ThreadPoolExecutor(max_workers=1)
     try:
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(_do_classify)
+        future = executor.submit(_do_classify)
+        try:
             result, error_msg, status_code = future.result(timeout=300)
-
+        except FutureTimeout:
+            current_app.logger.error("Auto-classification timed out after 300s")
+            cancel_event.set()
+            future.cancel()
+            return jsonify(error='Classification timed out. Try a smaller area.'), 504
         if error_msg:
             return jsonify(error=error_msg), status_code
         return jsonify(**result)
-
-    except FutureTimeout:
-        current_app.logger.error("Auto-classification timed out after 300s")
-        return jsonify(error='Classification timed out. Try a smaller area.'), 504
     except Exception as e:
         current_app.logger.error(f"Auto-classification error: {str(e)}", exc_info=True)
         return jsonify(error='An internal error occurred'), 500
+    finally:
+        # wait=False: do not block the request on the worker. Daemon thread
+        # will exit when it finishes or when the process restarts.
+        executor.shutdown(wait=False)
 
 
 @osm_bp.route('/api/category-colors')

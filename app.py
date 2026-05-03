@@ -59,34 +59,26 @@ def create_app(testing=False):
         app.config['TESTING'] = True
         os.environ['TESTING'] = '1'
 
-    # Validate critical config
+    # Validate critical config. In production (FLASK_DEBUG=false) re-raise
+    # so a default/insecure SECRET_KEY blocks startup. In dev/testing,
+    # downgrade to a warning so local iteration is not interrupted.
     try:
         Config.validate()
     except RuntimeError as e:
-        logging.warning(f"Config warning: {e}")
+        flask_debug = os.environ.get('FLASK_DEBUG', 'false').lower() in ('1', 'true', 'yes')
+        if not (flask_debug or testing or app.config.get('TESTING')):
+            raise
+        logging.warning(f"Config warning (allowed in DEBUG/TESTING): {e}")
 
     # Initialize CSRF protection
     csrf = CSRFProtect(app)
     # Store csrf on app for blueprint access
     app.extensions['csrf'] = csrf
 
-    # ------------------------------------------------------------------
-    # Disable CSRF for API endpoints with proper authorization.
-    # API clients send Bearer tokens or X-CSRFToken headers.
-    # CSRF tokens sent via headers (AJAX) are already validated by
-    # Flask-WTF, but we also exempt endpoints with Bearer auth.
-    # ------------------------------------------------------------------
-    @app.before_request
-    def _disable_csrf_for_api_endpoints():
-        """Skip CSRF validation for /api/* endpoints that have Authorization header."""
-        if request.path.startswith('/api/'):
-            auth = request.headers.get('Authorization', '')
-            if auth.startswith('Bearer '):
-                # API request with Bearer token — skip CSRF validation
-                request.environ['csrf.exempt'] = True
-            # Note: X-CSRFToken header validation is automatic via Flask-WTF,
-            # but AJAX requests may fail if session token is missing. This is expected
-            # behavior and the client should include the CSRF token from the HTML.
+    # CSRF exemptions for API endpoints are registered after blueprint
+    # registration below (csrf.exempt requires the view function object,
+    # which only exists after blueprint registration). Per-route Bearer
+    # auth is enforced via @require_api_token on each exempt endpoint.
 
     # ------------------------------------------------------------------
     # CSP nonce (v2.1 Plan 13 follow-up — removes 'unsafe-inline' from
@@ -165,14 +157,25 @@ def create_app(testing=False):
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(collab_bp)
 
-    # CSRF exemptions for API endpoints
-    csrf.exempt(osm_bp.name + '.api_auto_classify')
-    csrf.exempt(chat_bp.name + '.api_chat')
-    csrf.exempt(layers_bp.name + '.api_import_layer')
-    csrf.exempt(layers_bp.name + '.api_delete_layer')
-    csrf.exempt(auth_bp.name + '.api_register')
-    csrf.exempt(dashboard_bp.name + '.api_delete_session')
-    csrf.exempt(collab_bp.name + '.api_collab_create')
+    # CSRF exemptions for API endpoints — pass the view function objects,
+    # NOT endpoint strings. Flask-WTF's _is_exempt() compares against
+    # f"{view.__module__}.{view.__name__}" (e.g. 'blueprints.chat.api_chat'),
+    # not the endpoint string ('chat.api_chat'). Passing strings silently
+    # fails to exempt. See work_plan/spatialapp/10-pr0-csrf-spike-report.md.
+    # All exempted endpoints are protected by @require_api_token.
+    from blueprints.osm import api_auto_classify
+    from blueprints.chat import api_chat
+    from blueprints.layers import api_import_layer, api_delete_layer
+    from blueprints.auth import api_register
+    from blueprints.dashboard import api_delete_session
+    from blueprints.collab import api_collab_create
+    csrf.exempt(api_auto_classify)
+    csrf.exempt(api_chat)
+    csrf.exempt(api_import_layer)
+    csrf.exempt(api_delete_layer)
+    csrf.exempt(api_register)
+    csrf.exempt(api_delete_session)
+    csrf.exempt(api_collab_create)
 
     # ------------------------------------------------------------------
     # Error handlers
@@ -290,10 +293,24 @@ def create_app(testing=False):
     if state.db:
         try:
             from blueprints.layers import _evict_layers_if_needed
+            # Query layer_name -> owner_user_id directly so we can populate
+            # state.layer_owners alongside state.layer_store. (Audit C4.)
+            try:
+                from services.database import get_connection as _get_conn
+                conn = _get_conn()
+                owner_rows = conn.execute(
+                    "SELECT name, user_id FROM layers"
+                ).fetchall()
+                owners_by_name = {row["name"]: row["user_id"] or "anonymous"
+                                  for row in owner_rows}
+            except Exception:
+                owners_by_name = {}
             for layer_meta in state.db.get_all_layers():
-                geojson = state.db.get_layer(layer_meta['name'])
+                name = layer_meta['name']
+                geojson = state.db.get_layer(name)
                 if geojson:
-                    state.layer_store[layer_meta['name']] = geojson
+                    state.layer_store[name] = geojson
+                    state.layer_owners[name] = owners_by_name.get(name, "anonymous")
             if state.layer_store:
                 _evict_layers_if_needed()
                 logging.info(f"Restored {len(state.layer_store)} layers from database")

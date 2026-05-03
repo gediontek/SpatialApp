@@ -148,9 +148,19 @@ var ChatPanel = (function() {
 
     function bindEvents(map, layerManager) {
         $('#chatSendBtn').on('click', function() {
-            if (currentAbortController && $(this).text() === 'Stop') {
-                currentAbortController.abort();
-                currentAbortController = null;
+            // Audit M2: Stop must abort SSE + plan-execute fetches AND
+            // signal the server to cancel WebSocket-side tool dispatch.
+            if ($(this).text() === 'Stop') {
+                if (currentAbortController) {
+                    try { currentAbortController.abort(); } catch (_e) {}
+                    currentAbortController = null;
+                }
+                if (_useWebSocket && _socket && _socket.connected) {
+                    try {
+                        _socket.emit('chat_abort', { session_id: sessionId });
+                    } catch (_e) {}
+                }
+                enableInput();
                 return;
             }
             sendMessage(map, layerManager);
@@ -222,14 +232,10 @@ var ChatPanel = (function() {
         // Show typing indicator
         var typingId = showTyping();
 
-        // Send via fetch + SSE
-        var csrfToken = document.querySelector('meta[name="csrf-token"]');
-        fetch('/api/chat', {
+        // Audit H1: use centralized authedFetch (CSRF + Bearer).
+        (window.authedFetch || fetch)('/api/chat', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-CSRFToken': csrfToken ? csrfToken.getAttribute('content') : ''
-            },
+            headers: { 'Content-Type': 'application/json' },
             signal: currentAbortController.signal,
             body: JSON.stringify({
                 message: message,
@@ -725,14 +731,19 @@ var ChatPanel = (function() {
         $('#chatSendBtn').text('Stop');
 
         var typingId = showTyping();
-        var csrfToken = document.querySelector('meta[name="csrf-token"]');
 
-        fetch('/api/chat/execute-plan', {
+        // Audit H1+M2: use centralized authedFetch and thread an
+        // AbortController so the Stop button can cancel plan execution
+        // (was missing — Stop only aborted SSE chat).
+        if (currentAbortController) {
+            try { currentAbortController.abort(); } catch (_e) {}
+        }
+        currentAbortController = new AbortController();
+
+        (window.authedFetch || fetch)('/api/chat/execute-plan', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-CSRFToken': csrfToken ? csrfToken.getAttribute('content') : ''
-            },
+            headers: { 'Content-Type': 'application/json' },
+            signal: currentAbortController.signal,
             body: JSON.stringify({
                 plan_steps: planSteps,
                 session_id: sessionId

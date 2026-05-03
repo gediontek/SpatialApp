@@ -156,8 +156,13 @@ var LayerManager = (function() {
             delete layers[name];
             refreshUI();
 
-            // Also remove from server
-            fetch('/api/layers/' + encodeURIComponent(name), { method: 'DELETE' });
+            // Audit M1: server-side delete must include CSRF + Bearer
+            // auth or the 400 from CSRFProtect leaves a server-side
+            // ghost layer. Use the shared authedFetch helper.
+            (window.authedFetch || fetch)(
+                '/api/layers/' + encodeURIComponent(name),
+                { method: 'DELETE' }
+            ).catch(function () { /* best effort */ });
         }
     }
 

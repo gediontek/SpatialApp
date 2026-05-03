@@ -140,7 +140,10 @@ def _persist_annotation(annotation, user_id=None):
 
     DB is source of truth. If DB write fails, the exception propagates
     and the in-memory cache is NOT updated (caller's error handler catches it).
+
+    Audit C4: tag ownership on the in-memory feature too so reads can filter.
     """
+    uid = user_id or 'anonymous'
     if state.db:
         state.db.save_annotation(
             category_name=annotation['properties'].get('category_name', 'unknown'),
@@ -148,25 +151,29 @@ def _persist_annotation(annotation, user_id=None):
             color=annotation['properties'].get('color', '#3388ff'),
             source=annotation['properties'].get('source', 'manual'),
             properties=annotation.get('properties'),
-            user_id=user_id or 'anonymous',
+            user_id=uid,
         )
-    # Only update in-memory cache after DB succeeds
+    # Only update in-memory cache after DB succeeds. Tag ownership inline.
+    annotation.setdefault('properties', {})['owner_user_id'] = uid
     state.geo_coco_annotations.append(annotation)
     save_annotations_to_file()
 
 
 def _clear_all_annotations(user_id=None):
-    """Clear all annotations: DB first, then in-memory cache.
-    Must be called with annotation_lock held.
+    """Clear annotations from DB. Caller manages in-memory cache.
 
-    DB is source of truth. If DB clear fails, the exception propagates
-    and the in-memory cache is NOT cleared.
+    Must be called with annotation_lock held. If user_id is given,
+    only that user's rows are deleted; otherwise the legacy behavior
+    (clear ALL rows + reset in-memory file) is preserved.
+
+    DB is source of truth. If DB clear fails, the exception propagates.
     """
     if state.db:
         state.db.clear_annotations(user_id=user_id)
-    # Only clear in-memory cache after DB succeeds
-    state.geo_coco_annotations.clear()
-    initialize_annotations_file()
+    if user_id is None:
+        # Legacy behavior: clear in-memory + reset file.
+        state.geo_coco_annotations.clear()
+        initialize_annotations_file()
 
 
 # ------------------------------------------------------------------
@@ -182,12 +189,13 @@ def saved_annotations():
 @require_api_token
 def save_annotation():
     """Save a single annotation."""
-    from flask import current_app
+    from flask import current_app, g
     data = request.json
 
     if not data or 'geometry' not in data:
         return jsonify(success=False, error='Invalid annotation data'), 400
 
+    user_id = getattr(g, 'user_id', 'anonymous')
     try:
         with state.annotation_lock:
             next_id = max((a.get("id", 0) for a in state.geo_coco_annotations), default=0) + 1
@@ -202,7 +210,7 @@ def save_annotation():
                 },
                 "geometry": data['geometry']
             }
-            _persist_annotation(annotation)
+            _persist_annotation(annotation, user_id=user_id)
 
         current_app.logger.info(f"Annotation saved: {annotation['id']}")
         return jsonify(success=True, id=annotation['id'])
@@ -215,8 +223,9 @@ def save_annotation():
 @require_api_token
 def add_osm_annotations():
     """Add OSM features as annotations."""
-    from flask import current_app
+    from flask import current_app, g
     data = request.json
+    user_id = getattr(g, 'user_id', 'anonymous')
 
     if not data:
         return jsonify(success=False, error='No data provided'), 400
@@ -263,7 +272,7 @@ def add_osm_annotations():
                         }
                     }
 
-                    _persist_annotation(annotation)
+                    _persist_annotation(annotation, user_id=user_id)
                     added_count += 1
 
         return jsonify(success=True, added=added_count)
@@ -273,24 +282,37 @@ def add_osm_annotations():
 
 
 @annotation_bp.route('/get_annotations')
+@require_api_token
 def get_annotations():
-    """Get all annotations."""
+    """Get all annotations visible to the requesting user (audit C4)."""
+    from flask import g
+    user_id = getattr(g, 'user_id', 'anonymous')
     with state.annotation_lock:
-        features = list(state.geo_coco_annotations)
+        features = [
+            f for f in state.geo_coco_annotations
+            if (f.get('properties') or {}).get('owner_user_id', 'anonymous') == user_id
+        ]
     return jsonify({"type": "FeatureCollection", "features": features})
 
 
 @annotation_bp.route('/clear_annotations', methods=['POST'])
 @require_api_token
 def clear_annotations():
-    """Clear all annotations."""
-    from flask import current_app
+    """Clear all annotations belonging to the requesting user (audit C4)."""
+    from flask import current_app, g
 
+    user_id = getattr(g, 'user_id', 'anonymous')
     try:
         with state.annotation_lock:
             if state.geo_coco_annotations:
                 backup_annotations()
-            _clear_all_annotations()
+            _clear_all_annotations(user_id=user_id)
+            # Drop only this user's annotations from in-memory cache.
+            state.geo_coco_annotations[:] = [
+                f for f in state.geo_coco_annotations
+                if (f.get('properties') or {}).get('owner_user_id', 'anonymous') != user_id
+            ]
+            save_annotations_to_file()
 
         current_app.logger.info("All annotations cleared.")
         return jsonify(success=True)
@@ -317,18 +339,23 @@ def finalize_annotations():
 
 
 @annotation_bp.route('/export_annotations/<format_type>')
+@require_api_token
 def export_annotations(format_type):
-    """Export annotations in different formats."""
-    from flask import current_app
+    """Export annotations belonging to the requesting user (audit C4)."""
+    from flask import current_app, g
     valid_formats = ['geojson', 'shapefile', 'geopackage']
     if format_type not in valid_formats:
         return jsonify(error=f'Invalid format. Choose from: {", ".join(valid_formats)}'), 400
 
+    user_id = getattr(g, 'user_id', 'anonymous')
     with state.annotation_lock:
-        if not state.geo_coco_annotations:
+        # Snapshot under lock, filtered by owner.
+        features_copy = [
+            f for f in state.geo_coco_annotations
+            if (f.get('properties') or {}).get('owner_user_id', 'anonymous') == user_id
+        ]
+        if not features_copy:
             return jsonify(error='No annotations to export'), 400
-        # Snapshot under lock
-        features_copy = list(state.geo_coco_annotations)
 
     try:
         # Create GeoDataFrame from snapshot

@@ -23,7 +23,19 @@ def _evict_layers_if_needed():
     """Remove oldest layers when store exceeds limit. Call under layer_lock."""
     while len(state.layer_store) > state.MAX_LAYERS_IN_MEMORY:
         evicted_name, _ = state.layer_store.popitem(last=False)
+        state.layer_owners.pop(evicted_name, None)
         logging.info(f"Evicted layer '{evicted_name}' from memory (limit: {state.MAX_LAYERS_IN_MEMORY})")
+
+
+def _user_can_see(layer_name: str, user_id: str) -> bool:
+    """Per-user isolation check (audit C4, path B).
+
+    Returns True if the requesting user is the layer's owner. Layers
+    with no recorded owner default to 'anonymous' and are visible only
+    to anonymous callers.
+    """
+    owner = state.layer_owners.get(layer_name, "anonymous")
+    return owner == user_id
 
 
 # ------------------------------------------------------------------
@@ -43,10 +55,13 @@ def api_get_layers():
     per_page : int, optional
         Items per page, clamped to [1, 500] (default: 100).
     """
-    # Build full list under the lock
+    user_id = getattr(g, 'user_id', 'anonymous')
+    # Build full list under the lock, filtering by user (audit C4).
     with state.layer_lock:
         all_layers = []
         for name, geojson in state.layer_store.items():
+            if not _user_can_see(name, user_id):
+                continue
             feature_count = len(geojson.get('features', [])) if isinstance(geojson, dict) else 0
             all_layers.append({
                 'name': name,
@@ -96,11 +111,16 @@ def api_delete_layer(layer_name):
     with state.layer_lock:
         if layer_name not in state.layer_store:
             return jsonify(error='Layer not found'), 404
+        # Per-user isolation (audit C4): only the owner may delete.
+        if not _user_can_see(layer_name, user_id):
+            # Same 404 to avoid leaking that the layer exists for another user.
+            return jsonify(error='Layer not found'), 404
         # DB first: if delete fails, in-memory stays consistent
         if state.db:
             state.db.delete_layer(layer_name, user_id=user_id)
         # Only remove from cache after DB succeeds
         del state.layer_store[layer_name]
+        state.layer_owners.pop(layer_name, None)
         return jsonify(success=True)
 
 
@@ -161,9 +181,11 @@ def api_import_layer():
             # DB first: if save fails, in-memory stays consistent
             if state.db:
                 state.db.save_layer(layer_name, geojson_data, user_id=uid)
-            # Only update cache after DB succeeds
+            # Only update cache after DB succeeds. Tag ownership so
+            # /api/layers + delete enforce isolation. (Audit C4.)
             with state.layer_lock:
                 state.layer_store[layer_name] = geojson_data
+                state.layer_owners[layer_name] = uid
                 _evict_layers_if_needed()
 
             return jsonify(

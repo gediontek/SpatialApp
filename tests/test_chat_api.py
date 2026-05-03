@@ -6,9 +6,14 @@ import pytest
 import tempfile
 from unittest.mock import patch, MagicMock
 
-os.environ['FLASK_DEBUG'] = 'false'
+# Audit N1: clear ALL LLM provider keys, not just Anthropic. With only
+# ANTHROPIC_API_KEY cleared, tests that hit the chat endpoint were
+# making real Gemini calls when GEMINI_API_KEY was set in the dev env.
+os.environ['FLASK_DEBUG'] = 'true'  # downgrade Config.validate to a warning
 os.environ['SECRET_KEY'] = 'test-secret-key'
-os.environ['ANTHROPIC_API_KEY'] = ''
+for _provider_key in ('ANTHROPIC_API_KEY', 'OPENAI_API_KEY',
+                      'GEMINI_API_KEY', 'GOOGLE_API_KEY'):
+    os.environ[_provider_key] = ''
 
 from app import app
 from state import layer_store, chat_sessions

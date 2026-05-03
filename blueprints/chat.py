@@ -83,12 +83,20 @@ def _get_chat_session(session_id: str = "default", user_id: str = "anonymous"):
             return entry["session"]
 
         session = ChatSession(layer_store=state.layer_store, layer_lock=state.layer_lock)
-        # Restore message history from database
+        # Restore message history from database, honoring stored ownership.
+        # If the session exists in the DB but belongs to a different user,
+        # return None so the caller responds 403 — never silently take over
+        # ownership. (Audit C3.)
         if state.db:
             try:
-                saved = state.db.get_chat_session(session_id)
-                if saved:
-                    session.messages = saved
+                saved = state.db.get_chat_session_with_owner(session_id)
+                if saved is not None:
+                    owner_uid = saved.get("user_id")
+                    if owner_uid and owner_uid != user_id:
+                        return None  # Caller handles as 403
+                    msgs = saved.get("messages") or []
+                    if msgs:
+                        session.messages = msgs
             except Exception as db_err:
                 current_app.logger.warning(f"DB restore failed (session): {db_err}")
         state.chat_sessions[session_id] = {"session": session, "last_access": _t.time(), "user_id": user_id}

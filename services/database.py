@@ -319,6 +319,12 @@ def get_all_annotations(user_id: str = None, limit: int = None, offset: int = 0)
         except (json.JSONDecodeError, TypeError):
             logger.warning(f"Skipping corrupt annotation id={row['id']}")
             continue
+        # Include owner_user_id so in-memory readers can filter (audit C4).
+        # Try column access; older test DBs may not have user_id.
+        try:
+            owner_uid = row["user_id"] or "anonymous"
+        except (IndexError, KeyError):
+            owner_uid = "anonymous"
         features.append({
             "type": "Feature",
             "id": row["id"],
@@ -328,6 +334,7 @@ def get_all_annotations(user_id: str = None, limit: int = None, offset: int = 0)
                 "color": row["color"],
                 "source": row["source"],
                 "created_at": row["created_at"],
+                "owner_user_id": owner_uid,
                 **props,
             },
         })

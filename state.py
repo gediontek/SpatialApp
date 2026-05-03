@@ -19,6 +19,11 @@ annotation_lock = threading.Lock()
 # Layers ---------------------------------------------------------------
 layer_store = OrderedDict()
 layer_lock = threading.Lock()
+# Parallel ownership map: layer_name -> user_id. Populated alongside
+# layer_store on save/restore. Readers MUST filter via this map to
+# enforce per-user isolation (audit C4, path B). "anonymous" entries
+# are visible to anonymous callers only.
+layer_owners: dict = {}
 MAX_LAYERS_IN_MEMORY = Config.MAX_LAYERS_IN_MEMORY
 
 # Chat sessions --------------------------------------------------------

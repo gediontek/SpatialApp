@@ -313,7 +313,11 @@ class ChatSession:
         self._layer_lock = layer_lock or threading.Lock()
         self.messages = []
         self.max_history = 50  # Keep last 50 messages to prevent memory leak
-        self.layer_store = layer_store or {}
+        # Identity preservation: an empty shared OrderedDict is falsy, so
+        # `layer_store or {}` would silently swap to a private dict and the
+        # session would never see layers added later to the shared store.
+        # Use explicit None check to keep the shared identity. (Audit H2.)
+        self.layer_store = layer_store if layer_store is not None else {}
         self.client = None
         self.usage = {"total_input_tokens": 0, "total_output_tokens": 0, "api_calls": 0}
         self._lock = threading.Lock()  # Prevent concurrent process_message on same session

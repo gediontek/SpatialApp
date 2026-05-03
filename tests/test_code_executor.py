@@ -17,7 +17,10 @@ class TestValidateCode:
     def test_forbidden_import_os(self):
         is_safe, msg = validate_code("import os\nos.listdir('/')")
         assert is_safe is False
-        assert "import os" in msg
+        # Audit C1 hardening (2026-05-03): AST validator rejects with
+        # message format "forbidden import: os; forbidden call chain: os.listdir".
+        # Accept either substring as evidence of contract enforcement.
+        assert "os" in msg.lower() and "forbidden" in msg.lower()
 
     def test_forbidden_open_file(self):
         is_safe, msg = validate_code("data = open('/etc/passwd').read()")
@@ -64,7 +67,8 @@ geojson = mapping(p)
     def test_forbidden_code_rejected(self):
         result = execute_safely("import os\nos.listdir('/')")
         assert result["success"] is False
-        assert "Forbidden" in result["error"]
+        # Audit C1 hardening: AST validator wraps with "Code validation failed: ..."
+        assert "validation failed" in result["error"].lower() or "forbidden" in result["error"].lower()
 
     def test_timeout(self):
         code = "while True: pass"

@@ -372,29 +372,40 @@ class OpenAIProvider(LLMProvider):
             if isinstance(raw, str):
                 oai_messages.append({"role": role, "content": raw})
             elif isinstance(raw, list):
-                # Check if this is tool results
-                if any(b.get("type") == "tool_result" for b in raw):
-                    for b in raw:
-                        if b["type"] == "tool_result":
-                            oai_messages.append({
-                                "role": "tool",
-                                "tool_call_id": b["tool_use_id"],
-                                "content": b["content"],
-                            })
+                # Audit M4: a user message can carry tool_results AND a text
+                # prelude (e.g. the tool-limit instruction injected at
+                # nl_gis/chat.py:938). The previous code emitted only the
+                # tool messages and dropped the text. Emit both.
+                tool_result_blocks = [b for b in raw if b.get("type") == "tool_result"]
+                text_blocks = [b for b in raw if b.get("type") == "text"]
+                tool_use_blocks = [b for b in raw if b.get("type") == "tool_use"]
+
+                if tool_result_blocks:
+                    for b in tool_result_blocks:
+                        oai_messages.append({
+                            "role": "tool",
+                            "tool_call_id": b["tool_use_id"],
+                            "content": b["content"],
+                        })
+                    # Preserve any accompanying text as a separate user msg.
+                    if text_blocks:
+                        oai_messages.append({
+                            "role": role,
+                            "content": "\n".join(b["text"] for b in text_blocks),
+                        })
                 else:
                     # Assistant content with text/tool_use blocks
-                    text_parts = [b["text"] for b in raw if b.get("type") == "text"]
+                    text_parts = [b["text"] for b in text_blocks]
                     tool_calls = []
-                    for b in raw:
-                        if b.get("type") == "tool_use":
-                            tool_calls.append({
-                                "id": b["id"],
-                                "type": "function",
-                                "function": {
-                                    "name": b["name"],
-                                    "arguments": json.dumps(b["input"]),
-                                },
-                            })
+                    for b in tool_use_blocks:
+                        tool_calls.append({
+                            "id": b["id"],
+                            "type": "function",
+                            "function": {
+                                "name": b["name"],
+                                "arguments": json.dumps(b["input"]),
+                            },
+                        })
 
                     entry = {"role": "assistant"}
                     if text_parts:
