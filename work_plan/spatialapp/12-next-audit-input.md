@@ -1,9 +1,9 @@
 # SpatialApp v2 — Input package for next external audit
 
 **Status:** **DRAFT — actively updated each cycle.** Submit only when the user invokes external audit.
-**Last updated:** 2026-05-03 (cycle 4 + auditor-1 follow-up — 17 findings beyond the original audit, all closed; N15 was a verification with no fix needed)
+**Last updated:** 2026-05-03 (post deep-think (b)-path close-out — 18 findings beyond the original audit; all closed; 5/5 enumerated residual gaps closed; live smoke test passed)
 **Updated by:** autonomous /auto-solve cycle
-**Repo state:** branch `main`, **18 commits ahead of origin** (run `git log origin/main..HEAD --oneline` to enumerate). Working tree clean. **Next external auditor: new finding IDs MUST start at N18 — IDs N1-N17 are taken.** Latest commit at draft time: `336a9ed`.
+**Repo state:** branch `main`, **24 commits ahead of origin** (run `git log origin/main..HEAD --oneline` to enumerate). Working tree clean. **Next external auditor: new finding IDs MUST start at N19 — IDs N1-N18 are taken.** Latest commit at draft time: `daa6b36`.
 **Companion docs:**
 - [`07-v2-audit-findings.md`](07-v2-audit-findings.md) — original external audit (12 findings)
 - [`08-v2-bugfree-plan.md`](08-v2-bugfree-plan.md) — Acceptance-First Hardening plan (v1.2)
@@ -67,8 +67,12 @@
 
 | | Before (pre-session) | After (current) |
 |---|---|---|
-| Full suite (`pytest -q --ignore=tests/e2e`) | 1,437 passed / 31 skipped | **1,512 passed / 8 skipped** (verified 2026-05-03 after N18) |
-| Harness suite (`pytest -m harness`) | 0 | **51 passed / 1 skipped** (1 intentional placeholder) |
+| Full suite (`pytest -q --ignore=tests/e2e`) | 1,437 passed / 31 skipped | **1,526 passed / 10 skipped** (verified 2026-05-03 after gap close-out) |
+| Harness suite (`pytest tests/harness/`) | 0 | **65 passed / 3 skipped** (3 intentional: 1 RCE env-leak placeholder, 2 collab DB API not in SQLite) |
+| Hypothesis state machine | none | 1 test, 50 random scenarios × 20 steps each (~1,000 ops/run) |
+| CI gates | tests only | tests + **harness gate** + **pip-audit (CVE sweep)** |
+| Pre-commit | none | **`pre-commit install`** runs harness on every commit |
+| Live smoke test | none | **2026-05-03**: golden path verified end-to-end ([`13-smoke-test-2026-05-03.md`](13-smoke-test-2026-05-03.md)) |
 | Net regressions | — | **0** |
 
 ## 2. What the auditor should focus on
@@ -151,18 +155,23 @@ External reviewer caught 5 issues in the doc + a real C1 regression. All address
 - ✅ N18 (the regression) — see §1.1.
 - ✅ Stale `<this commit>` placeholders in N16/N17 → real shas (`737c48d`).
 - ✅ "next IDs start at N10" → corrected to N18 in header.
-- ✅ "44 harness tests" → corrected to 51; `test_register_rate_limit.py` added to §1.2 list.
-- ✅ "21 closed findings" → corrected to 29 throughout.
-- ✅ "1,503 passed / 7 skipped" → corrected to verified `1,512 passed / 8 skipped`.
-- ✅ "7 unpushed commits" → corrected to 18 in header.
+- ✅ "44 harness tests" → corrected to 65; `test_register_rate_limit.py` + `test_post_audit_findings.py` + `test_isolation_state_machine.py` added to §1.2 list.
+- ✅ "21 closed findings" → corrected to 29 throughout (now 30 with new harness count).
+- ✅ "1,503 passed / 7 skipped" → corrected to verified `1,526 passed / 10 skipped`.
+- ✅ "7 unpushed commits" → corrected to 24 in header.
 
-### Cycle 5 — possible next directions
-- [ ] Replace placeholder `SECURITY_CONTACT` default with a real inbox before any deploy
-- [ ] Add `pip-audit` step to GitHub Actions CI
-- [ ] Property-based Hypothesis state machine for multi-user isolation (current is scenario-based)
-- [ ] Playwright frontend harness (`test_frontend_auth.py` per `08-v2-bugfree-plan.md`)
-- [ ] Live smoke test: `python3 app.py` + browser-exercise the golden path
-- [ ] Add a `pre-commit` hook that runs `pytest -m harness` before push
+### Cycle 5 (deep-think (b)-path) — done
+After self-evaluation said "I cannot self-grade to 100; here are the residual gaps," shipped all 5 enumerated gap items:
+- ✅ Gap 1: Harness regression guards for 10 unguarded closed findings — `tests/harness/test_post_audit_findings.py` (13 tests covering N6, N7, N8, N9, N10, N12, N13, N14, N16, N17). Caught a real bug in my own N10 fix while writing tests: `api_health` did its own auth check without setting `g.user_id`, so the per-user filter saw 'anonymous' for everyone. Fixed inline.
+- ✅ Gap 2: Hypothesis state machine for multi-user isolation — `tests/harness/test_isolation_state_machine.py`. 50 random scenarios × 20 steps each per CI run. First Hypothesis run found a bug in my test (read state AFTER mutating request); fixed and re-ran clean.
+- ✅ Gap 3: CI harness gate + `pip-audit` job + pre-commit hook — `.github/workflows/ci.yml` + `.pre-commit-config.yaml`. Local pip-audit run: "No known vulnerabilities found."
+- ✅ Gap 4: `09-external-audit-prompts.md` Prompt 3 N-seed: `N2` → `N19`.
+- ✅ Gap 5: Live smoke test of `python3 app.py` golden path — full report at `13-smoke-test-2026-05-03.md`. All endpoints, headers, rate limits, and security.txt verified live.
+
+### Outstanding (not in this round)
+- Playwright frontend harness (`test_frontend_auth.py`) — needs Playwright chromium install and is the only Critical/High contract without a regression guard
+- Replace placeholder `SECURITY_CONTACT` default with a real inbox before any deploy
+- Push 24 commits to `origin/main` (deferred per "no auto-push" policy)
 
 ## 4. Suggested external prompts to use
 
@@ -173,9 +182,9 @@ Use [`09-external-audit-prompts.md`](09-external-audit-prompts.md) Prompts 1, 3,
 
 ## 5. Submission checklist (for when you DO audit)
 
-- [ ] Push the 18+ unpushed commits OR generate a `git format-patch` bundle for the auditor.
-- [ ] Confirm `pytest -m harness` is green on a clean checkout (current: 51 passed / 1 skipped).
-- [ ] Confirm `pytest --ignore=tests/e2e` is green (current verified: **1,512 passed / 8 skipped** as of commit `336a9ed`).
-- [ ] Hand the auditor: this doc, `09-external-audit-prompts.md` Prompts 1+3+5, and the current commit sha.
+- [ ] Push the 24+ unpushed commits OR generate a `git format-patch` bundle for the auditor.
+- [ ] Confirm `pytest tests/harness/` is green on a clean checkout (current: **65 passed / 3 skipped**).
+- [ ] Confirm `pytest --ignore=tests/e2e` is green (current verified: **1,526 passed / 10 skipped** as of commit `daa6b36`).
+- [ ] Hand the auditor: this doc, `09-external-audit-prompts.md` Prompts 1+3+5, the smoke test report `13-smoke-test-2026-05-03.md`, and the current commit sha.
 - [ ] Tell the auditor: "do not re-flag any ID in §1.1; **new findings start at N19**."
 - [ ] Budget: 1-2 reviewer hours per prompt; total ~6 hours.
