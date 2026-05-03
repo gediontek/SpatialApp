@@ -36,8 +36,18 @@ class LLMCache:
 
     @staticmethod
     def make_key(*, system: str, messages: list, tools: list,
-                 last_n: int = 6, model: str | None = None) -> str:
-        """Build a stable cache key from the relevant request inputs."""
+                 last_n: int = 6, model: str | None = None,
+                 user_id: str | None = None) -> str:
+        """Build a stable cache key from the relevant request inputs.
+
+        Audit N13: `user_id` is mandatory in any production wire-up.
+        Without it, two users with identical system+messages+tools share
+        the cache entry — and any user-specific content embedded in
+        user A's cached response would leak to user B. Defaults to
+        'anonymous' for backwards compatibility but should be passed
+        explicitly by every caller.
+        """
+        uid = user_id or 'anonymous'
         # Only the last N messages matter for context; older messages are
         # already represented in the assistant's prior outputs.
         tail = messages[-last_n:] if last_n > 0 else messages
@@ -55,7 +65,8 @@ class LLMCache:
             tools_blob = repr(tools)
         sys_hash = hashlib.sha256((system or "").encode()).hexdigest()[:16]
         digest = hashlib.sha256(
-            (sys_hash + "\n" + tail_blob + "\n" + tools_blob + "\n" + (model or "")).encode()
+            (uid + "\n" + sys_hash + "\n" + tail_blob + "\n" +
+             tools_blob + "\n" + (model or "")).encode()
         ).hexdigest()
         return digest
 
