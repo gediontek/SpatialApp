@@ -199,14 +199,38 @@ def execute_safely(code: str, input_data: dict = None, timeout: int = 10,
         script_path = f.name
 
     try:
-        # Minimal environment — no inherited secrets, no PATH leakage.
-        env = {
-            'PATH': '/usr/bin:/bin',
-            'PYTHONPATH': os.environ.get('PYTHONPATH', ''),
-            'HOME': '/tmp',
-            'PYTHONIOENCODING': 'utf-8',
-            'PYTHONHASHSEED': '0',
-        }
+        # Audit C1 follow-up (2026-05-03): build env by COPY-AND-FILTER,
+        # not by allowlist. The previous minimal env stripped HOME +
+        # PATH so aggressively that site-packages discovery broke on
+        # macOS user-site installs and some venv layouts (auditor-found
+        # regression: shapely + numpy could not import in the child).
+        # Strategy: inherit the parent env, then deny-list anything
+        # that looks like a secret. Same security posture (no secrets
+        # leaked), but interpreter setup remains intact.
+        _SECRET_PREFIXES = (
+            'SECRET', 'PASSWORD', 'PASSWD', 'TOKEN', 'KEY', 'CREDENTIAL',
+            'API_KEY', 'AUTH', 'OAUTH', 'PRIVATE',
+        )
+        _SECRET_INFIXES = ('SECRET', 'PASSWORD', 'PASSWD', 'TOKEN', 'CREDENTIAL', 'AUTH')
+        _ALWAYS_DROP = (
+            'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY',
+            'GOOGLE_API_KEY', 'CHAT_API_TOKEN', 'SECRET_KEY',
+            'DATABASE_URL', 'DATABASE_PASSWORD', 'AWS_SECRET_ACCESS_KEY',
+            'AWS_SESSION_TOKEN', 'AWS_ACCESS_KEY_ID',
+        )
+        env = {}
+        for k, v in os.environ.items():
+            if k in _ALWAYS_DROP:
+                continue
+            ku = k.upper()
+            if any(ku.startswith(p) for p in _SECRET_PREFIXES):
+                continue
+            if any(s in ku for s in _SECRET_INFIXES):
+                continue
+            env[k] = v
+        # Pin determinism + I/O encoding regardless of parent.
+        env['PYTHONIOENCODING'] = 'utf-8'
+        env['PYTHONHASHSEED'] = '0'
 
         kwargs: dict = {
             'input': json.dumps(input_data or {}),
