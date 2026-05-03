@@ -1,7 +1,7 @@
 # SpatialApp v2 — Input package for next external audit
 
 **Status:** **DRAFT — actively updated each cycle.** Submit only when the user invokes external audit.
-**Last updated:** 2026-05-03 (cycle 3 — 14 findings beyond the original audit, all closed)
+**Last updated:** 2026-05-03 (cycle 4 — 16 findings beyond the original audit, all closed; N15 was a verification with no fix needed)
 **Updated by:** autonomous /auto-solve cycle
 **Companion docs:**
 - [`07-v2-audit-findings.md`](07-v2-audit-findings.md) — original external audit (12 findings)
@@ -41,8 +41,11 @@
 | N12 | Medium | `/api/chat`, `/api/chat/execute-plan`, WS `chat_message` had no per-user throttle → 60 msg/min shared bucket across all 3 transports | `f702857` + `9f5bfbd` |
 | N13 | Low (pre-emptive) | `LLMCache.make_key` did not include `user_id` → cross-user cache leak risk if/when wired into `nl_gis/chat.py` | `6a78e74` |
 | N14 | Medium | WS `layer_style` accepted unbounded `style` dict + had no throttle → broadcast amplification DoS; cap 256 char name, 8 KB style, 10 ev/sec/user/session | `8d72500` |
+| N15 | — | `/api/usage` cross-user check — verified clean (already gates by `entry["user_id"]`) | (no fix) |
+| N16 | Medium | WS `chat_message` `context` dict was unbounded → amplified LLM cost + log bloat; validate session_id + active_layers cap 256 + total ≤ 16 KB | `<this commit>` |
+| N17 | Low | `/.well-known/security.txt` (RFC 9116) added with `SECURITY_CONTACT` env var | `<this commit>` |
 
-**Total: 26 findings closed** (12 audit + 14 self-discovered post-fix).
+**Total: 28 findings closed** (12 audit + 16 self-discovered post-fix; N15 was a clean check).
 
 ### 1.2 Test infrastructure added
 
@@ -132,14 +135,21 @@ Completed the 21 findings above. Repo on `main`, 7 unpushed commits (`ed21e66` �
 - ✅ `/api/dashboard` — already filtered per-user via `get_user_layers(user_id)` etc.; `tool_stats` falls back to `None` for anonymous (cross-user aggregate), which is acceptable when no token is configured. Documented for v2.2 if multi-tenant tightening is needed.
 - ✅ N14: WS `layer_style` size + throttle — fixed.
 
-### Cycle 4 — possible next directions (the loop continues)
-- [ ] WS `cursor_move` size limit (lat/lon are floats, but message frame size?)
-- [ ] WS `chat_message` `context` field — accepts unbounded `active_layers` list
-- [ ] `services/database.py` — does `init_db()` create indexes idempotently under concurrent writers?
-- [ ] `/api/usage` — does it leak per-tool counts across users?
-- [ ] Config + `.env` — secret rotation procedure / startup audit
-- [ ] Dependency updates — any CVEs in pinned versions?
-- [ ] Add a `/security.txt` per RFC 9116 with disclosure contact (user-facing posture)
+### Cycle 4 — done
+- ✅ N15: `/api/usage` cross-user — clean.
+- ✅ N16: WS `chat_message` context cap — fixed.
+- ✅ N17: `/.well-known/security.txt` — added.
+- ⏭ WS `cursor_move` size limit — bounded inputs (lat/lon floats); spec-bounded; no fix needed.
+- ⏭ DB concurrency / index races — single-worker dev safe; multi-worker production needs operational fix (gunicorn preload + once-only migration), not a code fix.
+- ⏭ Dependency CVE sweep — operational, not code; recommend running `pip-audit` in CI.
+
+### Cycle 5 — possible next directions
+- [ ] Replace placeholder `SECURITY_CONTACT` default with a real inbox before any deploy
+- [ ] Add `pip-audit` step to GitHub Actions CI
+- [ ] Property-based Hypothesis state machine for multi-user isolation (current is scenario-based)
+- [ ] Playwright frontend harness (`test_frontend_auth.py` per `08-v2-bugfree-plan.md`)
+- [ ] Live smoke test: `python3 app.py` + browser-exercise the golden path
+- [ ] Add a `pre-commit` hook that runs `pytest -m harness` before push
 
 ## 4. Suggested external prompts to use
 
