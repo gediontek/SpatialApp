@@ -222,7 +222,11 @@ def save_annotation():
 @annotation_bp.route('/add_osm_annotations', methods=['POST'])
 @require_api_token
 def add_osm_annotations():
-    """Add OSM features as annotations."""
+    """Add OSM features as annotations.
+
+    Audit N9: caps features at MAX_OSM_ANNOTATIONS_PER_REQUEST to prevent
+    DoS / DB bloat / annotation_lock starvation.
+    """
     from flask import current_app, g
     data = request.json
     user_id = getattr(g, 'user_id', 'anonymous')
@@ -230,13 +234,25 @@ def add_osm_annotations():
     if not data:
         return jsonify(success=False, error='No data provided'), 400
 
-    current_app.logger.debug(f"Received OSM data with {len(data.get('features', []))} features")
+    feats = data.get('features', []) if isinstance(data, dict) else []
+    if not isinstance(feats, list):
+        return jsonify(success=False, error='Invalid features payload'), 400
+
+    MAX_PER_REQUEST = 1000
+    if len(feats) > MAX_PER_REQUEST:
+        return jsonify(
+            success=False,
+            error=f'Too many features in one request (max {MAX_PER_REQUEST}). '
+                  'Split the upload into batches.',
+        ), 413
+
+    current_app.logger.debug(f"Received OSM data with {len(feats)} features")
 
     try:
         added_count = 0
-        if 'features' in data:
+        if feats:
             with state.annotation_lock:
-                for feature in data['features']:
+                for feature in feats:
                     if 'geometry' not in feature or 'coordinates' not in feature['geometry']:
                         continue
 
