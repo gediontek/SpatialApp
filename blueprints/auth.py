@@ -173,13 +173,20 @@ def api_health():
         "checks": {},
     }
 
-    # Database check
+    # Database check.
+    # Audit N10a: do NOT leak str(e) — DB exceptions can include file
+    # paths, table names, or constraint internals. Log the detail
+    # server-side; respond with a generic flag.
     if state.db:
         try:
-            count = state.db.get_annotation_count()
+            user_id = getattr(g, 'user_id', 'anonymous')
+            # Audit N10b: per-user count, not global, so authed users
+            # cannot enumerate other-user activity via the health probe.
+            count = state.db.get_annotation_count(user_id=user_id)
             health["checks"]["database"] = {"status": "ok", "annotation_count": count}
-        except Exception as e:
-            health["checks"]["database"] = {"status": "error", "detail": str(e)}
+        except Exception:
+            logging.warning("health DB check failed", exc_info=True)
+            health["checks"]["database"] = {"status": "error"}
             health["status"] = "degraded"
     else:
         health["checks"]["database"] = {"status": "unavailable"}
@@ -201,14 +208,22 @@ def api_health():
         "status": "configured" if llm_key else "not_configured",
     }
 
-    # Layer store
+    # Layer store — audit N10b: per-user count using the same isolation
+    # filter as /api/layers (state.layer_owners[name] == user_id).
+    user_id = getattr(g, 'user_id', 'anonymous')
     with state.layer_lock:
-        layer_count = len(state.layer_store)
+        layer_count = sum(
+            1 for name in state.layer_store
+            if state.layer_owners.get(name, 'anonymous') == user_id
+        )
     health["checks"]["layers"] = {"count": layer_count, "max": state.MAX_LAYERS_IN_MEMORY}
 
-    # Sessions
+    # Sessions — per-user count, same isolation as /api/sessions.
     with state.session_lock:
-        session_count = len(state.chat_sessions)
+        session_count = sum(
+            1 for entry in state.chat_sessions.values()
+            if entry.get("user_id", "anonymous") == user_id
+        )
     health["checks"]["sessions"] = {"count": session_count}
 
     # Readiness flag — true if DB + LLM provider both initialized.
