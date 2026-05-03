@@ -149,10 +149,31 @@ def api_import_layer():
             filepath = os.path.join(tmp, filename)
             file.save(filepath)
 
-            # For shapefile zips, extract first
+            # For shapefile zips, extract first.
+            # Audit N8: bound decompressed size + per-entry size + entry count
+            # to prevent zip-bomb DoS. Path traversal is handled by Python's
+            # zipfile.extractall (3.12+) but we still belt-and-suspenders by
+            # rejecting any member whose normalized path escapes tmp.
             if ext == 'zip':
                 import zipfile
+                MAX_TOTAL_BYTES = 500 * 1024 * 1024  # 500 MB decompressed
+                MAX_PER_FILE_BYTES = 100 * 1024 * 1024  # 100 MB single entry
+                MAX_ENTRIES = 1000
                 with zipfile.ZipFile(filepath, 'r') as zf:
+                    infos = zf.infolist()
+                    if len(infos) > MAX_ENTRIES:
+                        return jsonify(error=f'Zip has too many entries (>{MAX_ENTRIES})'), 400
+                    total = 0
+                    for info in infos:
+                        # Reject path traversal: any component '..' or absolute paths.
+                        norm = os.path.normpath(info.filename)
+                        if norm.startswith('..') or os.path.isabs(norm):
+                            return jsonify(error='Zip contains unsafe path'), 400
+                        if info.file_size > MAX_PER_FILE_BYTES:
+                            return jsonify(error='Zip entry too large'), 400
+                        total += info.file_size
+                        if total > MAX_TOTAL_BYTES:
+                            return jsonify(error='Zip decompressed size exceeds limit'), 400
                     zf.extractall(tmp)
                 # Find the .shp file
                 shp_files = [f for f in os.listdir(tmp) if f.endswith('.shp')]

@@ -174,7 +174,14 @@ def index():
 @osm_bp.route('/upload', methods=['POST'])
 @require_api_token
 def upload():
-    from flask import current_app
+    """Upload a GeoTIFF for overlay rendering.
+
+    Audit N7: writes the file under a per-user subdirectory of
+    UPLOAD_FOLDER so two users uploading the same filename cannot
+    overwrite each other and so /static/uploads/<filename> cannot serve
+    one user's raster to another.
+    """
+    from flask import current_app, g
     if 'file' not in request.files:
         return jsonify(message='No file part in the request.'), 400
 
@@ -185,8 +192,15 @@ def upload():
     if not allowed_file(file.filename):
         return jsonify(message='Invalid file type. Only .tif and .tiff files are allowed.'), 400
 
+    user_id = getattr(g, 'user_id', 'anonymous')
+    # Namespace is the secure_filename of the user_id so a hostile token
+    # rotation cannot inject path components.
+    user_dir_name = secure_filename(user_id) or 'anonymous'
+    user_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], user_dir_name)
+    os.makedirs(user_dir, exist_ok=True)
+
     filename = secure_filename(file.filename)
-    filepath = os.path.join(current_app.config['UPLOAD_FOLDER'], filename)
+    filepath = os.path.join(user_dir, filename)
 
     try:
         file.save(filepath)
@@ -198,10 +212,15 @@ def upload():
 
 
 @osm_bp.route('/static/uploads/<filename>')
+@require_api_token
 def uploaded_file(filename):
-    """Serve uploaded files."""
-    from flask import current_app
-    return send_from_directory(current_app.config['UPLOAD_FOLDER'], filename)
+    """Serve uploaded files. Audit N7: scoped to the requesting user's
+    namespace; 404 on cross-user reads."""
+    from flask import current_app, g
+    user_id = getattr(g, 'user_id', 'anonymous')
+    user_dir_name = secure_filename(user_id) or 'anonymous'
+    user_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], user_dir_name)
+    return send_from_directory(user_dir, filename)
 
 
 @osm_bp.route('/fetch_osm_data', methods=['POST'])
