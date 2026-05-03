@@ -206,6 +206,25 @@ def create_app(testing=False):
         return jsonify(message='An internal error occurred.'), 500
 
     # ------------------------------------------------------------------
+    # Audit N17: RFC 9116 security.txt — disclosure-channel posture.
+    # Override SECURITY_CONTACT env var in deployments to direct
+    # researchers to the right inbox.
+    # ------------------------------------------------------------------
+    @app.route('/.well-known/security.txt')
+    def security_txt():
+        contact = os.environ.get('SECURITY_CONTACT', 'mailto:security@example.com')
+        # Expires field is RFC 9116 mandatory: 1 year out from request time.
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        expires = (_dt.now(_tz.utc) + _td(days=365)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+        body = (
+            f"Contact: {contact}\n"
+            f"Expires: {expires}\n"
+            "Preferred-Languages: en\n"
+            "Canonical: " + request.url + "\n"
+        )
+        return body, 200, {'Content-Type': 'text/plain; charset=utf-8'}
+
+    # ------------------------------------------------------------------
     # Prometheus metrics endpoint
     # ------------------------------------------------------------------
     @app.route('/metrics')

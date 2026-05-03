@@ -445,7 +445,29 @@ def register_websocket_events(socketio):
             return
 
         session_id = data.get('session_id', 'default')
+        if not isinstance(session_id, str) or len(session_id) > 256:
+            emit('chat_event', {'type': 'error', 'text': 'Invalid session_id'})
+            return
         map_context = data.get('context', {})
+
+        # Audit N16: cap context payload to prevent broadcast/log bloat.
+        # active_layers can be a long list; map bounds + zoom are scalars.
+        if isinstance(map_context, dict):
+            active = map_context.get('active_layers')
+            if isinstance(active, list) and len(active) > 256:
+                # Trim silently — the model doesn't need every layer name.
+                map_context = dict(map_context)
+                map_context['active_layers'] = active[:256]
+            try:
+                ctx_size = len(json.dumps(map_context))
+            except (TypeError, ValueError):
+                emit('chat_event', {'type': 'error', 'text': 'Invalid context payload'})
+                return
+            if ctx_size > 16 * 1024:
+                emit('chat_event', {'type': 'error', 'text': 'Context payload too large (max 16 KB)'})
+                return
+        else:
+            map_context = {}
 
         # Retrieve user_id from per-SID map
         with _sid_user_lock:
