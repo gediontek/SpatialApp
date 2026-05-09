@@ -173,6 +173,94 @@ After self-evaluation said "I cannot self-grade to 100; here are the residual ga
 - Replace placeholder `SECURITY_CONTACT` default with a real inbox before any deploy
 - Push 24 commits to `origin/main` (deferred per "no auto-push" policy)
 
+### Cycle 12 (the actual user-reported render bug — fixed) — done
+The previous cycles built infrastructure to *catch* render bugs; this cycle reproduced and fixed the user's original manual-check complaint. I drove the live application against real Overpass (free, no LLM cost), captured screenshots, and inspected them visually (multimodal). Two distinct rendering pathologies turned up.
+
+**Findings (with screenshot evidence at `tmp/smoke_screenshots/`)**
+- **Finding A — sub-pixel polygons at wide-area zoom**: "hospitals in Chicago" → 59 hospital polygons returned, `fitToLayer` zooms to ~10, every polygon is < 1px wide → user sees a blank map labeled "59 features". Confirmed by zooming to a 700m bbox, where the same hospitals appear as clear blue blocks. Data correct; render unusable.
+- **Finding B — overlap-blob at medium zoom**: "buildings in The Loop, Chicago" → 1,582 building polygons returned, `fitToLayer` to zoom 14, all rendered solid `#3388ff` with 0.3 fill → entire Loop becomes one indistinguishable blue blob. Outlines invisible because every feature has the same fill.
+
+**Why the unit suite missed both**: every existing mocked workflow test uses 1–6 features in a tight bbox. None hit the "many features over a wide area" or "many features at the same scale" stress cases. The bug was in the *frontend default rendering policy*, not in any handler — a code surface no test was probing.
+
+**Fix (4 changes in `static/js/layers.js`)**
+1. **Density-aware default style**: when feature_count > 200, switch defaults to `weight: 1, fillOpacity: 0.15` (was `weight: 2, fillOpacity: 0.3`). Overlapping outlines stay distinguishable.
+2. **Wide-area chat hint** (in `static/js/chat.js`): when ≥ 500 features land, emit an info message — "Showing N features. Zoom in to see individual items; cluster bubbles below zoom 15." Avoids the "blank map looks broken" confusion.
+3. **Polygon centroid clustering with zoom-toggle**: when `polygonCount ≥ 100` OR (`polygonCount ≥ 30` AND `bbox_diagonal ≥ 5km`), build a parallel `L.markerClusterGroup` of feature centroids. A `zoomend` handler swaps which layer is on the map: at zoom < 15 show clusters; at zoom ≥ 15 show actual polygons. The wide-area trigger (b) catches the canonical "show hospitals in Chicago" case (59 features, ~30km bounds) that the count-only trigger missed.
+4. **Hashed per-feature color**: when `polygonCount ≥ 50` AND no caller-supplied color/styleFunction, pick HSL hue from `osm_id × 137 mod 360`. Adjacent features get distinguishable colors so 1,500-building queries are legible at any zoom.
+
+**Regression tests (B18, B19)**
+- `test_wide_area_many_polygons_renders_as_cluster_bubbles` — 60 polygons over ~30km, asserts at zoom < 15 the cluster layer is active AND polygon paths < 10 (they were 60 pre-fix). Zoom in past 15 → polygons re-appear.
+- `test_wide_area_layer_emits_chat_hint` — 600 polygons, asserts the "Showing 600 features. Zoom in…" hint reaches the chat history.
+
+**Visual proof** (saved to `tmp/smoke_screenshots/`):
+- `user_query_buildings_loop.png` — pre-fix solid blue blob → post-fix orange/yellow/red cluster bubbles with feature counts
+- `hospital_chicago.png` — pre-fix blank map → post-fix green/purple cluster bubbles spread across Chicago
+- `buildings_small.png` — pre-fix uniform blue → post-fix per-building varied colors (52 distinguishable buildings)
+
+**Final coverage**: `make eval` runs 6 server-side workflow + 19 browser-render + 8 frontend-auth + 65 harness + 30 tool-selection in ~50s. Unit suite: 1,539 passed / 10 skipped / 0 failed.
+
+### Cycle 11 (chart tool fix + animate/3d resilience) — done
+While auditing chat.js for more silently-broken UX surfaces (the same hunt that found heatmap), discovered that the `chart` tool returned a Chart.js-compatible spec but no Chart.js was loaded AND no chart-render hook existed in the frontend. Result: chart tool calls fell through to `formatToolResult`'s default branch and rendered as a raw JSON snippet. Two more half-built features (`animate_layer`, `visualize_3d`) had similar gaps but require non-trivial UI work.
+- ✅ **Chart fix**: added Chart.js 4.4.1 CDN to `templates/index.html`; added `renderChartIntoStep(stepId, spec)` in `static/js/chat.js`; hooked `case 'tool_result'` to invoke it when `result.action === 'chart'`. Histograms render as bar charts (Chart.js has no native histogram type, but the backend already pre-bins so a bar chart is correct). Pie charts get the legend, others suppress it.
+- ✅ **B15 — chart regression test**: `test_chart_tool_result_renders_chartjs_canvas`. Asserts (a) Chart.js loaded, (b) canvas appears under tool step, (c) `Chart.getChart(canvas)` returns a non-null instance (proves the `new Chart(...)` call actually attached), (d) tool-step text summary survives.
+- ✅ **B16/B17 — resilience guards for `animate` + `visualize_3d`** (parametrized): both tools currently return structured payloads the frontend has no specialized renderer for. Contract pinned: page MUST NOT crash, chat input MUST stay usable. When/if real animate/3d UIs land, these tests fail informatively and need updating to match the new behavior.
+
+**Known limitation flagged for next round**: `animate_layer` and `visualize_3d` produce backend output but the frontend has no time-slider / 3D extrusion view. They aren't broken (no crash, deterministic output); they're half-built. Either build the UIs (significant scope) or remove the tools from the LLM-visible tool list to stop the LLM from reaching for them.
+
+**Final coverage**: `make eval` runs 6 server-side workflow + 17 browser-render + 8 frontend-auth + 65 harness + 30 tool-selection in ~50s. Unit suite: 1,539 passed / 10 skipped / 0 failed.
+
+### Cycle 10 (heatmap fix + frontend-auth harness) — done
+After Cycle 9 the only known UI no-op was heatmap (Leaflet.heat lib missing) and the only un-harnessed frontend contract was auth-on-fetch. Both closed.
+- ✅ **Heatmap fix**: added `<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.heat/0.2.0/leaflet-heat.js">` to `templates/index.html` (cdnjs is already in CSP via socket.io). Without this the chat handler at `static/js/chat.js:417` silently dropped every heatmap tool call because `window.L.heatLayer` was undefined.
+- ✅ **B14 — heatmap regression test**: `tests/golden/test_browser_render.py::test_heatmap_event_creates_heat_layer`. Asserts (a) `L.heatLayer` is a function (catches the lib being removed from index.html again), (b) the layer registers in `LayerManager`, (c) Leaflet.heat actually paints a `canvas.leaflet-heatmap-layer` onto the overlay pane.
+- ✅ **`tests/golden/test_frontend_auth.py`** (8 tests, planned in §6.1): pins every `static/js/auth.js` contract that the H1+M1+M2 audits required. A1 CSRF on POST; A2 no CSRF on GET; A3 Bearer from localStorage; A4 no Authorization when localStorage empty (preserves the unauthenticated 401 observable); A5 `window.SpatialAuth` helpers exposed; A6 jQuery `$.ajax` beforeSend parity with `authedFetch`; A7 auth.js loads before main/chat/layers; plus an A2-corollary that caller-supplied Authorization is not overwritten by localStorage. Uses Playwright `page.route()` to capture the headers each call actually emits — no mocks, real browser, real auth.js.
+
+**Final coverage**: `make eval` runs 6 server-side workflow + 14 browser-render + 8 frontend-auth + 65 harness + 30 tool-selection in ~50s. Unit suite: 1,539 passed / 10 skipped / 0 failed. Still air-gapped from external paid services.
+
+### Cycle 9 (browser-render coverage expansion) — done
+After Cycle 8 shipped 4 browser tests (B1–B4), the remaining user-visible code paths got covered. The bar moved from "polygon paints" to "every common UI workflow has a regression guard":
+- ✅ B5 — `layer_command remove` two-turn workflow (snapshot the appear state on turn 1, assert removal on turn 2). Caught a polling-resolution bug while building it: SSE'd add+remove in a single fulfillment finishes faster than 150ms polls can witness; restructured as separate chat turns.
+- ✅ B6 — two `layer_add` events in one turn render two independent layers + paths
+- ✅ B7 — `layer_style` event flips polygon stroke color on an existing layer
+- ✅ B8 — `highlight` event re-colors ONLY matching features (predicate guard)
+- ✅ B9 — quick-action button click fills input AND fires `/api/chat` with the button's `data-msg`
+- ✅ B10 — plan mode renders `<ol>` of steps + Execute/Cancel buttons in `.chat-plan`
+- ✅ B11 — Stop button mid-stream aborts fetch + flips input back to `Send` (M2 audit)
+- ✅ B12 — second chat call aborts the first's `AbortController` (M2 audit)
+- ✅ B13 — malformed `layer_add` (geometry: null) does not crash the page (defensive)
+
+**Architectural finding while building B11/B12**: the Playwright sync Python API serializes everything on one event loop, so a `time.sleep()` in a route handler blocks the test driver too — the in-flight UI states are never observable. Switched both tests to a JS-side fetch override (`window.fetch = ... ReadableStream that never closes`) which keeps the loop free. Pattern documented inline as `_hang_chat_fetch_js`.
+
+**Heatmap deliberately not covered**: the chat handler `case 'heatmap':` checks `window.L && window.L.heatLayer` but `Leaflet.heat` is **not loaded** in `templates/index.html`. So heatmap events silently no-op in the browser today. This is a real finding, but the fix is to load the lib (one CDN script tag), not to write a test against a nonexistent feature.
+
+**Final coverage**: `make eval` runs 6 server-side workflow + 13 browser-render + 65 harness + 30 tool-selection in ~40s. All air-gapped from external paid services (LLM, Overpass, Nominatim, Valhalla); the only opt-in live test (`SPATIALAPP_GOLDEN_LIVE=1`) lives in the pre-existing `tests/test_golden_path.py` and is excluded from `make eval`.
+
+### Cycle 8 (mocked-browser render in CI) — done
+The Cycle 6 server-side workflow tests proved the chat→tool→`state.layer_store` contract; what remained unverified deterministically was the browser-side render the user explicitly flagged ("things need to render on the map successfully"). Closed that gap:
+- ✅ `tests/golden/test_browser_render.py` — 2 Playwright tests against a real Flask + headless Chromium. B1 fulfills `/api/chat` with a canned SSE stream containing one `layer_add` event and asserts (a) the layer name is registered in `window.LayerManager` and (b) at least one `<path>` exists in the Leaflet overlay pane (i.e., a polygon was actually painted). B2 sends a `layer_add` with `geometry: null` and asserts the page does not crash and the chat input remains responsive.
+- ✅ Discovered while writing B1: chat.js flips a closure-private `_useWebSocket` flag the moment Socket.IO connects, bypassing `/api/chat` entirely. Since the flag is not exposed on `window`, the test blocks `**/socket.io/**` at the Playwright route layer to keep the SSE transport active. Documented this trick in `tests/golden/README.md`.
+- ✅ `live_app` (module-scoped subprocess) and `chromium` (skip-if-unavailable) fixtures lifted into `tests/golden/conftest.py` so future browser tests reuse them.
+- ✅ `Makefile` `golden` target unchanged in scope (still `pytest tests/golden/`) — now picks up browser-render automatically. Total `make eval` cost: 8 golden + 65 harness + 30 tool-selection in ~25s.
+
+**Coverage delta**: the only previously-skipped paint assertion (`test_buildings_query_renders_polygons_live`, `tests/test_golden_path.py:159`) was gated behind `SPATIALAPP_GOLDEN_LIVE=1`. Now there is an equivalent paint assertion in CI mode using mocked SSE — same DOM probe (`document.querySelectorAll('.leaflet-overlay-pane path').length`), no live cost.
+
+### Cycle 7 (close /critical-review BL1+BL2+BL3) — done
+After Cycle 6 shipped the golden eval, /critical-review's three remaining blockers were tackled:
+- ✅ **BL1 — `PerKeyRateLimiter._events` unbounded**. The dead `if not history: pop()` branch (lines 102-104, pre-fix) never fired because `history.append(now)` happened immediately above. Replaced with: opportunistic GC sweep every `_GC_INTERVAL=1024` allow() calls + a hard `max_keys=50_000` cap that refuses brand-new keys when full while still serving existing ones. Memory now O(active-keys-within-window), not O(distinct-keys-ever-seen). `services/rate_limiter.py:71-130`.
+- ✅ **BL2 — direct unit tests for `services/rate_limiter.py` and `blueprints/auth.py`** (both were exercised only indirectly). Added `tests/test_rate_limiter.py` (17 tests) and `tests/test_auth.py` (21 tests). Includes a BL1 regression test (`test_memory_bounded_under_distinct_key_flood`) that proves an attacker rotating through 150 distinct keys cannot grow `_events` past `max_keys=100`. While writing tests I caught one assumption error of my own: I assumed `users.username` had a UNIQUE constraint and thus dupe usernames yielded 409 — actually only `api_token` is UNIQUE in the schema (`services/database.py:85-86`), so dupe usernames currently succeed with new user_ids. Pinned the actual contract in `test_duplicate_username_currently_allowed` rather than masking it.
+- ✅ **BL3 — Hypothesis state machine docstring drift**. The header claimed annotation rules were modeled but only layer rules existed. Added 3 annotation rules (`create_annotation`, `list_annotations`, `clear_annotations`) + an annotation cross-user-visibility invariant. Now the state machine genuinely fuzzes both C3 (layer) and C4 (annotation) isolation surfaces. `tests/harness/test_isolation_state_machine.py:175-272`.
+
+**Test count delta**: harness 65 → 65 (state machine still 1 test, just exercises more rules); unit 1,526 → 1,537 (+38 new direct tests in 2 new files; skip count 10 → 9). `make eval` still green: 6 golden + 65 harness + 30 tool-selection.
+
+### Cycle 6 (geospatial workflow eval — user reframe) — done
+After /critical-review and /gap-analysis flagged that the security harness covered isolation contracts but NOT the user-visible geospatial experience ("things need to render on the map successfully"), shipped a workflow-level eval:
+- ✅ `tests/golden/test_user_workflows.py` — 6 scenarios that exercise chat → LLM tool dispatch → mocked Overpass/Nominatim → SSE stream → `state.layer_store`. Asserts (a) `layer_add` events fire, (b) GeoJSON is `FeatureCollection`-shaped, (c) every coordinate is geographic, (d) polygon rings close, (e) coordinate order is `[lng, lat]` not `[lat, lng]`. ~13s, CI-safe (no live keys).
+- ✅ `tests/golden/conftest.py` — `scripted_llm`, `mock_overpass`, `golden_client`, `parse_sse` fixtures. Mock seams patch `nl_gis.chat.create_provider` + `nl_gis.handlers.navigation.requests.get`; no production code touched.
+- ✅ `Makefile` with `make eval` — single command bundling golden + harness + tool-selection corpus. The pre-audit ritual the user asked for ("after each implementation I want to be able to run the eval, before an external auditor reviews").
+- ✅ `tests/golden/README.md` — bug-class → scenario coverage matrix and how to add new workflows.
+
+**Coverage delta**: `make eval` now runs 6 golden + 65 harness + 30 tool-selection probes deterministically. Catches OSM-query-but-nothing-renders bugs, lat/lng swaps, partial-state-on-timeout regressions, and chained-tool bbox loss — none of which any unit test was checking.
+
 ## 4. Suggested external prompts to use
 
 Use [`09-external-audit-prompts.md`](09-external-audit-prompts.md) Prompts 1, 3, 5 as the primary input. Recommended adjustments for this round:
