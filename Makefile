@@ -28,8 +28,12 @@ harness:
 	$(PYTEST) tests/harness/ -v --tb=short
 
 eval-tools:
-	@echo "→ LLM tool-selection accuracy (mocked, deterministic)"
-	$(PYTHON) -m tests.eval.run_eval --mock || true
+	@echo "→ LLM tool-selection accuracy (mocked corpus, strict --ci thresholds)"
+	# Audit N21: previously this used `--mock || true`, which silently
+	# swallowed regressions. --ci runs the same mocked corpus but
+	# enforces tool/param/chain accuracy thresholds and exits non-zero
+	# on regression, so `make eval` is now an honest pre-audit gate.
+	$(PYTHON) -m tests.eval.run_eval --ci
 
 # Optional: live mode requires GEMINI_API_KEY and a working Chromium.
 # Not part of `make eval` because it costs API tokens.

@@ -42,30 +42,46 @@ def pytest_collection_modifyitems(config, items):
 CSRF_REJECTED_STATUS = 419
 
 
+# Audit N19: register the harness CSRFError handler at conftest import
+# time, BEFORE any test causes the app to handle a request. Doing this
+# inside the fixture (lazy) raises Flask's "errorhandler can no longer
+# be called — already handled first request" once another test in the
+# combined CI pytest run has touched the app first. Module-level
+# registration is idempotent and safe whether or not csrf_enforced_client
+# is ever used.
+def _install_harness_csrf_handler():
+    from app import app
+    from flask import jsonify
+    from flask_wtf.csrf import CSRFError
+
+    @app.errorhandler(CSRFError)
+    def _harness_csrf_handler(e):
+        return jsonify(
+            error="csrf_rejected", reason=str(e.description),
+        ), CSRF_REJECTED_STATUS
+
+
+_install_harness_csrf_handler()
+
+
 @pytest.fixture
 def csrf_enforced_client():
-    """Flask test client with WTF_CSRF_ENABLED=True AND a CSRFError handler
-    that returns a distinguishable status (419) so harness assertions can
-    separate CSRF rejection from other 400s.
+    """Flask test client with WTF_CSRF_ENABLED=True. The CSRFError
+    handler that returns the harness sentinel (419) is registered at
+    conftest import time (see `_install_harness_csrf_handler` above) —
+    Flask refuses late `app.errorhandler` registration once the app has
+    handled its first request, which happens in the combined CI run.
 
     Audit-required: every state-mutating route must EITHER reject as 419
     (CSRF blocked) OR be deliberately exempted via a working
     `csrf.exempt(<view_function>)` that survives Flask-WTF's actual lookup.
     """
     from app import app
-    from flask_wtf.csrf import CSRFError
 
     prior_csrf = app.config.get("WTF_CSRF_ENABLED")
     prior_testing = app.config.get("TESTING")
     app.config["WTF_CSRF_ENABLED"] = True
     app.config["TESTING"] = True
-
-    # Register a CSRFError handler that bypasses app.py:180's generic 400
-    # sanitizer so the harness can see WHY the request was rejected.
-    @app.errorhandler(CSRFError)
-    def _harness_csrf_handler(e):
-        from flask import jsonify
-        return jsonify(error="csrf_rejected", reason=str(e.description)), CSRF_REJECTED_STATUS
 
     try:
         with app.test_client() as client:

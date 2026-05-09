@@ -212,9 +212,19 @@ var LayerManager = (function() {
                 showCoverageOnHover: false,
                 disableClusteringAtZoom: ZOOM_TOGGLE_LEVEL + 1,
             });
+            // Track per-feature centroid markers in original feature
+            // order so filterToIndices (animate_layer) can toggle which
+            // markers are in the cluster as the slider advances.
+            // Without this, animation only affects polygon paths and
+            // the visible cluster bubbles never update at low zoom.
+            // (Audit N22.) Indices that have no centroid (e.g. unsupported
+            // geometry types) hold null so the index alignment with
+            // `features[]` stays correct.
+            var clusterMarkersByIdx = new Array(features.length);
+            var initialMarkers = [];
             for (var ci = 0; ci < features.length; ci++) {
                 var ctr = _polygonCentroid(features[ci].geometry);
-                if (!ctr) continue;
+                if (!ctr) { clusterMarkersByIdx[ci] = null; continue; }
                 var markerColor = useVariedColor ? _hashedColor(features[ci], ci) : safeColor;
                 var marker = L.circleMarker([ctr[0], ctr[1]], {
                     radius: 5,
@@ -225,8 +235,12 @@ var LayerManager = (function() {
                 });
                 var props = features[ci].properties || {};
                 marker.bindPopup('<b>' + escapeHtml(props.category_name || 'Feature') + '</b>');
-                clusterLayer.addLayer(marker);
+                marker._origIdx = ci;
+                clusterMarkersByIdx[ci] = marker;
+                initialMarkers.push(marker);
             }
+            // addLayers (plural) is optimized for batch insert.
+            clusterLayer.addLayers(initialMarkers);
             // Swap behavior: keep only one layer on the map at a time so
             // we don't pay double-render cost. Honors `visible=false`.
             swapHandler = function() {
@@ -254,6 +268,7 @@ var LayerManager = (function() {
         layers[name] = {
             leafletLayer: primaryLayer,
             clusterLayer: clusterLayer,
+            clusterMarkersByIdx: usePolygonClustering ? clusterMarkersByIdx : null,
             swapHandler: swapHandler,
             visible: true,
             featureCount: featureCount,
@@ -492,6 +507,27 @@ var LayerManager = (function() {
             featureLayer.setStyle(indexSet[idx] ? visibleStyle : hiddenStyle);
             idx++;
         });
+
+        // Audit N22: also toggle membership of centroid markers in the
+        // cluster layer so wide-area animations actually update the
+        // visible cluster bubbles at low zoom (cluster mode active).
+        // Without this, scrubbing the slider only re-styled the hidden
+        // polygon paths and the bubbles stayed put until zooming in.
+        if (entry.clusterLayer && entry.clusterMarkersByIdx) {
+            var toRemove = [], toAdd = [];
+            for (var ci = 0; ci < entry.clusterMarkersByIdx.length; ci++) {
+                var marker = entry.clusterMarkersByIdx[ci];
+                if (!marker) continue;  // unsupported geometry — no centroid
+                var shouldShow = !!indexSet[ci];
+                var isOnCluster = entry.clusterLayer.hasLayer(marker);
+                if (shouldShow && !isOnCluster) toAdd.push(marker);
+                else if (!shouldShow && isOnCluster) toRemove.push(marker);
+            }
+            // Plural variants are optimized for batch ops in
+            // Leaflet.markercluster (only one cluster recompute total).
+            if (toRemove.length) entry.clusterLayer.removeLayers(toRemove);
+            if (toAdd.length) entry.clusterLayer.addLayers(toAdd);
+        }
     }
 
     /** Restore the layer to its default visible style after filterToIndices. */
@@ -508,6 +544,15 @@ var LayerManager = (function() {
                 featureLayer.setStyle(restore);
             }
         });
+        // Audit N22: also restore every centroid marker to the cluster.
+        if (entry.clusterLayer && entry.clusterMarkersByIdx) {
+            var missing = [];
+            for (var ci = 0; ci < entry.clusterMarkersByIdx.length; ci++) {
+                var m = entry.clusterMarkersByIdx[ci];
+                if (m && !entry.clusterLayer.hasLayer(m)) missing.push(m);
+            }
+            if (missing.length) entry.clusterLayer.addLayers(missing);
+        }
     }
 
     function highlightFeatures(layerName, attribute, value, color) {

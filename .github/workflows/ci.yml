@@ -35,6 +35,42 @@ jobs:
           TESTING: 1
           DISABLE_CLEANUP_TIMER: 1
 
+  golden:
+    # Audit N20: browser tests skip silently when chromium isn't
+    # installed (tests/golden/conftest.py:331). The previous CI didn't
+    # run `playwright install`, so the 19 browser-render + 8 frontend-
+    # auth tests were never gating. This dedicated job installs chromium
+    # and runs the golden suite + the strict-mode tool-selection eval.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Install chromium for Playwright
+        run: python -m playwright install --with-deps chromium
+
+      - name: Run golden eval (workflow + browser-render + frontend-auth)
+        run: pytest tests/golden/ -v --tb=short
+        env:
+          TESTING: 1
+          DISABLE_CLEANUP_TIMER: 1
+
+      - name: Run tool-selection eval (CI mode — strict thresholds)
+        # Audit N21: --ci enforces tool/param/chain accuracy thresholds
+        # and exits non-zero on regression. `make eval` uses --mock
+        # locally for speed; CI gets the strict gate.
+        run: python -m tests.eval.run_eval --ci
+
   security_audit:
     runs-on: ubuntu-latest
     steps:
@@ -73,7 +109,7 @@ jobs:
 
   docker:
     runs-on: ubuntu-latest
-    needs: [test, lint]
+    needs: [test, lint, golden]
     if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4

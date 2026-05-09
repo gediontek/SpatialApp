@@ -1,9 +1,10 @@
 # SpatialApp v2 — Input package for next external audit
 
-**Status:** **DRAFT — actively updated each cycle.** Submit only when the user invokes external audit.
-**Last updated:** 2026-05-03 (post deep-think (b)-path close-out — 18 findings beyond the original audit; all closed; 5/5 enumerated residual gaps closed; live smoke test passed)
+**Status:** **READY for external audit submission.** 13 cycles closed; CI green; all known UX bug classes have regression coverage.
+**Last updated:** 2026-05-09 (post Cycle 14 — N19-N23 from external audit-2 closed)
 **Updated by:** autonomous /auto-solve cycle
-**Repo state:** branch `main`, **24 commits ahead of origin** (run `git log origin/main..HEAD --oneline` to enumerate). Working tree clean. **Next external auditor: new finding IDs MUST start at N19 — IDs N1-N18 are taken.** Latest commit at draft time: `daa6b36`.
+**Repo state:** branch `main`, working tree clean, synced with origin. **Next external auditor: new finding IDs MUST start at N24 — IDs N1-N23 are taken.** Latest commit: run `git log -1 --oneline` (was `3124686` before Cycle 14; Cycle 14 commit is later).
+**Verified at last update**: `make eval` green (6 workflow + 19 browser + 8 frontend-auth + 65 harness + 30 tool-selection in `--ci` strict mode); CI-mirror `pytest tests/ -k "not e2e"` = **1,573 passed / 10 skipped / 0 failed** (~96s).
 **Companion docs:**
 - [`07-v2-audit-findings.md`](07-v2-audit-findings.md) — original external audit (12 findings)
 - [`08-v2-bugfree-plan.md`](08-v2-bugfree-plan.md) — Acceptance-First Hardening plan (v1.2)
@@ -188,7 +189,18 @@ Cycle 11 added `animate_layer` and `visualize_3d` as resilience-only tests (`tes
 - `deck_3d_modal.png` — real extruded buildings from a Loop OSM query, height-coded colors, controllable camera. Genuinely renders 52 buildings in 3D.
 - `animate_player.png` — slider+play+reset rendered under the tool step (also visible in the test DOM assertion).
 
-**Final coverage**: `make eval` runs 6 server-side workflow + 19 browser-render (B1–B19) + 8 frontend-auth + 65 harness + 30 tool-selection = 128 deterministic checks in ~50s. Unit suite: 1,539 passed / 10 skipped / 0 failed.
+**Final coverage**: see header for current `make eval` and unit-suite numbers (kept fresh per-cycle).
+
+### Cycle 14 (external audit-2 close-out — N19-N23) — done
+External LLM auditor reviewed the cycle-13 package and returned 5 findings (initial 84/100; final score 81/100). All closed:
+
+- ✅ **N19 High — CI-mirror suite red on combined run.** `tests/harness/conftest.py:65` registered the CSRFError handler inside the `csrf_enforced_client` fixture; once another test had touched the app first, Flask refuses late `app.errorhandler` registration ("can no longer be called after first request"). Moved the registration to module-import time (`_install_harness_csrf_handler()`); now idempotent and safe regardless of test order. CI-mirror `pytest tests/ -k "not e2e"` was 1571 passed / 1 error → now **1573 passed / 0 errors**.
+- ✅ **N20 High — claimed browser-render coverage silently skipped in CI.** `.github/workflows/ci.yml` installed `pytest-playwright` but never ran `playwright install chromium`, so all 27 browser tests hit the `pytest.skip("chromium not available")` guard. Added a dedicated `golden` job that runs `playwright install --with-deps chromium` before `pytest tests/golden/`, AND added the strict-mode `python -m tests.eval.run_eval --ci` step. Added `golden` to `docker.needs` so docker won't build without browser tests passing.
+- ✅ **N21 Medium — `make eval` swallowed tool-selection failures.** Was `python -m tests.eval.run_eval --mock || true`. Switched to `--ci` mode (which exists in `tests/eval/run_eval.py:253`, enforces tool/param/chain accuracy thresholds, exits non-zero on regression). Local run: 80/80 / 50/50 / 11/11, `pass: true`.
+- ✅ **N22 Medium — animation player didn't update visible cluster bubbles.** `filterToIndices` only styled `entry.leafletLayer`; for wide-area polygon layers in cluster mode (zoom < 15), the visible representation is `clusterLayer` (markerClusterGroup of centroids). Fix: stamp `_origIdx` on each centroid marker at build time and store `clusterMarkersByIdx[]` on the entry; `filterToIndices` now also batches `clusterLayer.removeLayers(toRemove)` + `addLayers(toAdd)` so the cluster reorganizes per animation frame. `clearFilter` re-adds any missing markers. New regression test `test_animate_layer_filters_cluster_markers_at_low_zoom` proves the cluster bubble count drops when filtering and restores on clear.
+- ✅ **N23 Low — audit doc was stale.** Header said "24 commits ahead, latest daa6b36" while the repo was at `3124686` clean and synced. Refreshed all metadata; the test counts in this file are now updated per-cycle in the header rather than embedded in cycle notes (which became wrong as cycles added tests).
+
+**Verification**: full pytest run + `make eval` after Cycle 14 — see header for current numbers.
 
 ### Cycle 12 (the actual user-reported render bug — fixed) — done
 The previous cycles built infrastructure to *catch* render bugs; this cycle reproduced and fixed the user's original manual-check complaint. I drove the live application against real Overpass (free, no LLM cost), captured screenshots, and inspected them visually (multimodal). Two distinct rendering pathologies turned up.

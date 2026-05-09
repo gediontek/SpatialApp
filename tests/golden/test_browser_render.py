@@ -1348,6 +1348,82 @@ def _visualize_3d_tool_result_sse(layer_name: str = "buildings_3d"):
 
 
 @pytest.mark.golden
+def test_animate_layer_filters_cluster_markers_at_low_zoom(
+    live_app, chromium,
+):
+    """Audit N22 regression: when a wide-area polygon layer is in
+    cluster mode (zoom < 15), filterToIndices must also toggle which
+    centroid markers are in the cluster — not just style the hidden
+    polygon paths. Without this, the slider advances visually but the
+    cluster bubbles never update until the user zooms in.
+
+    Setup: 60 polygons over ~30km bbox (forces cluster mode at fit
+    zoom). Then call filterToIndices([0]) directly via the page and
+    verify the cluster's `hasLayer(marker[0])` is true while
+    `hasLayer(marker[1])` is false.
+    """
+    errors = []
+    chromium.on("pageerror", lambda e: errors.append(str(e)))
+
+    _block_socketio(chromium)
+    chromium.goto(live_app + "/", wait_until="networkidle", timeout=20_000)
+    chromium.wait_for_function(
+        "() => window.LayerManager && "
+        "typeof window.LayerManager.filterToIndices === 'function'",
+        timeout=5_000,
+    )
+
+    layer_name = "wide_anim"
+    _send_chat(chromium, _wide_area_polygons_sse(layer_name, 60),
+               "wide-area animate test")
+    chromium.wait_for_function(
+        f"() => window.LayerManager.getLayerNames().includes('{layer_name}')",
+        timeout=8_000,
+    )
+
+    # Fit the map low so the cluster mode is active, then capture the
+    # baseline cluster-bubble count.
+    chromium.evaluate(f"window.LayerManager.fitToLayer('{layer_name}')")
+    chromium.wait_for_timeout(500)
+    baseline_clusters = chromium.evaluate(
+        "document.querySelectorAll('.marker-cluster').length"
+    )
+    assert baseline_clusters > 0, (
+        "wide-area layer did not enter cluster mode at fit zoom — "
+        "test setup wrong or cluster trigger broke"
+    )
+
+    # Filter to just the first feature. The cluster must reorganize:
+    # with 59 of 60 markers removed, the surviving cluster bubble count
+    # MUST be smaller than the baseline. Pre-fix the cluster never
+    # learned about the filter and the bubbles stayed put.
+    chromium.evaluate(
+        f"window.LayerManager.filterToIndices('{layer_name}', [0])"
+    )
+    chromium.wait_for_timeout(400)
+    filtered_clusters = chromium.evaluate(
+        "document.querySelectorAll('.marker-cluster').length"
+    )
+    assert filtered_clusters < baseline_clusters, (
+        f"filterToIndices([0]) did not shrink cluster bubbles "
+        f"(was {baseline_clusters}, after-filter {filtered_clusters}). "
+        "N22 regression — slider would not affect visible bubbles."
+    )
+    # Restore via clearFilter — cluster bubble count must return to
+    # ~baseline (animation reset must not leave map stuck on filter).
+    chromium.evaluate(f"window.LayerManager.clearFilter('{layer_name}')")
+    chromium.wait_for_timeout(400)
+    restored_clusters = chromium.evaluate(
+        "document.querySelectorAll('.marker-cluster').length"
+    )
+    assert restored_clusters >= baseline_clusters, (
+        f"clearFilter did not restore cluster ({restored_clusters} < "
+        f"baseline {baseline_clusters}). Animation reset broken."
+    )
+    assert errors == [], f"page errors: {errors}"
+
+
+@pytest.mark.golden
 def test_animate_layer_renders_player_and_filters_features(
     live_app, chromium,
 ):
