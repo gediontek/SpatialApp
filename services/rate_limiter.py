@@ -76,22 +76,69 @@ class PerKeyRateLimiter:
     only — counters reset on process restart and are not shared across
     workers; for multi-worker deployments use Redis or nginx limit_req.
 
+    Memory bound: an attacker rotating through distinct keys (e.g., IP
+    spoofing) would otherwise grow `_events` indefinitely. We enforce a
+    hard cap (`max_keys`) and run an opportunistic GC sweep that drops
+    keys whose entire history has aged out of the window. When the cap
+    is hit and GC cannot free space, new keys are refused — existing
+    legitimate clients keep working.
+
     Audit N11: applied to /api/register to prevent bot-creates / token
     exhaustion / username enumeration.
     """
 
-    def __init__(self, name: str, max_requests: int, window_seconds: int):
+    # Sweep cadence: every N allow() calls trigger a full GC pass.
+    # Trades a bit of CPU for amortized O(1) memory.
+    _GC_INTERVAL = 1024
+
+    def __init__(
+        self,
+        name: str,
+        max_requests: int,
+        window_seconds: int,
+        max_keys: int = 50_000,
+    ):
         self.name = name
         self.max_requests = max_requests
         self.window_seconds = window_seconds
+        self.max_keys = max_keys
         self._events: dict[str, list[float]] = {}
+        self._call_count = 0
         self._lock = threading.Lock()
 
+    def _gc(self, cutoff: float) -> int:
+        """Drop keys whose entire history is outside the window. Caller
+        must hold `self._lock`. Returns number of keys evicted."""
+        stale = [k for k, h in self._events.items() if not h or h[-1] < cutoff]
+        for k in stale:
+            del self._events[k]
+        return len(stale)
+
     def allow(self, key: str) -> bool:
-        """Return True if the key may proceed; record the event when True."""
+        """Return True if the key may proceed; record the event when True.
+
+        Memory: opportunistic GC sweeps stale keys every `_GC_INTERVAL`
+        calls or whenever the cap is reached. New keys are refused when
+        the cap is full and GC can't free anything — this protects the
+        process even under deliberate key-rotation flood.
+        """
         now = time.time()
         cutoff = now - self.window_seconds
         with self._lock:
+            self._call_count += 1
+            if (self._call_count % self._GC_INTERVAL == 0
+                    or len(self._events) >= self.max_keys):
+                self._gc(cutoff)
+
+            # Cap reached after GC: refuse genuinely-new keys but keep
+            # serving existing ones (avoids locking out legitimate users).
+            if key not in self._events and len(self._events) >= self.max_keys:
+                logger.warning(
+                    "PerKeyRateLimiter[%s]: max_keys=%d hit — refusing new key",
+                    self.name, self.max_keys,
+                )
+                return False
+
             history = self._events.setdefault(key, [])
             # Drop expired
             while history and history[0] < cutoff:
@@ -99,9 +146,6 @@ class PerKeyRateLimiter:
             if len(history) >= self.max_requests:
                 return False
             history.append(now)
-            # Drop the bucket entirely if it ever empties to bound memory.
-            if not history:
-                self._events.pop(key, None)
             return True
 
     def reset(self, key: str = None) -> None:
@@ -109,6 +153,7 @@ class PerKeyRateLimiter:
         with self._lock:
             if key is None:
                 self._events.clear()
+                self._call_count = 0
             else:
                 self._events.pop(key, None)
 

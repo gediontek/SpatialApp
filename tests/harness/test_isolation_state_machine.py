@@ -189,7 +189,87 @@ class IsolationModel(RuleBasedStateMachine):
         )
 
     # -----------------------------------------------------------------
-    # Invariant — checked after every transition
+    # Annotation rules (audit C4 — isolation surface)
+    # -----------------------------------------------------------------
+
+    @rule(category=_NAME, user_idx=st.integers(min_value=0, max_value=1))
+    def create_annotation(self, category, user_idx):
+        """User creates an annotation. Server assigns the id; model records
+        it under the creating user's expected set."""
+        users = self._user_ids()
+        if user_idx >= len(users):
+            return
+        uid = users[user_idx]
+        body = {
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[0, 0], [0, 1], [1, 1], [1, 0], [0, 0]]],
+            },
+            "properties": {"category_name": category, "color": "#abcdef"},
+        }
+        r = self._client.post(
+            "/save_annotation", json=body, headers=self._auth(uid),
+        )
+        assert r.status_code == 200, (
+            f"isolation regression: user {uid} could not create own "
+            f"annotation; got {r.status_code} body={r.get_data(as_text=True)!r}"
+        )
+        ann_id = r.get_json().get("id")
+        assert isinstance(ann_id, int), (
+            f"server did not return an id for the new annotation: {r.get_json()}"
+        )
+        self.annots_by_user[uid].add(ann_id)
+
+    @rule(user_idx=st.integers(min_value=0, max_value=1))
+    def list_annotations(self, user_idx):
+        """User lists annotations; result MUST equal model's expected set
+        for that user — never include annotations another user created."""
+        users = self._user_ids()
+        if user_idx >= len(users):
+            return
+        uid = users[user_idx]
+        r = self._client.get("/get_annotations", headers=self._auth(uid))
+        assert r.status_code == 200
+        body = r.get_json() or {}
+        seen = {f.get("id") for f in body.get("features", [])}
+        expected = self.annots_by_user[uid]
+        assert seen == expected, (
+            f"isolation regression: user {uid} annotation view diverged. "
+            f"seen={sorted(seen)} expected={sorted(expected)}"
+        )
+
+    @rule(user_idx=st.integers(min_value=0, max_value=1))
+    def clear_annotations(self, user_idx):
+        """User clears their own annotations. Other users' annotations
+        MUST remain in `state.geo_coco_annotations`."""
+        users = self._user_ids()
+        if user_idx >= len(users):
+            return
+        uid = users[user_idx]
+        # Snapshot other users' annotations before the call.
+        others_before = {
+            other_uid: set(ids)
+            for other_uid, ids in self.annots_by_user.items()
+            if other_uid != uid
+        }
+
+        r = self._client.post(
+            "/clear_annotations", headers=self._auth(uid),
+        )
+        assert r.status_code == 200, (
+            f"isolation regression: user {uid} could not clear own "
+            f"annotations; got {r.status_code}"
+        )
+
+        # Caller's bucket is now empty; other users untouched.
+        self.annots_by_user[uid] = set()
+        for other_uid, ids in others_before.items():
+            assert self.annots_by_user[other_uid] == ids, (
+                f"model bookkeeping wrong for {other_uid} after {uid} cleared"
+            )
+
+    # -----------------------------------------------------------------
+    # Invariants — checked after every transition
     # -----------------------------------------------------------------
 
     @invariant()
@@ -205,6 +285,36 @@ class IsolationModel(RuleBasedStateMachine):
                     raise AssertionError(
                         f"model leak: layer {name!r} in user {uid}'s expected "
                         f"set but state.layer_owners says owner is {owner!r}"
+                    )
+
+    @invariant()
+    def no_cross_user_annotation_visibility(self):
+        """Every annotation in the store MUST carry the owner_user_id of
+        the user the model recorded as its creator. No user's expected
+        annotation set may contain an id owned by another user."""
+        # Build {ann_id: owner_user_id} from server state.
+        server_owner = {}
+        for f in state.geo_coco_annotations:
+            ann_id = f.get("id")
+            owner = (f.get("properties") or {}).get("owner_user_id", "anonymous")
+            if ann_id is not None:
+                server_owner[ann_id] = owner
+
+        for uid, expected_ids in self.annots_by_user.items():
+            for ann_id in expected_ids:
+                actual_owner = server_owner.get(ann_id)
+                if actual_owner is None:
+                    # Annotation gone from store but model thinks user
+                    # owns it — bookkeeping bug, fail loud.
+                    raise AssertionError(
+                        f"model leak: annotation {ann_id} in user {uid}'s "
+                        "expected set but missing from server state"
+                    )
+                if actual_owner != uid:
+                    raise AssertionError(
+                        f"isolation breach: annotation {ann_id} in user "
+                        f"{uid}'s expected set but server records owner "
+                        f"as {actual_owner!r}"
                     )
 
 
