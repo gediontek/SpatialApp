@@ -1,10 +1,11 @@
 # SpatialApp v2 — Input package for next external audit
 
-**Status:** **READY for external audit submission.** 13 cycles closed; CI green; all known UX bug classes have regression coverage.
-**Last updated:** 2026-05-09 (post Cycle 14 — N19-N23 from external audit-2 closed)
+**Status:** **READY for external audit submission.** 15 cycles closed; CI green; audit-3 returned **93/100** with only one Low-severity doc-hygiene finding (N24, now closed).
+**Last updated:** 2026-05-09 (post Cycle 15 — N24 from external audit-3 closed)
 **Updated by:** autonomous /auto-solve cycle
-**Repo state:** branch `main`, working tree clean, synced with origin. **Next external auditor: new finding IDs MUST start at N24 — IDs N1-N23 are taken.** Latest commit: run `git log -1 --oneline` (was `3124686` before Cycle 14; Cycle 14 commit is later).
+**Repo state:** branch `main`, working tree clean, synced with origin. **Next external auditor: new finding IDs MUST start at N25 — IDs N1-N24 are taken.** Latest commit: run `git log -1 --oneline` (Cycle 14 was at `79dc9cc`; Cycle 15 is later).
 **Verified at last update**: `make eval` green (6 workflow + 19 browser + 8 frontend-auth + 65 harness + 30 tool-selection in `--ci` strict mode); CI-mirror `pytest tests/ -k "not e2e"` = **1,573 passed / 10 skipped / 0 failed** (~96s).
+**Audit history**: audit-1 (pre-cycles): 31/100 → audit-2 (post Cycle 13): 81/100 (5 findings N19-N23) → audit-3 (post Cycle 14): **93/100** (1 finding N24, closed in Cycle 15).
 **Companion docs:**
 - [`07-v2-audit-findings.md`](07-v2-audit-findings.md) — original external audit (12 findings)
 - [`08-v2-bugfree-plan.md`](08-v2-bugfree-plan.md) — Acceptance-First Hardening plan (v1.2)
@@ -191,6 +192,12 @@ Cycle 11 added `animate_layer` and `visualize_3d` as resilience-only tests (`tes
 
 **Final coverage**: see header for current `make eval` and unit-suite numbers (kept fresh per-cycle).
 
+### Cycle 15 (external audit-3 close-out — N24) — done
+External LLM audit-3 returned 93/100 (up from 81/100 in audit-2). Only one finding:
+- ✅ **N24 Low — audit handoff still contained stale reviewer instructions.** §4 said "new findings MUST start at N19" (old) and §5 still referenced "24+ unpushed commits" with the daa6b36 test counts. Header was already current (Cycle 14 fix), but the per-section handoff text wasn't updated. Refreshed §4 + §5: handoff text now says "new findings start at N24," repo state is "clean and pushed," and verified test counts reflect Cycle 14 numbers (1,573 / 10 / 0).
+
+**Audit-3 spot-checks all confirmed**: N19 (CSRF handler at import time), N20 (golden CI job + chromium install), N21 (`--ci` mode in `make eval`), N22 (`clusterMarkersByIdx` toggle in `filterToIndices`). Repo verified clean at `79dc9cc` after audit-3.
+
 ### Cycle 14 (external audit-2 close-out — N19-N23) — done
 External LLM auditor reviewed the cycle-13 package and returned 5 findings (initial 84/100; final score 81/100). All closed:
 
@@ -293,15 +300,16 @@ After /critical-review and /gap-analysis flagged that the security harness cover
 ## 4. Suggested external prompts to use
 
 Use [`09-external-audit-prompts.md`](09-external-audit-prompts.md) Prompts 1, 3, 5 as the primary input. Recommended adjustments for this round:
-- Prompt 3 (findings completeness) — the "previous findings" list NOW INCLUDES N1-N17 + N18; **new findings MUST start at N19**. The `09-external-audit-prompts.md` file currently still says "start at N2" (its own numbering predates the rolling work) — override that with this file when handing it to the reviewer.
+- Prompt 3 (findings completeness) — the "previous findings" list NOW INCLUDES N1-N23. **New findings MUST start at N24** (the header is the source of truth — see top of this file). The `09-external-audit-prompts.md` file's own intro numbering predates the rolling work — override it with this file when handing it to the reviewer.
 - Add a new explicit focus area: "the ten under-audited surfaces in §2.1 of `12-next-audit-input.md`" — reviewer should sweep those before generic ones.
 - Provide the auditor with the current commit sha (use `git log -1 --oneline`) so they can re-run the same probes against the same code.
 
 ## 5. Submission checklist (for when you DO audit)
 
-- [ ] Push the 24+ unpushed commits OR generate a `git format-patch` bundle for the auditor.
-- [ ] Confirm `pytest tests/harness/` is green on a clean checkout (current: **65 passed / 3 skipped**).
-- [ ] Confirm `pytest --ignore=tests/e2e` is green (current verified: **1,526 passed / 10 skipped** as of commit `daa6b36`).
-- [ ] Hand the auditor: this doc, `09-external-audit-prompts.md` Prompts 1+3+5, the smoke test report `13-smoke-test-2026-05-03.md`, and the current commit sha.
-- [ ] Tell the auditor: "do not re-flag any ID in §1.1; **new findings start at N19**."
+- [ ] Repo state is clean and pushed; auditor can pull from `origin/main` directly. The header records the latest commit at the time of the most recent cycle.
+- [ ] Confirm `pytest tests/harness/` is green on a clean checkout (latest verified: **65 passed / 3 skipped**).
+- [ ] Confirm `pytest tests/ -k "not e2e"` is green (latest verified at Cycle 14 close: **1,573 passed / 10 skipped / 0 failed**).
+- [ ] Confirm `make eval` is green (latest: 6 workflow + 19 browser-render + 8 frontend-auth + 65 harness + 30 tool-selection in `--ci` strict mode).
+- [ ] Hand the auditor: this doc, `09-external-audit-prompts.md` Prompts 1+3+5, the smoke test report `13-smoke-test-2026-05-03.md`, and the current commit sha (`git log -1 --oneline`).
+- [ ] Tell the auditor: "do not re-flag any ID in §1.1 or any of N1–N23; **new findings start at N24**."
 - [ ] Budget: 1-2 reviewer hours per prompt; total ~6 hours.
