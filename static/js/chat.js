@@ -348,6 +348,17 @@ var ChatPanel = (function() {
                 if (data.result && data.result.action === 'chart' && window.Chart) {
                     renderChartIntoStep(_lastToolStepId, data.result);
                 }
+                // animate_layer returns a time_steps spec — render a
+                // play/pause/scrub player that filters the layer per step.
+                if (data.result && data.result.action === 'animate' && _layerManager) {
+                    renderAnimatePlayer(_lastToolStepId, data.result, _layerManager);
+                }
+                // visualize_3d returns a height-annotated GeoJSON —
+                // open a deck.gl 3D extrusion view in a modal.
+                if (data.result && data.result.action === '3d_buildings'
+                        && window.deck) {
+                    renderShow3DButton(_lastToolStepId, data.result);
+                }
                 break;
 
             case 'layer_add':
@@ -644,6 +655,272 @@ var ChatPanel = (function() {
             el.removeClass('tool-loading').addClass('tool-done');
             el.find('.tool-icon').text('✓');
             el.find('.tool-text').text(text);
+        }
+    }
+
+    function renderAnimatePlayer(stepId, spec, layerManager) {
+        // Renders a time-step player (slider + play/pause/reset) inside
+        // the tool step. Each step calls layerManager.filterToIndices to
+        // show only the features for that time step. `cumulative: true`
+        // unions all steps up to the current one.
+        if (!stepId || !spec || !spec.time_steps || !layerManager) return;
+        var hostStep = document.getElementById(stepId);
+        if (!hostStep) return;
+
+        var layerName = spec.layer_name;
+        var steps = spec.time_steps;
+        var intervalMs = Math.max(50, spec.interval_ms || 1000);
+        var cumulative = !!spec.cumulative;
+
+        var container = document.createElement('div');
+        container.className = 'chat-animate-player';
+        container.style.cssText = 'margin-top:8px;display:flex;flex-direction:column;'
+            + 'gap:6px;max-width:480px;padding:8px;background:#f6f8fa;'
+            + 'border-radius:6px;';
+
+        var labelEl = document.createElement('div');
+        labelEl.className = 'chat-animate-label';
+        labelEl.style.cssText = 'font-size:12px;color:#444;';
+
+        var slider = document.createElement('input');
+        slider.type = 'range';
+        slider.min = '0';
+        slider.max = String(Math.max(0, steps.length - 1));
+        slider.value = '0';
+        slider.step = '1';
+        slider.className = 'chat-animate-slider';
+        slider.style.cssText = 'width:100%;';
+
+        var btnRow = document.createElement('div');
+        btnRow.style.cssText = 'display:flex;gap:6px;';
+
+        var playBtn = document.createElement('button');
+        playBtn.textContent = '▶ Play';
+        playBtn.className = 'chat-animate-play';
+        playBtn.style.cssText = 'padding:4px 12px;cursor:pointer;border:1px solid #ccc;'
+            + 'background:#fff;border-radius:4px;';
+
+        var resetBtn = document.createElement('button');
+        resetBtn.textContent = '⟲ Reset';
+        resetBtn.className = 'chat-animate-reset';
+        resetBtn.style.cssText = 'padding:4px 12px;cursor:pointer;border:1px solid #ccc;'
+            + 'background:#fff;border-radius:4px;';
+
+        btnRow.appendChild(playBtn);
+        btnRow.appendChild(resetBtn);
+        container.appendChild(labelEl);
+        container.appendChild(slider);
+        container.appendChild(btnRow);
+        hostStep.appendChild(container);
+
+        var playInterval = null;
+
+        function applyStep(idx) {
+            if (idx < 0 || idx >= steps.length) return;
+            slider.value = String(idx);
+            labelEl.textContent = 'Step ' + (idx + 1) + ' / ' + steps.length
+                + ': ' + steps[idx].label;
+            var visible;
+            if (cumulative) {
+                visible = [];
+                for (var i = 0; i <= idx; i++) {
+                    visible = visible.concat(steps[i].feature_indices || []);
+                }
+            } else {
+                visible = steps[idx].feature_indices || [];
+            }
+            if (typeof layerManager.filterToIndices === 'function') {
+                layerManager.filterToIndices(layerName, visible);
+            }
+        }
+
+        function pause() {
+            if (playInterval) {
+                clearInterval(playInterval);
+                playInterval = null;
+            }
+            playBtn.textContent = '▶ Play';
+        }
+
+        function play() {
+            if (playInterval) return;
+            playBtn.textContent = '⏸ Pause';
+            playInterval = setInterval(function() {
+                var cur = parseInt(slider.value, 10);
+                var next = cur + 1;
+                if (next >= steps.length) {
+                    pause();
+                    return;
+                }
+                applyStep(next);
+            }, intervalMs);
+        }
+
+        playBtn.addEventListener('click', function() {
+            if (playInterval) pause(); else play();
+        });
+        resetBtn.addEventListener('click', function() {
+            pause();
+            applyStep(0);
+        });
+        slider.addEventListener('input', function() {
+            pause();
+            applyStep(parseInt(slider.value, 10));
+        });
+
+        // Initial state — show only step 0.
+        applyStep(0);
+    }
+
+    function renderShow3DButton(stepId, spec) {
+        // 3D extrusion view is heavy (deck.gl init + WebGL canvas); we
+        // gate it behind a button so the chat history stays light.
+        if (!stepId || !spec || !spec.geojson) return;
+        var hostStep = document.getElementById(stepId);
+        if (!hostStep) return;
+
+        var btn = document.createElement('button');
+        btn.textContent = '🏙  Show 3D view (' + (spec.feature_count || 0) + ' buildings)';
+        btn.className = 'chat-show-3d-btn';
+        btn.style.cssText = 'margin-top:6px;padding:6px 12px;cursor:pointer;'
+            + 'border:1px solid #ccc;background:#fff;border-radius:4px;font-size:13px;';
+        btn.addEventListener('click', function() { open3DModal(spec); });
+        hostStep.appendChild(btn);
+    }
+
+    function open3DModal(spec) {
+        if (!window.deck) {
+            appendMessage('error', '3D library (deck.gl) not loaded.');
+            return;
+        }
+        // Compute centroid of layer for initial camera positioning.
+        var feats = (spec.geojson && spec.geojson.features) || [];
+        var sumLng = 0, sumLat = 0, n = 0;
+        for (var i = 0; i < feats.length; i++) {
+            var g = feats[i].geometry;
+            if (!g || !g.coordinates) continue;
+            var ring = g.type === 'Polygon' ? g.coordinates[0]
+                     : g.type === 'MultiPolygon' ? g.coordinates[0][0]
+                     : null;
+            if (!ring) continue;
+            for (var j = 0; j < ring.length; j++) {
+                sumLng += ring[j][0]; sumLat += ring[j][1]; n++;
+            }
+        }
+        if (n === 0) {
+            appendMessage('error', 'No polygon geometry to render in 3D.');
+            return;
+        }
+        var centerLng = sumLng / n, centerLat = sumLat / n;
+
+        var overlay = document.createElement('div');
+        overlay.className = 'chat-3d-modal-overlay';
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);'
+            + 'z-index:9000;display:flex;align-items:center;justify-content:center;';
+
+        var panel = document.createElement('div');
+        panel.style.cssText = 'position:relative;width:90vw;max-width:1100px;'
+            + 'height:80vh;background:#1a1a2e;border-radius:8px;overflow:hidden;'
+            + 'box-shadow:0 10px 40px rgba(0,0,0,0.5);';
+        overlay.appendChild(panel);
+
+        var canvas = document.createElement('div');
+        canvas.id = 'deck-3d-canvas';
+        canvas.style.cssText = 'position:absolute;inset:0;';
+        panel.appendChild(canvas);
+
+        var closeBtn = document.createElement('button');
+        closeBtn.textContent = '✕ Close';
+        closeBtn.style.cssText = 'position:absolute;top:10px;right:10px;z-index:10;'
+            + 'padding:6px 14px;cursor:pointer;border:none;border-radius:4px;'
+            + 'background:#fff;color:#333;font-weight:bold;';
+        closeBtn.addEventListener('click', function() {
+            try { deckInstance && deckInstance.finalize(); } catch (_e) {}
+            document.body.removeChild(overlay);
+        });
+        panel.appendChild(closeBtn);
+
+        var legend = document.createElement('div');
+        legend.style.cssText = 'position:absolute;bottom:10px;left:10px;z-index:10;'
+            + 'padding:6px 10px;background:rgba(255,255,255,0.85);border-radius:4px;'
+            + 'font-size:12px;color:#333;';
+        legend.textContent = spec.feature_count + ' buildings · '
+            + 'height_attr=' + (spec.height_attribute || 'height')
+            + (spec.used_default_count
+                ? ' · ' + spec.used_default_count + ' used default height'
+                : '');
+        panel.appendChild(legend);
+
+        document.body.appendChild(overlay);
+
+        var deckInstance = null;
+        try {
+            // Color ramp: short = blue, medium = green, tall = red.
+            function _heightColor(h) {
+                if (h < 20) return [40, 110, 200];
+                if (h < 50) return [40, 180, 100];
+                if (h < 100) return [240, 180, 50];
+                return [220, 60, 60];
+            }
+            var polygonLayer = new deck.PolygonLayer({
+                id: 'extruded-buildings',
+                data: feats,
+                getPolygon: function(f) {
+                    if (!f.geometry) return [];
+                    if (f.geometry.type === 'Polygon') return f.geometry.coordinates[0];
+                    if (f.geometry.type === 'MultiPolygon') return f.geometry.coordinates[0][0];
+                    return [];
+                },
+                getElevation: function(f) {
+                    return (f.properties && f.properties._height_m) || 10;
+                },
+                getFillColor: function(f) {
+                    return _heightColor((f.properties && f.properties._height_m) || 10);
+                },
+                getLineColor: [80, 80, 80],
+                lineWidthMinPixels: 1,
+                extruded: true,
+                pickable: true,
+                wireframe: true,
+            });
+
+            // OSM raster basemap as a deck.gl TileLayer.
+            var tileLayer = new deck.TileLayer({
+                id: 'basemap',
+                data: 'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                minZoom: 0,
+                maxZoom: 19,
+                tileSize: 256,
+                renderSubLayers: function(props) {
+                    var bbox = props.tile.bbox || props.tile.boundingBox;
+                    var west = bbox.west !== undefined ? bbox.west : bbox[0][0];
+                    var south = bbox.south !== undefined ? bbox.south : bbox[0][1];
+                    var east = bbox.east !== undefined ? bbox.east : bbox[1][0];
+                    var north = bbox.north !== undefined ? bbox.north : bbox[1][1];
+                    return new deck.BitmapLayer(props, {
+                        data: null,
+                        image: props.data,
+                        bounds: [west, south, east, north],
+                    });
+                },
+            });
+
+            deckInstance = new deck.DeckGL({
+                container: canvas,
+                initialViewState: {
+                    longitude: centerLng,
+                    latitude: centerLat,
+                    zoom: 16,
+                    pitch: 50,
+                    bearing: 0,
+                },
+                controller: true,
+                layers: [tileLayer, polygonLayer],
+            });
+        } catch (e) {
+            console.warn('deck.gl 3D render failed:', e);
+            appendMessage('error', '3D view failed: ' + e.message);
+            try { document.body.removeChild(overlay); } catch (_e) {}
         }
     }
 

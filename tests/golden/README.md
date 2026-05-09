@@ -55,8 +55,8 @@ make eval          # this suite + harness + tool-selection eval
 | B13 | Malformed `layer_add` (geometry: null) does not crash chat | Defensive frontend regression — page wedges on bad data |
 | B14 | `heatmap` event creates a Leaflet.heat canvas on the overlay pane | Leaflet.heat removed from `index.html` → all heatmap tools silently no-op |
 | B15 | `chart` tool result renders an actual Chart.js chart in the chat | Chart.js removed → chart results fall back to raw-JSON dumps |
-| B16 | `animate` tool result does not crash the page (resilience) | Half-built feature regression — should fail loud when a real player UI lands |
-| B17 | `visualize_3d` tool result does not crash the page (resilience) | Same — half-built 3D feature should fail loud when a real renderer lands |
+| B16 | `animate_layer` renders a slider+play+reset; play advances; reset returns | Animate UI regresses to JSON-dump fallback; AbortController breaks animation loop |
+| B17 | `visualize_3d` opens a deck.gl modal with a sized WebGL canvas | 3D extrusion view broken; deck.gl removed from template; WebGL context fails |
 | B18 | Wide-area many-polygon layer renders as cluster bubbles at low zoom | "Show hospitals in Chicago" looks blank because polygons are sub-pixel |
 | B19 | Layers ≥ 500 features emit a chat hint about zoom-in | User assumes blank map = broken when actually data spans wide area |
 

@@ -234,6 +234,10 @@
          (labels + datasets); without this lib loaded, chart results
          render as raw JSON in the tool-step text, which is broken UX. -->
     <script nonce="{{ csp_nonce }}" src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+    <!-- deck.gl — required by chat.js's visualize_3d renderer for true
+         polygon extrusion. Without this, 3d_buildings results would
+         dump raw JSON into the chat. UMD build exposes window.deck. -->
+    <script nonce="{{ csp_nonce }}" src="https://unpkg.com/deck.gl@8.9.36/dist.min.js"></script>
     <!-- jQuery -->
     <script nonce="{{ csp_nonce }}" src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <!-- Markdown rendering for chat -->

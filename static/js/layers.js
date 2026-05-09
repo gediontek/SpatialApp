@@ -468,6 +468,48 @@ var LayerManager = (function() {
         if (style.color) entry.style.color = style.color;
     }
 
+    /**
+     * Show only the features whose original index is in `indices`. Used
+     * by the animate_layer player: each time-step contains
+     * feature_indices, and we want the map to show only those features
+     * for the current step. Hidden features are zero-opacity styled so
+     * we don't pay the cost of removing/re-adding them per frame.
+     */
+    function filterToIndices(layerName, indices) {
+        if (!layers[layerName]) return;
+        var entry = layers[layerName];
+        var indexSet = {};
+        for (var i = 0; i < indices.length; i++) indexSet[indices[i]] = true;
+        var defaultStyle = entry.style || {};
+        var visibleStyle = {
+            opacity: 1,
+            fillOpacity: defaultStyle.fillOpacity || 0.3,
+        };
+        var hiddenStyle = { opacity: 0, fillOpacity: 0 };
+        var idx = 0;
+        eachFeatureLayer(entry.leafletLayer, function(featureLayer) {
+            if (typeof featureLayer.setStyle !== 'function') { idx++; return; }
+            featureLayer.setStyle(indexSet[idx] ? visibleStyle : hiddenStyle);
+            idx++;
+        });
+    }
+
+    /** Restore the layer to its default visible style after filterToIndices. */
+    function clearFilter(layerName) {
+        if (!layers[layerName]) return;
+        var entry = layers[layerName];
+        var defaultStyle = entry.style || {};
+        var restore = {
+            opacity: 1,
+            fillOpacity: defaultStyle.fillOpacity || 0.3,
+        };
+        eachFeatureLayer(entry.leafletLayer, function(featureLayer) {
+            if (typeof featureLayer.setStyle === 'function') {
+                featureLayer.setStyle(restore);
+            }
+        });
+    }
+
     function highlightFeatures(layerName, attribute, value, color) {
         if (!layers[layerName]) return;
 
@@ -553,6 +595,8 @@ var LayerManager = (function() {
         getLayerNames: getLayerNames,
         getLayerCount: getLayerCount,
         highlightFeatures: highlightFeatures,
-        styleLayer: styleLayer
+        styleLayer: styleLayer,
+        filterToIndices: filterToIndices,
+        clearFilter: clearFilter
     };
 })();

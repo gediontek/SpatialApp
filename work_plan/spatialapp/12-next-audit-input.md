@@ -173,6 +173,23 @@ After self-evaluation said "I cannot self-grade to 100; here are the residual ga
 - Replace placeholder `SECURITY_CONTACT` default with a real inbox before any deploy
 - Push 24 commits to `origin/main` (deferred per "no auto-push" policy)
 
+### Cycle 13 (real UIs for animate_layer + visualize_3d) — done
+Cycle 11 added `animate_layer` and `visualize_3d` as resilience-only tests (`test_unrendered_tool_actions_degrade_gracefully`) — pinning that the page wouldn't crash when those tools returned data with no specialized renderer. The user pushed back: "they should have real UI. I don't understand the purpose of dumping JSON files in the chat." Built both:
+
+- **`animate_layer` → time-step player** (`renderAnimatePlayer` in `static/js/chat.js`): slider + ▶ Play / ⟲ Reset buttons rendered under the tool step. Each step calls a new `LayerManager.filterToIndices(layerName, indices)` that zero-styles non-matching features (no expensive add/remove per frame). Honors `cumulative: true` (union steps 0..N) vs default (just step N). Slider is interactive; play auto-advances by `interval_ms` and stops at the last step. `LayerManager.clearFilter` restores the default style.
+- **`visualize_3d` → deck.gl extrusion modal** (`renderShow3DButton` + `open3DModal` in `chat.js`): "🏙 Show 3D view" button under the tool step opens an 80vh / 90vw modal with a `deck.gl PolygonLayer({extruded: true})` painting the building footprints with `getElevation: f._height_m` and a height-binned color ramp (blue <20m → green <50m → yellow <100m → red ≥100m). Basemap is OSM raster via `deck.TileLayer` + `BitmapLayer`. Camera centers on the layer centroid at zoom 16 / pitch 50°; `controller: true` enables drag-to-rotate / scroll-to-zoom. Modal `Close` button calls `deckInstance.finalize()` to release the WebGL context.
+- **`templates/index.html`**: added deck.gl 8.9.36 from unpkg (already in CSP via Leaflet).
+
+**Replaced tests B16/B17** with real-UI assertions:
+- `test_animate_layer_renders_player_and_filters_features` — asserts slider, play, reset buttons exist; clicking play advances the slider; clicking reset returns to step 0; button text flips to "Pause" while playing.
+- `test_visualize_3d_opens_deck_gl_modal_with_canvas` — asserts deck.gl is loaded; clicking the 3D button opens the modal; a `<canvas>` with non-zero dimensions appears (proves the WebGL context initialized); Close removes the overlay.
+
+**Visual evidence** (`tmp/smoke_screenshots/`):
+- `deck_3d_modal.png` — real extruded buildings from a Loop OSM query, height-coded colors, controllable camera. Genuinely renders 52 buildings in 3D.
+- `animate_player.png` — slider+play+reset rendered under the tool step (also visible in the test DOM assertion).
+
+**Final coverage**: `make eval` runs 6 server-side workflow + 19 browser-render (B1–B19) + 8 frontend-auth + 65 harness + 30 tool-selection = 128 deterministic checks in ~50s. Unit suite: 1,539 passed / 10 skipped / 0 failed.
+
 ### Cycle 12 (the actual user-reported render bug — fixed) — done
 The previous cycles built infrastructure to *catch* render bugs; this cycle reproduced and fixed the user's original manual-check complaint. I drove the live application against real Overpass (free, no LLM cost), captured screenshots, and inspected them visually (multimodal). Two distinct rendering pathologies turned up.
 

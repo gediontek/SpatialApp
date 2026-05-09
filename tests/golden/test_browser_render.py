@@ -1280,17 +1280,66 @@ def test_chart_tool_result_renders_chartjs_canvas(live_app, chromium):
     )
 
 
-def _action_with_no_frontend_renderer_sse(action_name: str, extra: dict = None):
-    """SSE that emits a tool_result whose `result.action` is one the
-    frontend has no specialized renderer for. The chat must fall back to
-    formatToolResult's default (raw JSON snippet) without crashing."""
-    payload = {"action": action_name, "layer_name": "x"}
-    if extra:
-        payload.update(extra)
-    tool_start = {"type": "tool_start", "tool": action_name,
-                  "input": {"layer_name": "x"}}
-    tool_result = {"type": "tool_result", "tool": action_name, "result": payload}
-    final = {"type": "message", "text": "done", "done": True}
+def _animate_layer_tool_result_sse(layer_name: str = "permits"):
+    """SSE for an animate_layer tool result. The handler returns a
+    time_steps list; the frontend should render a slider+play UI."""
+    add = {"type": "layer_add", "name": layer_name,
+           "geojson": {"type": "FeatureCollection",
+                       "features": [
+                           _polygon_feature(0, 0),
+                           _polygon_feature(0.001, 0),
+                           _polygon_feature(0.002, 0),
+                           _polygon_feature(0.003, 0),
+                       ]},
+           "style": None}
+    tool_start = {"type": "tool_start", "tool": "animate_layer",
+                  "input": {"layer_name": layer_name,
+                            "time_attribute": "year"}}
+    tool_result = {
+        "type": "tool_result", "tool": "animate_layer",
+        "result": {
+            "action": "animate", "layer_name": layer_name,
+            "time_attribute": "year", "interval_ms": 200,
+            "cumulative": False, "feature_count": 4, "binned": False,
+            "time_steps": [
+                {"time": "2020", "label": "2020", "feature_indices": [0]},
+                {"time": "2021", "label": "2021", "feature_indices": [1]},
+                {"time": "2022", "label": "2022", "feature_indices": [2]},
+                {"time": "2023", "label": "2023", "feature_indices": [3]},
+            ],
+        },
+    }
+    final = {"type": "message", "text": "animation ready", "done": True}
+    return (
+        f"event: layer_add\ndata: {json.dumps(add)}\n\n"
+        f"event: tool_start\ndata: {json.dumps(tool_start)}\n\n"
+        f"event: tool_result\ndata: {json.dumps(tool_result)}\n\n"
+        f"event: message\ndata: {json.dumps(final)}\n\n"
+    )
+
+
+def _visualize_3d_tool_result_sse(layer_name: str = "buildings_3d"):
+    """SSE for visualize_3d. Backend returns a height-annotated GeoJSON;
+    the frontend should expose a 'Show 3D view' button that opens a
+    deck.gl modal with extruded buildings."""
+    feats = []
+    for i in range(3):
+        f = _polygon_feature(0.001 * i, 0)
+        f["properties"]["_height_m"] = 10.0 + 20.0 * i
+        feats.append(f)
+    tool_start = {"type": "tool_start", "tool": "visualize_3d",
+                  "input": {"layer_name": layer_name}}
+    tool_result = {
+        "type": "tool_result", "tool": "visualize_3d",
+        "result": {
+            "action": "3d_buildings", "layer_name": layer_name,
+            "height_attribute": "height", "height_multiplier": 3.0,
+            "default_height": 10.0, "skipped_non_polygon": 0,
+            "used_default_count": 0, "feature_count": len(feats),
+            "geojson": {"type": "FeatureCollection", "features": feats},
+        },
+    }
+    final = {"type": "message", "text": "3d ready", "done": True}
     return (
         f"event: tool_start\ndata: {json.dumps(tool_start)}\n\n"
         f"event: tool_result\ndata: {json.dumps(tool_result)}\n\n"
@@ -1299,43 +1348,113 @@ def _action_with_no_frontend_renderer_sse(action_name: str, extra: dict = None):
 
 
 @pytest.mark.golden
-@pytest.mark.parametrize("action_name,extra", [
-    ("animate", {"time_steps": [{"time": "2024", "label": "2024", "feature_indices": [0, 1]}]}),
-    ("visualize_3d", {"min_height_m": 10.0, "max_height_m": 50.0}),
-])
-def test_unrendered_tool_actions_degrade_gracefully(
-    live_app, chromium, action_name, extra,
+def test_animate_layer_renders_player_and_filters_features(
+    live_app, chromium,
 ):
-    """Resilience guard for tool actions whose backend produces output but
-    the frontend has no specialized renderer (animate, visualize_3d).
-    These currently fall through to formatToolResult's default branch
-    (raw-JSON snippet). Contract: the page MUST NOT crash, and the chat
-    input MUST remain usable. If/when a real renderer is added, update
-    this test to assert the new behavior."""
+    """animate_layer must render a slider + play/reset buttons; clicking
+    play must advance the slider AND filter the layer per step. Pre-fix,
+    the result fell through to a raw-JSON dump."""
+    errors = []
+    chromium.on("pageerror", lambda e: errors.append(str(e)))
+
+    _block_socketio(chromium)
+    chromium.goto(live_app + "/", wait_until="networkidle", timeout=20_000)
+    chromium.wait_for_function(
+        "() => window.LayerManager && "
+        "typeof window.LayerManager.filterToIndices === 'function'",
+        timeout=5_000,
+    )
+
+    _send_chat(chromium, _animate_layer_tool_result_sse(), "animate this")
+
+    # The player UI must appear under the tool step.
+    chromium.locator(".chat-animate-player").first.wait_for(
+        state="visible", timeout=6_000,
+    )
+    assert chromium.locator(".chat-animate-slider").is_visible()
+    assert chromium.locator(".chat-animate-play").is_visible()
+    assert chromium.locator(".chat-animate-reset").is_visible()
+
+    # Initial state — slider at 0, label says step 1/4.
+    initial_label = chromium.evaluate(
+        "document.querySelector('.chat-animate-label').textContent"
+    )
+    assert "Step 1 / 4" in initial_label, f"label was: {initial_label!r}"
+    initial_slider = chromium.evaluate(
+        "document.querySelector('.chat-animate-slider').value"
+    )
+    assert initial_slider == "0"
+
+    # Press play; slider must advance past 0 within a couple of intervals.
+    chromium.locator(".chat-animate-play").click()
+    chromium.wait_for_function(
+        "() => parseInt(document.querySelector('.chat-animate-slider').value, 10) > 0",
+        timeout=3_000,
+    )
+    # Button text flips to Pause while playing.
+    assert "Pause" in chromium.locator(".chat-animate-play").inner_text()
+
+    # Reset returns slider to 0 and the label to step 1/4.
+    chromium.locator(".chat-animate-reset").click()
+    chromium.wait_for_function(
+        "() => document.querySelector('.chat-animate-slider').value === '0'",
+        timeout=2_000,
+    )
+    assert errors == [], f"animate player raised page errors: {errors}"
+
+
+@pytest.mark.golden
+def test_visualize_3d_opens_deck_gl_modal_with_canvas(live_app, chromium):
+    """visualize_3d must render a 'Show 3D view' button; clicking it
+    must open a modal containing a deck.gl WebGL canvas. Pre-fix, the
+    result fell through to a raw-JSON dump."""
     errors = []
     chromium.on("pageerror", lambda e: errors.append(str(e)))
 
     _block_socketio(chromium)
     chromium.goto(live_app + "/", wait_until="networkidle", timeout=20_000)
 
-    _send_chat(
-        chromium,
-        _action_with_no_frontend_renderer_sse(action_name, extra),
-        f"trigger {action_name}",
+    # deck.gl must be loaded for the renderer to fire.
+    assert chromium.evaluate(
+        "typeof window.deck === 'object' && "
+        "typeof window.deck.DeckGL === 'function'"
+    ), "deck.gl not loaded — visualize_3d will silently no-op"
+
+    _send_chat(chromium, _visualize_3d_tool_result_sse(), "show 3d")
+
+    btn = chromium.locator(".chat-show-3d-btn")
+    btn.first.wait_for(state="visible", timeout=6_000)
+    btn.click()
+
+    # Modal overlay + deck.gl canvas appear.
+    chromium.locator(".chat-3d-modal-overlay").wait_for(
+        state="visible", timeout=4_000,
+    )
+    chromium.wait_for_function(
+        "() => !!document.querySelector('#deck-3d-canvas canvas')",
+        timeout=5_000,
     )
 
-    # Wait for the tool step to land; a tool-text element must appear.
-    chromium.locator(".chat-tool-step .tool-text").first.wait_for(
-        state="visible", timeout=6_000,
+    # Canvas has non-zero size (deck.gl actually rendered).
+    canvas_w = chromium.evaluate(
+        "document.querySelector('#deck-3d-canvas canvas').width"
+    )
+    canvas_h = chromium.evaluate(
+        "document.querySelector('#deck-3d-canvas canvas').height"
+    )
+    assert canvas_w > 0 and canvas_h > 0, (
+        f"deck.gl canvas has zero size ({canvas_w}x{canvas_h}) — "
+        "WebGL context may have failed"
     )
 
-    # No JS errors AND chat input is usable for the next turn.
-    assert errors == [], (
-        f"unhandled action={action_name!r} raised page errors: {errors}"
+    # Closing the modal removes it from the DOM.
+    chromium.locator(".chat-3d-modal-overlay button", has_text="Close").click()
+    chromium.wait_for_function(
+        "() => !document.querySelector('.chat-3d-modal-overlay')",
+        timeout=2_000,
     )
-    assert chromium.locator("#chatInput").is_enabled(), (
-        f"chat input wedged after action={action_name!r} tool result"
-    )
+
+    assert errors == [], f"3D modal raised page errors: {errors}"
 
 
 @pytest.mark.golden
