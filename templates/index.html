@@ -225,6 +225,15 @@
     <script nonce="{{ csp_nonce }}" src="https://unpkg.com/leaflet-draw/dist/leaflet.draw.js"></script>
     <!-- Leaflet.markercluster JS -->
     <script nonce="{{ csp_nonce }}" src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+    <!-- Leaflet.heat — required by chat.js's heatmap event handler.
+         Without this, heatmap tool calls silently no-op (the handler
+         guards with `window.L.heatLayer && data.points`). -->
+    <script nonce="{{ csp_nonce }}" src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.heat/0.2.0/leaflet-heat.js"></script>
+    <!-- Chart.js — required by chat.js's chart tool-result renderer.
+         The handle_chart backend returns a Chart.js-compatible spec
+         (labels + datasets); without this lib loaded, chart results
+         render as raw JSON in the tool-step text, which is broken UX. -->
+    <script nonce="{{ csp_nonce }}" src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
     <!-- jQuery -->
     <script nonce="{{ csp_nonce }}" src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <!-- Markdown rendering for chat -->

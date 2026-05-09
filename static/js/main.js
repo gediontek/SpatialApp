@@ -46,6 +46,11 @@ $(document).ready(function() {
 
     // Initialize map
     var map = L.map('map').setView([47.6062, -122.3321], 13);
+    // Expose the Leaflet map alongside window.LayerManager and
+    // window.baseMaps so tests + chat handlers can observe map state
+    // without reaching into the IIFE closure. The bare `<div id="map">`
+    // would otherwise shadow this via the legacy named-element global.
+    window.map = map;
 
     var osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '&copy; OpenStreetMap contributors'

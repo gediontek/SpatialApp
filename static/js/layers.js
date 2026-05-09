@@ -11,7 +11,92 @@ var LayerManager = (function() {
         refreshUI();
     }
 
-    var CLUSTER_THRESHOLD = 200;  // Auto-cluster when point count exceeds this
+    var CLUSTER_THRESHOLD = 200;          // point clustering kicks in
+    var POLY_DENSE_THRESHOLD = 200;       // thinner stroke + lower fill at this size
+    var POLY_VARIED_THRESHOLD = 50;       // per-feature hashed color kicks in
+    // Centroid clustering kicks in when EITHER many polygons OR moderate
+    // count over a wide area (the latter catches "show hospitals in
+    // Chicago" — only 59 features but each <100m and bounds ~30km, so
+    // every polygon paints sub-pixel at the zoom fitToLayer picks).
+    var POLY_CLUSTER_THRESHOLD = 100;
+    var POLY_WIDE_BBOX_KM = 5;            // bounds diagonal in km
+    var POLY_WIDE_BBOX_MIN_COUNT = 30;    // ...with at least this many polygons
+    var ZOOM_TOGGLE_LEVEL = 15;           // below: cluster, at/above: real polygons
+
+    /**
+     * Approximate centroid of a polygon/line geometry. Cheap arithmetic
+     * mean of the outer ring vertices — good enough for clustering, not
+     * a true area-weighted centroid. Returns [lat, lng] (Leaflet order)
+     * or null for unsupported geometries.
+     */
+    function _polygonCentroid(geom) {
+        if (!geom) return null;
+        var coords;
+        if (geom.type === 'Polygon') coords = geom.coordinates && geom.coordinates[0];
+        else if (geom.type === 'MultiPolygon') coords = geom.coordinates && geom.coordinates[0] && geom.coordinates[0][0];
+        else if (geom.type === 'LineString') coords = geom.coordinates;
+        else if (geom.type === 'Point') return [geom.coordinates[1], geom.coordinates[0]];
+        else return null;
+        if (!coords || coords.length === 0) return null;
+        var lat = 0, lng = 0, n = 0;
+        for (var i = 0; i < coords.length; i++) {
+            if (coords[i] && coords[i].length >= 2) {
+                lng += coords[i][0]; lat += coords[i][1]; n++;
+            }
+        }
+        if (n === 0) return null;
+        return [lat / n, lng / n];
+    }
+
+    /**
+     * Bounding box diagonal in kilometers from a feature list.
+     * Cheap haversine-free approximation (110 km per degree).
+     * Used to detect "wide-area" queries that need clustering even at
+     * moderate feature counts because individual polygons would paint
+     * sub-pixel at the zoom that fits the whole bbox.
+     */
+    function _bboxDiagKm(features) {
+        var minLng = Infinity, maxLng = -Infinity;
+        var minLat = Infinity, maxLat = -Infinity;
+        function walk(c) {
+            if (!c || c.length === 0) return;
+            if (typeof c[0] === 'number') {
+                if (c[0] < minLng) minLng = c[0];
+                if (c[0] > maxLng) maxLng = c[0];
+                if (c[1] < minLat) minLat = c[1];
+                if (c[1] > maxLat) maxLat = c[1];
+            } else {
+                for (var k = 0; k < c.length; k++) walk(c[k]);
+            }
+        }
+        for (var i = 0; i < features.length; i++) {
+            var g = features[i].geometry;
+            if (g && g.coordinates) walk(g.coordinates);
+        }
+        if (!isFinite(minLng)) return 0;
+        var midLat = (minLat + maxLat) / 2;
+        var dLngKm = (maxLng - minLng) * 111 * Math.cos(midLat * Math.PI / 180);
+        var dLatKm = (maxLat - minLat) * 111;
+        return Math.sqrt(dLngKm * dLngKm + dLatKm * dLatKm);
+    }
+
+    /**
+     * Deterministic hashed color for a feature. Uses osm_id when present,
+     * else feature index, mapped to HSL hue via golden-angle multiplier so
+     * adjacent features get distinguishable colors. Used when many
+     * polygons would otherwise merge into a single-color blob at low zoom.
+     */
+    function _hashedColor(feature, idx) {
+        var seed;
+        var props = feature.properties || {};
+        if (props.osm_id) {
+            seed = parseInt(props.osm_id, 10);
+        }
+        if (!seed || isNaN(seed)) seed = (idx || 0) + 1;
+        var hue = (seed * 137) % 360;
+        if (hue < 0) hue += 360;
+        return 'hsl(' + hue + ', 65%, 45%)';
+    }
 
     function addLayer(name, geojson, style) {
         // Remove existing layer with same name
@@ -22,31 +107,73 @@ var LayerManager = (function() {
         style = style || {};
         // Sanitize color at input time to prevent injection via style properties
         var safeColor = (style.color || '#3388ff').replace(/[^#a-fA-F0-9]/g, '');
+
+        var features = (geojson && geojson.features) || [];
+        var featureCount = features.length;
+
+        // Count geometry types to decide which rendering strategy to use.
+        var pointCount = 0, polygonCount = 0;
+        for (var i = 0; i < features.length; i++) {
+            var gt = features[i].geometry ? features[i].geometry.type : '';
+            if (gt === 'Point' || gt === 'MultiPoint') pointCount++;
+            else if (gt === 'Polygon' || gt === 'MultiPolygon') polygonCount++;
+        }
+
+        // Fix #1: density-aware default style. Wide-area queries return
+        // hundreds-to-thousands of overlapping polygons; the previous
+        // default (weight=2, fillOpacity=0.3) merged them into a solid
+        // blob at typical city zoom. Thinner stroke + lower fill at high
+        // count keeps individual outlines visible.
+        var dense = featureCount > POLY_DENSE_THRESHOLD;
         var defaultStyle = {
             color: safeColor,
-            weight: style.weight || 2,
-            fillOpacity: style.fillOpacity || 0.3
+            weight: style.weight || (dense ? 1 : 2),
+            fillOpacity: style.fillOpacity !== undefined ? style.fillOpacity : (dense ? 0.15 : 0.3)
         };
+
+        // Fix #4: deterministic per-feature varied color. Only when no
+        // explicit style has been requested AND there are enough polygons
+        // for the all-one-color problem to bite.
+        var useVariedColor = (
+            !style.color &&
+            !style.styleFunction &&
+            polygonCount >= POLY_VARIED_THRESHOLD
+        );
 
         var styleFunc = style.styleFunction || function(feature) {
-            return defaultStyle;
+            if (!useVariedColor) return defaultStyle;
+            var idx = features.indexOf(feature);
+            var c = _hashedColor(feature, idx);
+            return {
+                color: c, fillColor: c,
+                weight: defaultStyle.weight,
+                fillOpacity: defaultStyle.fillOpacity
+            };
         };
 
-        var featureCount = geojson.features ? geojson.features.length : 0;
+        var usePointClustering = window.L && L.markerClusterGroup && pointCount > CLUSTER_THRESHOLD;
 
-        // Check if this is a point-heavy layer that should be clustered
-        var pointCount = 0;
-        if (geojson.features) {
-            for (var i = 0; i < geojson.features.length; i++) {
-                var geomType = geojson.features[i].geometry ? geojson.features[i].geometry.type : '';
-                if (geomType === 'Point' || geomType === 'MultiPoint') pointCount++;
-            }
-        }
-        var useClustering = window.L && L.markerClusterGroup && pointCount > CLUSTER_THRESHOLD;
+        // Fix #3: polygon centroid clustering. Triggers on EITHER
+        //  (a) lots of polygons (POLY_CLUSTER_THRESHOLD), OR
+        //  (b) moderate count over a wide bbox (POLY_WIDE_BBOX_MIN_COUNT
+        //      polygons spread across ≥ POLY_WIDE_BBOX_KM).
+        // The (b) branch catches the canonical "show hospitals in
+        // Chicago" failure mode: only 59 features but each ~50m wide
+        // and bounds ~30km, so every polygon collapses to sub-pixel at
+        // the fit zoom and the user sees a blank map.
+        var bboxDiagKm = (polygonCount > 0 && pointCount === 0)
+            ? _bboxDiagKm(features) : 0;
+        var usePolygonClustering = (
+            window.L && L.markerClusterGroup && pointCount === 0 && (
+                polygonCount >= POLY_CLUSTER_THRESHOLD ||
+                (polygonCount >= POLY_WIDE_BBOX_MIN_COUNT &&
+                 bboxDiagKm >= POLY_WIDE_BBOX_KM)
+            )
+        );
 
         var geoJsonLayer = L.geoJSON(geojson, {
             style: styleFunc,
-            pointToLayer: useClustering ? function(feature, latlng) {
+            pointToLayer: usePointClustering ? function(feature, latlng) {
                 return L.circleMarker(latlng, {
                     radius: 6,
                     fillColor: defaultStyle.color,
@@ -64,27 +191,76 @@ var LayerManager = (function() {
             }
         });
 
-        var leafletLayer;
-        if (useClustering) {
-            leafletLayer = L.markerClusterGroup({
+        var primaryLayer = geoJsonLayer;
+        var clusterLayer = null;
+        var swapHandler = null;
+
+        if (usePointClustering) {
+            primaryLayer = L.markerClusterGroup({
                 maxClusterRadius: 50,
                 spiderfyOnMaxZoom: true,
                 showCoverageOnHover: false,
                 disableClusteringAtZoom: 18,
             });
-            leafletLayer.addLayer(geoJsonLayer);
+            primaryLayer.addLayer(geoJsonLayer);
+            primaryLayer.addTo(map);
+        } else if (usePolygonClustering) {
+            // Build the centroid cluster layer (shown only at low zoom).
+            clusterLayer = L.markerClusterGroup({
+                maxClusterRadius: 60,
+                spiderfyOnMaxZoom: false,
+                showCoverageOnHover: false,
+                disableClusteringAtZoom: ZOOM_TOGGLE_LEVEL + 1,
+            });
+            for (var ci = 0; ci < features.length; ci++) {
+                var ctr = _polygonCentroid(features[ci].geometry);
+                if (!ctr) continue;
+                var markerColor = useVariedColor ? _hashedColor(features[ci], ci) : safeColor;
+                var marker = L.circleMarker([ctr[0], ctr[1]], {
+                    radius: 5,
+                    fillColor: markerColor,
+                    color: '#333',
+                    weight: 1,
+                    fillOpacity: 0.85
+                });
+                var props = features[ci].properties || {};
+                marker.bindPopup('<b>' + escapeHtml(props.category_name || 'Feature') + '</b>');
+                clusterLayer.addLayer(marker);
+            }
+            // Swap behavior: keep only one layer on the map at a time so
+            // we don't pay double-render cost. Honors `visible=false`.
+            swapHandler = function() {
+                if (!layers[name] || !layers[name].visible) return;
+                var z = map.getZoom();
+                if (z < ZOOM_TOGGLE_LEVEL) {
+                    if (map.hasLayer(geoJsonLayer)) map.removeLayer(geoJsonLayer);
+                    if (!map.hasLayer(clusterLayer)) clusterLayer.addTo(map);
+                } else {
+                    if (map.hasLayer(clusterLayer)) map.removeLayer(clusterLayer);
+                    if (!map.hasLayer(geoJsonLayer)) geoJsonLayer.addTo(map);
+                }
+            };
+            map.on('zoomend', swapHandler);
+            // Initial state.
+            if (map.getZoom() < ZOOM_TOGGLE_LEVEL) {
+                clusterLayer.addTo(map);
+            } else {
+                geoJsonLayer.addTo(map);
+            }
         } else {
-            leafletLayer = geoJsonLayer;
+            primaryLayer.addTo(map);
         }
 
-        leafletLayer.addTo(map);
-
         layers[name] = {
-            leafletLayer: leafletLayer,
+            leafletLayer: primaryLayer,
+            clusterLayer: clusterLayer,
+            swapHandler: swapHandler,
             visible: true,
             featureCount: featureCount,
             style: defaultStyle,
-            clustered: useClustering
+            clustered: usePointClustering,
+            polygonClustered: !!usePolygonClustering,
+            useVariedColor: useVariedColor,
         };
 
         refreshUI();
@@ -152,7 +328,15 @@ var LayerManager = (function() {
 
     function removeLayer(name) {
         if (layers[name]) {
-            map.removeLayer(layers[name].leafletLayer);
+            if (layers[name].swapHandler) {
+                map.off('zoomend', layers[name].swapHandler);
+            }
+            if (layers[name].leafletLayer && map.hasLayer(layers[name].leafletLayer)) {
+                map.removeLayer(layers[name].leafletLayer);
+            }
+            if (layers[name].clusterLayer && map.hasLayer(layers[name].clusterLayer)) {
+                map.removeLayer(layers[name].clusterLayer);
+            }
             delete layers[name];
             refreshUI();
 
@@ -166,15 +350,34 @@ var LayerManager = (function() {
         }
     }
 
+    function _hideAllLayerMembers(entry) {
+        if (entry.leafletLayer && map.hasLayer(entry.leafletLayer)) {
+            map.removeLayer(entry.leafletLayer);
+        }
+        if (entry.clusterLayer && map.hasLayer(entry.clusterLayer)) {
+            map.removeLayer(entry.clusterLayer);
+        }
+    }
+
+    function _showLayerMembers(entry) {
+        if (entry.swapHandler) {
+            // Polygon-cluster layer: the swap handler picks the right
+            // member (cluster vs polygon) based on current zoom.
+            entry.swapHandler();
+        } else if (entry.leafletLayer) {
+            entry.leafletLayer.addTo(map);
+        }
+    }
+
     function toggleLayer(name) {
         if (!layers[name] || !layers[name].leafletLayer) return;
 
         if (layers[name].visible) {
-            map.removeLayer(layers[name].leafletLayer);
+            _hideAllLayerMembers(layers[name]);
             layers[name].visible = false;
         } else {
-            layers[name].leafletLayer.addTo(map);
             layers[name].visible = true;
+            _showLayerMembers(layers[name]);
         }
 
         refreshUI();
@@ -183,8 +386,8 @@ var LayerManager = (function() {
     function showLayer(name) {
         if (!layers[name] || !layers[name].leafletLayer) return;
         if (!layers[name].visible) {
-            layers[name].leafletLayer.addTo(map);
             layers[name].visible = true;
+            _showLayerMembers(layers[name]);
             refreshUI();
         }
     }
@@ -192,7 +395,7 @@ var LayerManager = (function() {
     function hideLayer(name) {
         if (!layers[name] || !layers[name].leafletLayer) return;
         if (layers[name].visible) {
-            map.removeLayer(layers[name].leafletLayer);
+            _hideAllLayerMembers(layers[name]);
             layers[name].visible = false;
             refreshUI();
         }
@@ -243,8 +446,9 @@ var LayerManager = (function() {
 
     function styleLayer(name, style) {
         if (!layers[name] || !layers[name].leafletLayer) return;
-        var leafletLayer = layers[name].leafletLayer;
-        if (typeof leafletLayer.setStyle === 'function' && !layers[name].clustered) {
+        var entry = layers[name];
+        var leafletLayer = entry.leafletLayer;
+        if (typeof leafletLayer.setStyle === 'function' && !entry.clustered) {
             leafletLayer.setStyle(style);
         } else {
             eachFeatureLayer(leafletLayer, function(featureLayer) {
@@ -253,8 +457,15 @@ var LayerManager = (function() {
                 }
             });
         }
+        // Also restyle cluster markers (centroid view) if present so the
+        // cluster bubbles match the polygon stroke at low zoom.
+        if (entry.clusterLayer) {
+            eachFeatureLayer(entry.clusterLayer, function(fl) {
+                if (typeof fl.setStyle === 'function') fl.setStyle(style);
+            });
+        }
         // Update stored style for UI color swatch
-        if (style.color) layers[name].style.color = style.color;
+        if (style.color) entry.style.color = style.color;
     }
 
     function highlightFeatures(layerName, attribute, value, color) {

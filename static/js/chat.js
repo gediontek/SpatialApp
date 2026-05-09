@@ -343,6 +343,11 @@ var ChatPanel = (function() {
 
             case 'tool_result':
                 updateToolStep(_lastToolStepId, formatToolResult(data.tool, data.result), 'done');
+                // Chart tools return a Chart.js-compatible spec with
+                // action: 'chart'. Render it inline under the tool step.
+                if (data.result && data.result.action === 'chart' && window.Chart) {
+                    renderChartIntoStep(_lastToolStepId, data.result);
+                }
                 break;
 
             case 'layer_add':
@@ -375,6 +380,20 @@ var ChatPanel = (function() {
                             'Showing first ' + data.feature_count + ' of ' +
                             data.original_count + ' features. ' +
                             'Use filter_layer to narrow the result.'
+                        );
+                    }
+                    // Fix #2: when many features are returned, hint the
+                    // user that the wide view is summarized. Without this,
+                    // wide-area queries like "show buildings in Chicago"
+                    // either (a) appear empty (sub-pixel polygons at low
+                    // zoom) or (b) merge into a solid blob — both feel
+                    // like rendering bugs even though the data is correct.
+                    var addedFeatureCount = (data.geojson.features || []).length;
+                    if (addedFeatureCount >= 500) {
+                        appendMessage('info',
+                            'Showing ' + addedFeatureCount + ' features. ' +
+                            'Zoom in to see individual items; ' +
+                            'cluster bubbles below zoom 15.'
                         );
                     }
                 }
@@ -625,6 +644,42 @@ var ChatPanel = (function() {
             el.removeClass('tool-loading').addClass('tool-done');
             el.find('.tool-icon').text('✓');
             el.find('.tool-text').text(text);
+        }
+    }
+
+    function renderChartIntoStep(stepId, spec) {
+        // `spec` matches handle_chart's return: {action, chart_type,
+        // labels, datasets, title, ...}. Chart.js doesn't have a native
+        // 'histogram' type so we render it as a bar chart with the
+        // pre-binned data the backend produced.
+        if (!stepId || !spec || !window.Chart) return;
+        var hostStep = document.getElementById(stepId);
+        if (!hostStep) return;
+
+        var canvas = document.createElement('canvas');
+        canvas.className = 'chat-chart-canvas';
+        canvas.style.cssText = 'max-width: 480px; max-height: 320px; margin-top: 8px;';
+        hostStep.appendChild(canvas);
+
+        var jsType = spec.chart_type === 'histogram' ? 'bar' : spec.chart_type;
+        try {
+            new Chart(canvas.getContext('2d'), {
+                type: jsType,
+                data: {
+                    labels: spec.labels || [],
+                    datasets: spec.datasets || [],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        title: { display: !!spec.title, text: spec.title || '' },
+                        legend: { display: spec.chart_type === 'pie' },
+                    },
+                },
+            });
+        } catch (e) {
+            console.warn('Chart render failed:', e);
         }
     }
 
