@@ -558,6 +558,108 @@ def test_n39_auto_classify_rejects_globe_scale_bbox(two_users):
 
 
 # ---------------------------------------------------------------------------
+# N42 — raster upload pixel-count + band-count cap (decompression-bomb defense)
+#
+# The 50 MB MAX_CONTENT_LENGTH guards file size on the wire, but a
+# craftily-compressed GeoTIFF (e.g. 10000×10000×3 bands, internally
+# compressed to a few MB) expands to ~10 GB on rasterio.read() — OOM
+# the worker before the upload route can return. N42 caps the
+# product width × height per band and the band count, both checked
+# BEFORE the materialize call.
+# ---------------------------------------------------------------------------
+
+
+def test_n42_raster_pixel_cap_rejects_oversized_dimensions(
+    two_users, monkeypatch,
+):
+    """Crank MAX_RASTER_PIXELS down to something the bundled fixture
+    exceeds (it's small but >100 px), then upload the fixture. Pre-fix
+    the read would proceed; post-fix the route must 413."""
+    from pathlib import Path
+    from config import Config
+    client, tok_a, _tok_b = two_users
+    fixture = (Path(__file__).parent.parent / "fixtures" / "raster"
+               / "geog_wgs84.tif")
+    if not fixture.exists():
+        pytest.skip("raster fixture missing")
+    # Tighten cap to 1 pixel — anything passes through is too big.
+    monkeypatch.setattr(Config, "MAX_RASTER_PIXELS", 1)
+    with open(fixture, "rb") as fh:
+        tif_bytes = fh.read()
+    import io
+    r = client.post(
+        "/upload",
+        data={"file": (io.BytesIO(tif_bytes), "n42_probe.tif")},
+        content_type="multipart/form-data",
+        headers=_auth(tok_a),
+    )
+    assert r.status_code == 413, (
+        f"N42 regression: oversized raster was not rejected; got "
+        f"{r.status_code}. The pixel-count guard in render_overlay() is "
+        f"missing or runs after rasterio.read()."
+    )
+    body = r.get_data(as_text=True)
+    assert "pixels" in body.lower() or "too large" in body.lower(), (
+        f"413 body should name the cap; got {body!r}"
+    )
+
+
+def test_n42_raster_band_cap_rejects_too_many_bands(
+    two_users, monkeypatch,
+):
+    """Crank MAX_RASTER_BANDS down to 0 — even the 1-band fixture
+    must be rejected. Verifies the band-count guard is wired."""
+    from pathlib import Path
+    from config import Config
+    client, tok_a, _tok_b = two_users
+    fixture = (Path(__file__).parent.parent / "fixtures" / "raster"
+               / "geog_wgs84.tif")
+    if not fixture.exists():
+        pytest.skip("raster fixture missing")
+    # Loosen pixel cap so it doesn't fire first; tighten band cap.
+    monkeypatch.setattr(Config, "MAX_RASTER_PIXELS", 1_000_000_000)
+    monkeypatch.setattr(Config, "MAX_RASTER_BANDS", 0)
+    with open(fixture, "rb") as fh:
+        tif_bytes = fh.read()
+    import io
+    r = client.post(
+        "/upload",
+        data={"file": (io.BytesIO(tif_bytes), "n42_band_probe.tif")},
+        content_type="multipart/form-data",
+        headers=_auth(tok_a),
+    )
+    assert r.status_code == 413, (
+        f"N42 regression: too-many-bands raster was not rejected; got "
+        f"{r.status_code}. The band-count guard is missing."
+    )
+
+
+def test_n42_raster_under_caps_succeeds(two_users, monkeypatch):
+    """Sanity: with default caps the bundled fixture must still upload
+    successfully. Otherwise the cap is too aggressive for legitimate use."""
+    from pathlib import Path
+    client, tok_a, _tok_b = two_users
+    fixture = (Path(__file__).parent.parent / "fixtures" / "raster"
+               / "geog_wgs84.tif")
+    if not fixture.exists():
+        pytest.skip("raster fixture missing")
+    with open(fixture, "rb") as fh:
+        tif_bytes = fh.read()
+    import io
+    r = client.post(
+        "/upload",
+        data={"file": (io.BytesIO(tif_bytes), "n42_under_cap.tif")},
+        content_type="multipart/form-data",
+        headers=_auth(tok_a),
+    )
+    assert r.status_code == 200, (
+        f"N42: under-cap raster should succeed; got {r.status_code}. "
+        f"Default cap may be too aggressive (default is 100M pixels). "
+        f"body={r.get_data(as_text=True)[:200]!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # N40 — prompt-injection defense in chat.py system prompt builder
 #
 # Tool output (OSM name tags, geocode display_name, layer names) flows

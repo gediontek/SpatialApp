@@ -165,6 +165,15 @@ class Config:
     )
     MAX_RASTER_SIZE_MB = _int_env('MAX_RASTER_SIZE_MB', 500)
 
+    # N42: cap pixel COUNT (width × height) per band, independent of file
+    # size. A craftily-compressed GeoTIFF can be a few MB on disk but
+    # 10000×10000×3 bands at float64 = 9.6 GB on rasterio.read() — OOM
+    # before the upload route returns. 100 megapixels (~10k × 10k) is
+    # generous for a single-overlay map use case while blocking the
+    # decompression-bomb attack surface.
+    MAX_RASTER_PIXELS = _int_env('MAX_RASTER_PIXELS', 100_000_000)
+    MAX_RASTER_BANDS = _int_env('MAX_RASTER_BANDS', 16)
+
     # Data pipeline (v2.1 Plan 10)
     IMPORT_MAX_FEATURES = _int_env('IMPORT_MAX_FEATURES', 10_000)
     PIPELINE_MAX_STEPS = _int_env('PIPELINE_MAX_STEPS', 10)

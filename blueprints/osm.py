@@ -93,8 +93,31 @@ def render_overlay(image_path):
     browser-renderable PNG, and returns an HTTP URL for Leaflet.
     """
     from flask import current_app
+    from config import Config
     try:
         with rasterio.open(image_path) as src:
+            # N42: cap pixel count + band count BEFORE the read() calls
+            # that materialize the full image into memory. A
+            # decompression-bomb GeoTIFF (small file, huge declared
+            # dimensions) would otherwise OOM rasterio.read() — the file
+            # passed the 50MB MAX_CONTENT_LENGTH guard but the in-memory
+            # representation is 10x larger.
+            max_pixels = getattr(Config, 'MAX_RASTER_PIXELS', 100_000_000)
+            max_bands = getattr(Config, 'MAX_RASTER_BANDS', 16)
+            pixel_count = int(src.width) * int(src.height)
+            if pixel_count > max_pixels:
+                return jsonify(message=(
+                    f"Raster too large: {src.width}×{src.height} = "
+                    f"{pixel_count:,} pixels exceeds the cap "
+                    f"({max_pixels:,}). Tile or downsample before upload."
+                )), 413
+            if int(src.count) > max_bands:
+                return jsonify(message=(
+                    f"Too many bands: {src.count} exceeds the cap "
+                    f"({max_bands}). Multiband datasets must be split "
+                    f"before upload."
+                )), 413
+
             bounds = src.bounds
             transformer = Transformer.from_crs(src.crs, 'epsg:4326', always_xy=True)
 
