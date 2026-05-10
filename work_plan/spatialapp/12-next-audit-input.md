@@ -116,15 +116,17 @@ The items below survived the Cycles 18-23 prompt-validation cascade — meaning 
 4. **Raster upload size limit.** `secure_filename` blocks path traversal but no MAX_RASTER_BYTES guard — a 50MB Flask MAX_CONTENT_LENGTH applies, but a craftily-compressed GeoTIFF (zip-bomb-style) could OOM rasterio on read.
 5. **Public `/api/geocode`** — no auth (intentional). Verify no enumeration / abuse vector beyond what Nominatim itself rate-limits.
 6. **WebSocket `connect` flow** — auth happens in `handle_connect` via `request.args.get('token')`; verify the per-user vs shared-token branches in handle_connect don't allow privilege escalation across the connect/disconnect lifecycle.
-7. **Multi-tool LLM chains.** Plan-execute mode (`/api/chat/execute-plan`) chains tool outputs into subsequent tool inputs. Has the data flow between tool 1 → tool 2 → tool 3 been audited for prompt-injection-via-data (e.g., a malicious OSM `name` tag containing a tool-call directive that the next tool's LLM call honors)?
-8. **Test infrastructure honesty.** Audit-2's N20 was "claimed Playwright coverage silently skipped in CI." Sweep for similar: is any test currently `pytest.skip(...)` in CI but expected by the audit-input doc to be running? `tests/test_app.py::test_n26...` and the new `test_n39_auto_classify_*` skip when fixtures aren't present — are these honest or hiding gaps?
+7. **Test infrastructure honesty.** Audit-2's N20 was "claimed Playwright coverage silently skipped in CI." Sweep for similar: is any test currently `pytest.skip(...)` in CI but expected by the audit-input doc to be running? `tests/test_app.py::test_n26...` and the new `test_n39_auto_classify_*` skip when fixtures aren't present — are these honest or hiding gaps?
+8. **Crypto / auth hygiene** (P3 focus area 4). Token storage scheme in `services/database.py` (plaintext vs hashed); session timeout enforcement on per-user tokens; CSRF secret separation from SECRET_KEY; behavior on token revocation. Not yet swept by self-pass.
+9. **Supply chain** (P3 focus area 5). Dependency CVE sweep is in CI via `pip-audit` (gap 3 in §3 Cycle 5). Dockerfile base image age, root user, secret leakage in build layers. GitHub Actions workflow injection through PR title/body. Not yet self-passed beyond the CI integration.
 
-Items REMOVED from the prior version of this list (cleared by cycles 1-23):
+Items REMOVED from the prior version of this list (cleared by cycles 1-25):
 - ~~LLM tool-call arg validation~~ — swept clean Cycle 1; no SQL/shell/eval reachable from tool args.
 - ~~Provider symmetry (Anthropic/Gemini converters)~~ — swept clean Cycle 1.
-- ~~Frontend Playwright e2e~~ — completed Cycles 9-13 (B1-B20 paint + interaction tests).
-- ~~`/metrics` Prometheus leakage~~ — swept clean Cycle 21 (no per-user labels, no path labels, no secrets).
-- ~~SECURITY_CONTACT placeholder~~ — code-gated by N35 (Cycle 22) + readiness already gated CHAT_API_TOKEN (N29).
+- ~~Frontend Playwright e2e~~ — completed Cycles 9-13 (B1-B20).
+- ~~/metrics Prometheus leakage~~ — swept clean Cycle 21.
+- ~~SECURITY_CONTACT placeholder~~ — code-gated by N35 (Cycle 22).
+- ~~Multi-tool LLM chains for prompt-injection-via-data~~ — closed by N40 sanitizer + defensive headers (Cycle 25).
 
 ### 2.2 Areas the auditor can SKIP (already covered by harness)
 
