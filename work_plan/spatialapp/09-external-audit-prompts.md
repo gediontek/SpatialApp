@@ -1,20 +1,35 @@
-# External Audit Prompts — v2 Close-out Plan Review
+# External Audit Prompts — SpatialApp v2 Re-Audit Pack
 
-**Purpose:** Six targeted prompts for an independent reviewer (different LLM model, human reviewer, or a fresh agent session) to adversarially audit the two plan documents:
+**Purpose:** Adversarial prompts for an independent reviewer (different LLM model, human reviewer, or a fresh agent session) to re-audit the SpatialApp v2 implementation after 4 audit rounds + 30 closed findings.
 
-- **Audit doc:** [`07-v2-audit-findings.md`](07-v2-audit-findings.md) — 12 findings + 3 cross-cutting test gaps
-- **Strategy plan:** [`08-v2-bugfree-plan.md`](08-v2-bugfree-plan.md) — Acceptance-First Hardening (Strategy B+A)
+**Status (2026-05-10):**
+- The remediation plan in `08-v2-bugfree-plan.md` has fully shipped (all 12 audit findings + 18 self-discovered N-findings closed; see `12-next-audit-input.md` §1.1 for the audit log).
+- 4 external audit rounds completed: 31 → 81 → 93 → 86. Each round produced fresh findings the prior round missed.
+- **Next finding ID: N31.** IDs N1-N30 are taken (N25 was consumed by the auditor at audit-4 as already-fixed).
 
-**How to use:** Paste each prompt verbatim into your reviewer of choice. Each prompt is self-contained — does not assume the reviewer has read prior context. Run them **in parallel** (different reviewers / different sessions) so their findings are independent. Aggregate findings by class (strategy, completeness, assumptions, etc.) before deciding what to revise in the plan.
+**How to use:** Paste each prompt verbatim into your reviewer of choice. Each prompt is self-contained — does not assume the reviewer has read prior context. Run them **in parallel** (different reviewers / different sessions) so their findings are independent.
+
+**Prompt status map:**
+
+| Prompt | Status | When to run |
+|---|---|---|
+| **Prompt 3 — Findings Completeness Re-Audit** | **PRIMARY** — run every audit | Always. This is the prompt that has produced almost all real findings across audits 2-4. |
+| **Prompt 7 — Capability-Honesty Sweep** (NEW post audit-4) | **PRIMARY** — run every audit | Always. Targets the doc-vs-runtime drift class that produced N26/N28/N30. |
+| **Prompt 8 — Auth-Mode Parity Sweep** (NEW post audit-4) | **PRIMARY** — run every audit | Always. Targets the prod-vs-dev parity class that produced N27/N29. |
+| Prompt 5 — Pre-mortem | Optional | Run as cold-context probe before any major release. |
+| Prompts 1, 2, 4, 6 — Plan-review prompts | **ARCHIVED** | The plan they review has shipped. Re-run only if a new strategic plan is being drafted. Kept below for historical context. |
 
 **Recommended reviewer mix:**
-- Prompts 1, 2, 4, 6 → use a **different model family** than the one that wrote the plan (e.g., if Claude wrote it, audit with Gemini 2.5 Pro or GPT-5).
-- Prompts 3, 5 → use a **fresh agent session** (cold context) — these need codebase access to verify, not opinion.
-- For maximum signal, run all 6. For budget run, prioritize **1 + 3 + 5** (strategy + completeness + pre-mortem).
+- Prompts 3, 7, 8 → use a **fresh agent session** (cold context) with codebase access — these need to verify against actual files, not opinion.
+- For maximum signal, run all 3 primary prompts in parallel. For budget run, prioritize **Prompt 3 + Prompt 7** (most leverage per hour).
+- Use a **different model family** than the one currently maintaining the codebase (e.g., if Claude is maintaining, audit with Gemini 2.5 Pro or GPT-5) for independence.
 
 ---
 
-## Prompt 1 — Strategy Critique (the meta-decision)
+## Prompt 1 — Strategy Critique (the meta-decision)  *[ARCHIVED]*
+
+> **Archived 2026-05-10.** The plan in `08-v2-bugfree-plan.md` has fully shipped (all 12 audit findings + 18 self-discovered N-findings closed). This prompt reviews a strategic decision that no longer needs reviewing. Kept verbatim below for the audit trail. Skip unless drafting a new strategic plan.
+
 
 ```
 You are a Principal Software Engineer doing an adversarial review of a remediation
@@ -85,7 +100,10 @@ Be exacting. Do not be polite. If a section finds nothing, say so explicitly
 
 ---
 
-## Prompt 2 — Harness Adequacy (the technical core)
+## Prompt 2 — Harness Adequacy (the technical core)  *[ARCHIVED]*
+
+> **Archived 2026-05-10.** The harness was built (PR #0 then iterated across 17 cycles) and has caught real bugs across 4 audit rounds. This prompt's "will the harness work?" framing is now answered by the closed-finding count. Skip unless a new harness component is being designed.
+
 
 ```
 You are a Principal Test Engineer with deep expertise in property-based testing
@@ -160,33 +178,34 @@ failures bluntly.
 
 ```
 You are a Principal Security Engineer doing an INDEPENDENT re-audit of a Flask
-web application. The previous external audit returned 12 findings but
-self-reported ~85% surface coverage. Your job is to find what the previous
-auditor MISSED.
+web application. Four prior external audit rounds have closed 30 findings
+(scores: 31 → 81 → 93 → 86). Each round produced fresh findings the prior
+rounds missed. Your job is to find what audits 1-4 MISSED.
 
 Repository to audit: /Users/gedionteklemariam/Documents/projects/SpatialApp
+Read first: work_plan/spatialapp/12-next-audit-input.md (handoff doc, header
+is the source of truth for repo state, test counts, and next-finding-ID).
 
-Stack: Flask + SQLite (WAL) + Anthropic/OpenAI/Gemini LLM providers + Valhalla
-(routing) + rasterio (raster ops) + Playwright (e2e). Python 3.13. ~132
-modules, ~34 routes, ~1,905 functions.
+Stack: Flask + SQLite (WAL) + Flask-SocketIO + Anthropic/OpenAI/Gemini LLM
+providers + Valhalla (routing) + rasterio (raster ops) + Leaflet/deck.gl
+(frontend) + Playwright (e2e). Python 3.13. ~132 modules, ~34 routes, 82
+LLM-callable tools.
 
-Previous audit findings (DO NOT repeat these — find NEW ones):
-- C1: execute_code AST sandbox bypass
-- C2: Flask-WTF CSRF exemptions broken
-- C3: chat-session DB-restore ownership bypass
-- C4: multi-user layer + annotation isolation broken
-- H1: frontend bearer-token gaps
-- H2: layer_store falsy-empty bug
-- H3: default SECRET_KEY accepted in prod
-- H4: ThreadPoolExecutor timeout doesn't release
-- M1: layer-delete UI fails (no CSRF/auth)
-- M2: Stop button doesn't abort WebSocket / plan-execute
-- M3: 24 raster tests skip (sample_rasters/ missing + gitignored at .gitignore:82)
-- M4: OpenAI text-block dropping in mixed-content tool messages
-- N1: test env contamination — tests/test_chat_api.py:11 clears ANTHROPIC_API_KEY only, so tests with a live GEMINI_API_KEY make real Gemini calls
+Previous findings (DO NOT repeat — see 12-next-audit-input.md §1.1 for the
+authoritative list with commit shas. Summary by class):
+- Sandbox / RCE: C1, N18 (AST allowlist + RLIMIT + env-strip regression)
+- CSRF / auth: C2, H1, M1, N6, N19, N27, N29
+- Multi-user isolation: C3, C4, N2, N3, N7, N13, H2
+- LLM provider: M4, N12, N16, N28, N30
+- Rate limit / DoS: N11, N12, N14, BL1
+- Input validation / size cap: N8, N9, N14, N16
+- Info-leak: N10, M3
+- Frontend / UX: H1, M1, M2, N20, N22, N26, N27
+- Doc / capability honesty: N23, N24, N28, N30
+- Operational: H3, H4, N1, N4, N17
 
-Your task — find findings the prior audit MISSED. Focus areas (because the
-prior audit's coverage gaps were noted in these regions):
+Your task — find findings audits 1-4 MISSED. Focus areas (audit-4 surfaced
+several user-facing bugs in these regions; audits 1-3 had under-covered them):
 
 1. SURFACE THE PRIOR AUDIT EXPLICITLY UNDER-COVERED
    - Raster tools (24 raster handlers) — what bugs hide under skipped tests?
@@ -253,7 +272,10 @@ Reject the temptation to re-list prior findings. Find NEW ones or report
 
 ---
 
-## Prompt 4 — Adversarial Assumption Audit
+## Prompt 4 — Adversarial Assumption Audit  *[ARCHIVED]*
+
+> **Archived 2026-05-10.** Reviews the 10 assumptions A1-A10 in the shipped plan. Useful as a teaching exercise; not load-bearing for ongoing audit work.
+
 
 ```
 You are a Principal Research Engineer reviewing the assumption set behind a
@@ -312,24 +334,31 @@ bias hides.
 
 ---
 
-## Prompt 5 — Pre-mortem (T+2 weeks)
+## Prompt 5 — Pre-mortem (T+2 weeks post-deploy)
 
 ```
-You are a Principal Engineer running a pre-mortem on a security remediation
-plan that just shipped. Today is fictional date: PR #11 merged 2 weeks ago.
-Something has gone wrong in production. Your job is to write three distinct
-post-incident reports describing what failed.
+You are a Principal Engineer running a pre-mortem on a Flask web application
+that just shipped to production after 4 audit rounds + 30 closed findings.
+Today is fictional date: 2 weeks after first real-user traffic. Something has
+gone wrong. Your job is to write three distinct post-incident reports
+describing what failed.
 
-Read the full plan (relative to SpatialApp repo root, or absolute under
-/Users/gedionteklemariam/Documents/projects/SpatialApp/):
-work_plan/spatialapp/08-v2-bugfree-plan.md
+Read first (relative to repo root, absolute under /Users/gedionteklemariam/Documents/projects/SpatialApp/):
+- work_plan/spatialapp/12-next-audit-input.md (audit log + closed findings)
+- work_plan/spatialapp/14-pre-deploy-dryrun.md (operator-side residuals)
+- CLAUDE.md (architecture decisions)
 
 Constraints:
-- The harness was built (PR #0).
-- All 10 fix PRs landed and were green per the plan's gating criteria.
-- The audit re-run (PR #11 part 1) reported zero new C/H.
-- The 30-night soak (PR #11 part 2) was green for 22 nights.
-- Then something failed.
+- 30 findings (12 audit + 18 self-discovered, IDs C1-C4 / H1-H4 / M1-M4 /
+  N1-N30) are closed with regression tests in tests/harness/, tests/golden/,
+  tests/test_*.py. The full unit suite is green.
+- 4 external audit rounds returned 31 → 81 → 93 → 86. Audit-4 surfaced 5
+  fresh findings (N26-N30) that audits 1-3 missed — meaning the audit pipeline
+  itself has a known false-negative rate.
+- gunicorn dry-run (Cycle 16) was green; SECURITY_CONTACT was set for
+  production; the operator-checklist 8 items in 14-pre-deploy-dryrun.md were
+  all completed.
+- Then, 2 weeks into real-user traffic, something failed.
 
 Write THREE post-incident reports, each describing a fundamentally different
 failure mode (not three flavors of the same bug). For each:
@@ -348,19 +377,25 @@ INCIDENT N (Date: ~2 weeks post-merge)
   change) that would have prevented this incident
 
 Required failure-mode diversity (one report per category):
-- INCIDENT 1: A bug variant the harness type-class missed (e.g., harness tests
-  isolation between 2 users, but the bug shows up at 3+ users; or harness tests
-  CSRF on routes the audit listed, but a route added during the fix work has no
-  CSRF).
-- INCIDENT 2: A second-order failure caused by a fix's side-effect on something
-  the plan considered out-of-scope (e.g., the per-user filter in C4 broke the
-  Gemini eval framework's batch operations; or the new authedFetch broke an
-  in-flight admin script).
-- INCIDENT 3: A failure of the *meta-process* — e.g., the audit re-run was
-  done by Claude on the same conversation context as the plan author and just
-  agreed with itself; or the soak's "no regression" was technically true but a
-  warning was downgraded to silent; or the user merged plan 09 (deferred) into
-  v2 close-out under deadline pressure.
+- INCIDENT 1: A bug-class the test suite (unit + harness + golden) missed
+  because every test scenario uses small fixtures (1-6 features in tight
+  bboxes). Example precedents: the Cycle 12 wide-area-render bug, the N22
+  cluster-bubble miss. What's the next "many features over wide area"
+  pathology? What about scale: 10k features? 100MB GeoJSON? 1k concurrent
+  users? Pick one realistic scale boundary and walk the failure.
+- INCIDENT 2: A second-order failure caused by a fix's side-effect — the
+  audit-log shows several of these (N18 was the C1 sandbox env-strip
+  breaking macOS user-site imports; N26 was the N7 isolation contract breaking
+  the raster URL serve route). Pick a closed finding from §1.1 of
+  12-next-audit-input.md and write a plausible second-order failure where
+  THAT fix's defensive behavior broke something else.
+- INCIDENT 3: A failure of the *meta-process* — e.g., the audit pipeline
+  reaches a fixed point where successive audits stop finding new bugs because
+  they probe the same surfaces; or the operator updated SECURITY_CONTACT in
+  the env but a stale .env in a second deployment env still pointed at the
+  placeholder; or the user merged a feature PR that added a new route bypassing
+  every harness gate; or the make-eval ritual was skipped under deadline
+  pressure.
 
 Then write a META section:
 
@@ -381,7 +416,10 @@ Specific file paths, line numbers, attack scenarios.
 
 ---
 
-## Prompt 6 — Quantitative Realism Check
+## Prompt 6 — Quantitative Realism Check  *[ARCHIVED]*
+
+> **Archived 2026-05-10.** Pressure-tests the plan's 11-day budget. The plan shipped over 17 cycles; the budget question is moot. Skip unless a new estimate is needed.
+
 
 ```
 You are a Principal Engineering Manager reviewing the effort estimate and
@@ -458,14 +496,196 @@ Output format:
 
 ---
 
+## Prompt 7 — Capability-Honesty Sweep  *[NEW post audit-4]*
+
+```
+You are a Principal Software Engineer doing a doc-vs-runtime drift audit on a
+Flask + LLM application. Your job is to find every place where the app
+ADVERTISES a capability that it does not actually have, or where the docs
+state a number/contract/behavior that no longer matches the code.
+
+This bug class produced 3 of audit-4's 5 findings (N26 raster URL, N28
+Shapefile/GeoPackage advertised but error-only, N30 stale tool counts).
+History suggests every audit round will find one or two more.
+
+Repository to audit: /Users/gedionteklemariam/Documents/projects/SpatialApp
+Read first: work_plan/spatialapp/12-next-audit-input.md (header has the
+authoritative test counts and commit sha for cross-checking).
+
+The 4 surfaces to sweep:
+
+1. LLM TOOL DESCRIPTIONS vs HANDLER BEHAVIOR
+   The chat tool dispatch surface lives in nl_gis/tools.py (schemas) +
+   nl_gis/tool_handlers.py (implementations) + nl_gis/handlers/*.py
+   (per-domain handlers). For EACH of the ~82 tool definitions, verify:
+   - Does the description's claim list match what the handler returns?
+   - Does the description name a parameter that the handler ignores?
+   - Does the handler raise NotImplementedError / "not yet supported" / "use
+     X instead" for any code path the description promises?
+   - Does the handler advertise a format (Shapefile, GeoPackage, KML, etc.)
+     that the runtime returns an error for?
+   - Are required-parameter / optional-parameter splits in the JSON Schema
+     consistent with what the handler validates?
+   - For tools that produce a layer: does layer_add fire reliably, or does
+     the handler sometimes return a payload with no `geojson` / `layer_name`?
+
+   Cross-check the documented tool count: docs/TOOL_CATALOG.md vs the runtime
+   `get_tool_definitions()` count vs any number embedded in the system prompt
+   in nl_gis/chat.py. They should agree (or the doc/system-prompt should
+   defer to the registry as authoritative — which is what N30 fixed).
+
+2. FRONTEND TOOL-RESULT RENDERERS vs TOOL OUTPUTS
+   In static/js/chat.js, the `case 'tool_result':` block dispatches on
+   `result.action` (chart / animate_layer / show_3d_buildings / heatmap /
+   etc.). For EACH action a handler can return, verify there is a
+   non-fall-through renderer in chat.js. Fall-through to the JSON dump is
+   the symptom Cycle 11 / Cycle 13 fixed (chart no-op, animate JSON dump,
+   3D JSON dump). Look for new fall-throughs.
+
+3. README + CLAUDE.md + .project_plan/STATUS.md vs ACTUAL CODE
+   - CLAUDE.md "Quick Start" claims 236 tests; the actual test count
+     (per `pytest --collect-only -q`) should match within 5%.
+   - .project_plan/STATUS.md should not list "in progress" features that
+     have shipped, or "shipped" features that are still error-only paths.
+   - docs/TOOL_CATALOG.md sections should reflect the runtime registry.
+   - Any README at any depth that claims "supports X" — does X work?
+
+4. HEALTH / READINESS ENDPOINTS
+   /api/health and /api/health/ready are read by deploy automation. Verify:
+   - /api/health/ready returns ready=true ONLY when EVERY guarantee the
+     application makes to its callers is met. (N29 was the gap: ready was
+     true while paid LLM chat was open without auth.) What other
+     guarantees should be in the readiness check that aren't?
+   - /api/health does not leak per-user counts, secrets, or stack traces.
+   - /metrics (Prometheus) does not expose per-user labels.
+
+For EACH finding:
+- ID: starts at N31 (N1-N30 taken)
+- Severity: Critical / High / Medium / Low
+- Surface: which of (1)-(4) above
+- File:line of the description/doc
+- File:line of the actual handler/code
+- The drift in one sentence ("description says X, handler does Y")
+- User-visible symptom (one paragraph, with reproduction if possible)
+- Recommended fix shape
+
+Output format: one block per finding. End with:
+- "DRIFT FINDINGS: <count> Critical, <count> High, <count> Medium, <count> Low"
+- "SURFACE COVERAGE: tools (<N> checked / <total>), renderers (<N>),
+  docs (<N>), health (<N>)"
+- "TOOL HONESTY GRADE: pass | needs-revision | fail" with a one-paragraph
+  rationale.
+
+Do not flag prior closed findings (see 12-next-audit-input.md §1.1).
+```
+
+---
+
+## Prompt 8 — Auth-Mode Parity Sweep  *[NEW post audit-4]*
+
+```
+You are a Principal Security Engineer doing a prod-vs-dev parity audit on a
+Flask + LLM application. Your job is to find every place where a feature
+works in DEBUG mode but breaks (or worse: silently bypasses auth) when
+deployed with FLASK_DEBUG=false + CHAT_API_TOKEN set.
+
+This bug class produced 2 of audit-4's 5 findings (N27 annotation export
+broken under auth, N29 readiness green while chat publicly open). History
+suggests this is the highest-leverage class for production-readiness audits.
+
+Repository to audit: /Users/gedionteklemariam/Documents/projects/SpatialApp
+Read first:
+- work_plan/spatialapp/12-next-audit-input.md
+- work_plan/spatialapp/13-smoke-test-2026-05-03.md (live smoke test report)
+- work_plan/spatialapp/14-pre-deploy-dryrun.md (gunicorn dry-run report)
+- config.py (Config.DEBUG, Config.CHAT_API_TOKEN, Config.validate())
+
+The matrix to sweep — for each of the 4 production-mode invariants, audit
+every entry point:
+
+1. AUTH MODE PARITY — every state-mutating route + every fetch site
+   When CHAT_API_TOKEN is set:
+   - Every fetch in static/js/*.js MUST go through `authedFetch` (or
+     `$.ajax` with `authedAjaxBeforeSend`) so the Bearer header attaches.
+     Direct `fetch()`, `window.location.href = '/api/...'`, or `<a href>`
+     download links break under auth. (N27 was a `window.location.href`
+     to /export_annotations/<format>.)
+   - Every WebSocket connect MUST send the token in connect args.
+   - Every server-side route that returns user data MUST require auth in
+     prod. Special attention: routes added during the rolling fix work
+     that may not have inherited the @require_api_token decorator.
+
+2. CONFIG.VALIDATE() PROD GATING
+   Config.validate() must FAIL-FAST on missing required prod settings.
+   Audit-4 closed:
+   - SECRET_KEY default is rejected
+   - CHAT_API_TOKEN required for ready=true (N29)
+   What else SHOULD be in there but isn't? Candidates to consider:
+   - SECURITY_CONTACT (currently allowed to be the placeholder)
+   - LLM provider key (without one, chat falls back to rule-based — is this
+     the documented behavior, or a silent capability downgrade?)
+   - DATABASE_PATH writability check
+   - LOG_FOLDER + UPLOAD_FOLDER + LABELS_FOLDER writability check
+   - CSRF secret key separate from SECRET_KEY (is it?)
+
+3. PER-USER NAMESPACE CONTRACT — every file write site
+   N7 + N26 established the contract: every file the request handler writes
+   MUST live under a per-user subdir of UPLOAD_FOLDER / LABELS_FOLDER /
+   LOG_FOLDER, and every file the response references MUST be reachable via
+   the per-user-scoped serve route.
+   For EACH `open(... , 'w')` / `write_text()` / `tempfile` / `os.makedirs`
+   in app.py, blueprints/*.py, services/*.py, nl_gis/*.py, handlers/*.py:
+   - Is the path computed from the request user_id?
+   - If the URL of the result is returned to the client, does the serve
+     route actually find it?
+   - Does the file leak data from one user into another's filesystem
+     namespace? (e.g., backup_annotations() in blueprints/annotations.py is
+     a known LABELS_FOLDER-root writer per §2.1.)
+
+4. RATE LIMIT + SIZE CAP COVERAGE — every public input
+   For EACH route that accepts user input (POST / WebSocket message / SSE
+   client → server):
+   - Is there a per-user or per-IP rate limit?
+   - Is the request body size capped (Flask MAX_CONTENT_LENGTH covers
+     uploads but not necessarily JSON / WS messages)?
+   - Are individual fields capped (string length, list length, nested dict
+     depth)?
+   N11/N12/N14/N16 closed several of these; what's still uncapped?
+
+For EACH finding:
+- ID: starts at N31 (N1-N30 taken)
+- Severity: Critical / High / Medium / Low
+- Mode: which of (1)-(4) above
+- File:line
+- Reproduction: a curl command (or browser interaction) that demonstrates
+  the difference between DEBUG=true behavior and DEBUG=false behavior
+- Recommended fix shape
+
+To set up the prod-mode environment for testing (run as one shell line):
+
+    FLASK_DEBUG=false  SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")  CHAT_API_TOKEN=$(python3 -c "import secrets; print(secrets.token_hex(32))")  ANTHROPIC_API_KEY=sk-ant-...  SECURITY_CONTACT=mailto:security@example.com  .venv/bin/gunicorn -w 4 -k eventlet -b 127.0.0.1:5000 app:app
+
+Output format: one block per finding. End with:
+- "PARITY FINDINGS: <count> Critical, <count> High, <count> Medium, <count> Low"
+- "MODES SWEPT: auth-fetch (<N>), config-validate (<N>),
+  per-user-namespace (<N>), rate-limit-cap (<N>)"
+- "PROD-READINESS GRADE: ship | hold | block" with one-paragraph rationale.
+
+Do not flag prior closed findings (see 12-next-audit-input.md §1.1).
+```
+
+---
+
 ## Aggregating findings
 
-When the prompts return:
+When the prompts return (current workflow — for the active 3-prompt primary set; archived prompts P1/P2/P4/P6 are not part of the standard cycle):
 
-1. **Group by class:** strategy gaps (P1) | harness gaps (P2) | new findings (P3) | wrong assumptions (P4) | new failure modes (P5) | estimate revisions (P6).
-2. **Severity-rank** every finding.
-3. **For each Critical/High finding** — decide: revise the plan, add a harness component, or accept as documented residual risk.
-4. **Write back** the revisions to `08-v2-bugfree-plan.md` as a v2 of that doc; preserve the v1 as `08-v2-bugfree-plan-v1.md` for the audit trail.
-5. **Re-run prompts 1, 3, 5** against the revised plan. Three rounds max — if findings keep growing, the plan has a structural problem that needs a different deep-think pass.
+1. **Dedupe by ID and against the closed-finding list.** Cross-check every reported finding against `12-next-audit-input.md` §1.1. If a reviewer re-flags a closed finding, that's a signal to clarify the §1.1 entry's evidence rather than re-fix.
+2. **Group by class:** new findings (P3) | capability/doc drift (P7) | prod-mode parity (P8) | failure-mode (P5).
+3. **Severity-rank** every new finding (Critical / High / Medium / Low).
+4. **Open a new cycle in `12-next-audit-input.md` §3** — name it after the audit round (e.g., "Cycle N (external audit-X close-out)"). For each new finding, log the symptom + fix + commit sha + regression test path.
+5. **Update the audit-input header** with the new score, repo state, test counts, and "next finding ID starts at N…" pointer.
+6. **Re-run the eval gate** (`make eval` in `--ci` strict mode) before declaring closure.
+7. **Re-run the primary prompts** against the same commit only if the score dropped — convergence behavior is the signal that the audit pipeline has reached a fixed point.
 
-**Decision boundary:** if the aggregate review finds **≥ 3 Critical** or **≥ 5 High** or any **REJECT verdict** from a prompt that supplies coherent rationale → revise the plan before any code. If findings are **< 3 Critical and < 5 High and all verdicts are APPROVE / APPROVE-WITH-REVISIONS** → proceed to the hour-1 CSRF spike.
+**Decision boundary:** if a single audit round produces **≥ 1 Critical** or **≥ 3 High** → fix immediately and re-audit before any deploy work. If findings are **all Medium / Low** → fix in the same week but proceed with deploy planning in parallel. The gate is per-finding-class, not aggregate score; audit-4's 86/100 was acceptable to ship from because every finding had a localized fix and no class signaled systemic regression.

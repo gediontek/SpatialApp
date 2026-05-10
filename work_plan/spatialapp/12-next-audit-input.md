@@ -1,7 +1,7 @@
 # SpatialApp v2 — Input package for next external audit
 
-**Status:** **READY for external audit submission.** 17 cycles closed; CI green; audit-4 returned **86/100** (1 High + 3 Medium + 1 Low — N26-N30, all closed in Cycle 17).
-**Last updated:** 2026-05-10 (post Cycle 17 — N26-N30 from external audit-4 closed)
+**Status:** **READY for external audit submission.** 18 cycles closed; CI green; audit-4 returned **86/100** (1 High + 3 Medium + 1 Low — N26-N30, all closed in Cycle 17). Audit prompts re-balanced for audit-5 in Cycle 18.
+**Last updated:** 2026-05-10 (post Cycle 18 — audit-prompt refresh, no code change)
 **Updated by:** autonomous /auto-solve cycle
 **Repo state:** branch `main`, working tree clean, synced with origin. **Next external auditor: new finding IDs MUST start at N31 — IDs N1-N30 are taken** (N25 was consumed by the auditor as already-fixed at the time of audit-4).
 **Verified at last update**: `make eval` green (6 workflow + 19 browser + 8 frontend-auth + 65 harness + 30 tool-selection in `--ci` strict mode); CI-mirror `pytest tests/ -k "not e2e"` = **1,577 passed / 10 skipped / 0 failed** (~95s).
@@ -193,6 +193,21 @@ Cycle 11 added `animate_layer` and `visualize_3d` as resilience-only tests (`tes
 
 **Final coverage**: see header for current `make eval` and unit-suite numbers (kept fresh per-cycle).
 
+### Cycle 18 (audit-prompt refresh for audit-5) — done
+No code change. Re-balanced `09-external-audit-prompts.md` and refreshed §4 + §5 of this file so audit-5 starts from a clean handoff. Specifically:
+
+- ✅ **Prompts 1, 2, 4, 6 marked ARCHIVED** with a one-line reason at the top of each. They review the strategic plan in `08-v2-bugfree-plan.md` which has fully shipped — re-running them produces no actionable findings (and audit-3/audit-4 didn't run them). Kept verbatim for audit-trail integrity.
+- ✅ **Prompt 3 (the workhorse) refreshed**: N-seed bumped to N31 (was stuck at N19); the "previous findings" list rewritten as a class-grouped summary that defers to §1.1 of this file as authoritative; focus areas updated to reflect surfaces audit-4 surfaced bugs in (was framed as "what audit-1 missed").
+- ✅ **Prompt 5 (pre-mortem) refreshed**: post-shipping context (was framed as "PR #11 merged 2 weeks ago"); failure-mode categories updated to match the actual bug classes seen in audits 2-4 (scale-boundary pathologies, second-order fix side-effects, audit-pipeline meta-failures).
+- ✅ **Prompt 7 (NEW) — Capability-Honesty Sweep**: targets the doc-vs-runtime drift class that produced N26 + N28 + N30. Walks every LLM tool description vs handler behavior, every chat.js tool-result renderer vs tool-output action, README/CLAUDE.md/STATUS.md vs actual code, and the health/readiness contract.
+- ✅ **Prompt 8 (NEW) — Auth-Mode Parity Sweep**: targets the prod-vs-dev parity class that produced N27 + N29. Sweeps every fetch site for `authedFetch` use, every Config.validate() prod-gate, every per-user namespace file-write site, and every public-input rate-limit/size-cap pairing. Includes a copy-paste prod-mode environment setup.
+- ✅ **§4 + §5 of this doc**: stale "new findings start at N24" → "start at N31"; checklist re-anchored to header as source of truth instead of pinning specific test counts that go stale per-cycle; auditor handoff list updated with `14-pre-deploy-dryrun.md` and the new prompts.
+- ✅ **"Aggregating findings" section**: rewritten to match the actual cycle-based workflow used across audits 2-4 (was prescribing "revise the plan and re-run prompts 1,3,5" which doesn't match shipped reality).
+
+**Why no code change**: user explicitly deferred the next audit. The most leverage-positive thing to do during the deferral is make the next audit's input package crisp so the auditor doesn't re-flag closed findings or work from stale context — both of which happened in audits 2 and 3 (audit-3's N24 was literally "your handoff doc is stale").
+
+**Verification**: doc-only change; no tests run. Prompts 7 and 8 will be load-tested against a real auditor on audit-5.
+
 ### Cycle 17 (external audit-4 close-out — N26-N30) — done
 External LLM audit-4 returned **86/100** (down from audit-3's 93/100) — a fresh-eyes pass that surfaced bugs prior audits missed. 5 findings, all closed:
 
@@ -315,17 +330,26 @@ After /critical-review and /gap-analysis flagged that the security harness cover
 
 ## 4. Suggested external prompts to use
 
-Use [`09-external-audit-prompts.md`](09-external-audit-prompts.md) Prompts 1, 3, 5 as the primary input. Recommended adjustments for this round:
-- Prompt 3 (findings completeness) — the "previous findings" list NOW INCLUDES N1-N23. **New findings MUST start at N24** (the header is the source of truth — see top of this file). The `09-external-audit-prompts.md` file's own intro numbering predates the rolling work — override it with this file when handing it to the reviewer.
-- Add a new explicit focus area: "the ten under-audited surfaces in §2.1 of `12-next-audit-input.md`" — reviewer should sweep those before generic ones.
-- Provide the auditor with the current commit sha (use `git log -1 --oneline`) so they can re-run the same probes against the same code.
+Use [`09-external-audit-prompts.md`](09-external-audit-prompts.md). After 4 audit rounds + 30 closed findings, the prompt set has been re-balanced — see that file's header for the full "what to use vs what is archived" map. Quick guide for audit-5:
+
+- **Primary (always run):** Prompt 3 (findings completeness re-audit). The N-seed in that prompt is now **N31** — every ID N1-N30 is taken (see §1.1 here for the full list).
+- **Primary (added after audit-4):** Prompt 7 (capability-honesty sweep) and Prompt 8 (auth-mode parity). These two prompts target the surfaces that produced N26 + N28 + N29 — bugs that the unit suite missed because they are doc-vs-runtime drift and prod-vs-dev mode parity, not localized contract failures.
+- **Optional (still useful as cold-context probes):** Prompt 5 (pre-mortem). The plan-review prompts (1, 2, 4, 6) are **archived** — they reviewed a plan that has fully shipped; only re-run them if a new strategic plan is being drafted.
+- **Add to every prompt's context:** the current commit sha (`git log -1 --oneline`), this doc's URL/path, and §2.1's named "high-leverage areas" so the reviewer knows where prior auditors found low-hanging fruit.
 
 ## 5. Submission checklist (for when you DO audit)
 
-- [ ] Repo state is clean and pushed; auditor can pull from `origin/main` directly. The header records the latest commit at the time of the most recent cycle.
-- [ ] Confirm `pytest tests/harness/` is green on a clean checkout (latest verified: **65 passed / 3 skipped**).
-- [ ] Confirm `pytest tests/ -k "not e2e"` is green (latest verified at Cycle 14 close: **1,573 passed / 10 skipped / 0 failed**).
-- [ ] Confirm `make eval` is green (latest: 6 workflow + 19 browser-render + 8 frontend-auth + 65 harness + 30 tool-selection in `--ci` strict mode).
-- [ ] Hand the auditor: this doc, `09-external-audit-prompts.md` Prompts 1+3+5, the smoke test report `13-smoke-test-2026-05-03.md`, and the current commit sha (`git log -1 --oneline`).
-- [ ] Tell the auditor: "do not re-flag any ID in §1.1 or any of N1–N23; **new findings start at N24**."
-- [ ] Budget: 1-2 reviewer hours per prompt; total ~6 hours.
+The header is the source of truth for verified test counts and repo state — read it first when filling this checklist out. The numbers below are reminders of what to verify, not pinned values.
+
+- [ ] Repo state is clean and pushed; auditor can pull from `origin/main` directly. Header records the latest commit at the time of the most recent cycle.
+- [ ] `pytest tests/harness/` green on a clean checkout (header pins the latest count).
+- [ ] `pytest tests/ -k "not e2e"` green (header pins the latest pass/skip count).
+- [ ] `make eval` green in `--ci` strict mode (golden + harness + tool-selection bundled).
+- [ ] Hand the auditor:
+  - this file (`12-next-audit-input.md`)
+  - `09-external-audit-prompts.md` Prompts 3 + 7 + 8 (and 5 if a cold-context probe is wanted)
+  - the smoke test report `13-smoke-test-2026-05-03.md`
+  - the pre-deploy dry-run report `14-pre-deploy-dryrun.md` (operator-side residuals)
+  - the current commit sha (`git log -1 --oneline`)
+- [ ] Tell the auditor: "do not re-flag any ID in §1.1 or any of N1–N30; **new findings start at N31**."
+- [ ] Budget: 1-2 reviewer hours per prompt; total ~3-6 hours for the 3-prompt primary set.
