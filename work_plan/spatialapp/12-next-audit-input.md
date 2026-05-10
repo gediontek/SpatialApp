@@ -50,7 +50,29 @@
 | N17 | Low | `/.well-known/security.txt` (RFC 9116) added with `SECURITY_CONTACT` env var | `737c48d` |
 | N18 | High | C1 sandbox child env stripped HOME/PYTHONPATH so harshly that macOS user-site / non-`.venv` layouts could not import shapely+numpy → switch to copy-and-deny env (still strips secrets); RCE harness gains EXECUTE_CORPUS that actually runs each allowed snippet | `336a9ed` |
 
-**Total: 29 findings closed** (12 audit + 17 self-discovered post-fix; N15 was a clean check).
+| N19 | High | CI-mirror suite went red on combined run because `tests/harness/conftest.py` registered the CSRFError handler inside a fixture (Flask refuses late `app.errorhandler` registration) — moved to module-import time | `79dc9cc` |
+| N20 | High | Claimed browser-render coverage silently skipped in CI: `pytest-playwright` was installed but `playwright install chromium` was not — added dedicated `golden` CI job + made `docker.needs` include it | `79dc9cc` |
+| N21 | Medium | `make eval` swallowed tool-selection failures via `\|\| true` — switched to `--ci` strict mode that exits non-zero on regression | `79dc9cc` |
+| N22 | Medium | `animate_layer` slider didn't update visible cluster bubbles at low zoom — `filterToIndices` now batches `clusterLayer.removeLayers/addLayers` by feature index | `79dc9cc` |
+| N23 | Low | Audit-input doc was stale (header pointed at wrong commit + wrong test counts) | `79dc9cc` |
+| N24 | Low | Audit-input §4+§5 still pointed at "new findings start at N19" + 24+ unpushed commits — refreshed handoff text per cycle | `64a9f02` |
+| N25 | — | Consumed by audit-4 reviewer as "already fixed at the time of audit." No fix needed; ID burned. | (no fix) |
+| N26 | High | Raster upload returned a 404 URL — `render_overlay()` wrote PNG to `UPLOAD_FOLDER` root but the serve route is per-user (N7 isolation) → write into `os.path.dirname(image_path)` (per-user dir) | `c12caa8` |
+| N27 | Medium | Annotation export broken under auth — `window.location.href = '/export_annotations/X'` couldn't attach Bearer; switched to `authedFetch` + Blob download via temporary `<a>` | `c12caa8` |
+| N28 | Medium | Capability-claim honesty: `export_layer` advertised Shapefile/GeoPackage but error-only; `import_auto` advertised shapefile detection but "not supported." Tool descriptions in `nl_gis/tools.py` now honestly defer to HTTP endpoint or surface clear errors | `c12caa8` |
+| N29 | Medium | Readiness could go green while paid chat was publicly open — `/api/health/ready` now requires `CHAT_API_TOKEN` when `Config.DEBUG=False` (debug mode unaffected) | `c12caa8` |
+| N30 | Low | Stale tool counts (TOOL_CATALOG.md said 64; system prompt said 50; registry said 82) — both updated to point at `get_tool_definitions()` as runtime source of truth | `c12caa8` |
+| N31 | Medium | Choropleth tool result unrendered — `chat.js` had no `case 'choropleth':`; new `applyStyleMap(layerName, styleMap)` on LayerManager + `renderChoroplethLegend(stepId, legendData)` helper; B20 regression test | `6882e3e` |
+| N32 | Low | CLAUDE.md cited 236 tests / 24 routes / 24 tool handlers (actual 1,587 / ~34 / 82) — replaced with deferral pointer to runtime + caveat block | `68fa1ec` |
+| N33 | Low | STATUS.md cited 1,406 tests + 75 commits + 2026-05-01 last-updated — refreshed all 5 fields + same deferral pointer | `68fa1ec` |
+| N34 | — | `/api/health/ready` body leaks per-subsystem checks dict to unauth callers. Analyzed: this is the intentional N29 behavior (operator-debugging info needed at deploy). **Accepted by design**, no fix. | (analyzed; no fix) |
+| N35 | High | `Config.validate()` did not reject placeholder `SECURITY_CONTACT` in prod → `/.well-known/security.txt` would advertise dead inbox to vuln researchers. New `_PLACEHOLDER_SECURITY_CONTACTS` set + Config attribute + 6 regression tests | `5611cb3` |
+| N36 | — | LLM provider key absence in prod → silent rule-based fallback. **Subsumed by N29** readiness gate (ready=503 when llm key missing). No new fix needed; deployments without readiness probes are responsible for their own check. | (subsumed) |
+| N37 | Medium | UPLOAD_FOLDER / LABELS_FOLDER / LOG_FOLDER writability not checked at startup → opaque 500 on first user upload. `Config.validate()` now probes write access in prod (skipped in DEBUG); 3 regression tests | `5611cb3` |
+| N38 | Medium | `/display_table` accepted unbounded GeoJSON → 100k features blew up memory + CPU via gpd.GeoDataFrame.from_features. New `display_table_limiter` (30/min/user) + 5,000-feature cap with 413; 3 regression tests | `c49f3e3` |
+| N39 | Low | `/api/auto-classify` accepted unbounded bbox → globe-scale request would download whole-planet OSM data + train classifier. New `auto_classify_limiter` (5/hour/user) + 100 sq deg bbox cap with 413. **Subtle find while testing**: rate gate must run BEFORE the OSM_AUTO_LABEL_AVAILABLE 500-check; reordered. | `c49f3e3` |
+
+**Total: 39 closed findings** (12 audit + 27 self-discovered) + N15 verified clean + N25 consumed-by-auditor + N34 accepted-by-design + N36 subsumed by N29.
 
 ### 1.2 Test infrastructure added
 
@@ -229,6 +251,20 @@ Cycle 11 added `animate_layer` and `visualize_3d` as resilience-only tests (`tes
 - `animate_player.png` — slider+play+reset rendered under the tool step (also visible in the test DOM assertion).
 
 **Final coverage**: see header for current `make eval` and unit-suite numbers (kept fresh per-cycle).
+
+### Cycle 24 (audit-input doc maintenance + §1.1 catalog completion) — done
+After Cycles 18-23 cascade complete, this cycle is pure doc maintenance to ensure the audit-input package is internally consistent for audit-5 hand-off:
+
+- ✅ **§2.1 high-leverage areas** rewritten. Removed 5 items the cascade swept clean (LLM tool-arg validation, provider symmetry, frontend Playwright e2e, /metrics leakage, SECURITY_CONTACT). Added 2 items the cascade surfaced as still under-audited (multi-tool LLM chains for prompt-injection-via-data; test infrastructure honesty for silent-skip patterns).
+- ✅ **§2.2 areas auditor can SKIP** rewritten as a 12-row coverage table that names each surface, the coverage scope, and the test path. Replaces the 4-line summary that was no longer accurate against the 81-test harness.
+- ✅ **§2.3 files most-changed** rewritten as a cumulative cycles 0-23 view (was pre-cycle-13 snapshot). Captures the major contributions of all 6 fix cycles in this campaign + the new test files.
+- ✅ **§1.1 closed-findings catalog extended** from N18 to N39. Auditors read §1.1 first to know what NOT to re-flag; the prior version was 21 IDs short of reality. Each new row names severity, one-line summary, and commit sha. N15+N25+N34+N36 marked as non-fix (clean check / consumed / accepted-by-design / subsumed).
+- ✅ **Cycle 19 entry**: stale "deferred" wording on N31 corrected to "closed Cycle 20" with the path-choice retrospective preserved.
+- ✅ **`14-pre-deploy-dryrun.md`**: F1 (the only deploy-blocking finding) marked closed, citing N35 code-gate. Verdict updated: "Deploy-ready modulo F1" → "Deploy-ready." Operator checklist annotated to show which items are ALSO code-gated (1, 2, 4, 5, 6 — the secret/contact/llm/chat-token/folders ones).
+
+**Why this matters for audit-5**: an external auditor reading this doc cold needs §1.1 to be the canonical "don't re-flag this" list and §2 to accurately name the surface that's still genuinely open. Both were stale enough that audit-5 would have re-flagged closed findings (audit-3 already did this — that's how N24 happened). Cycle 24 closes the doc-staleness pipeline that produced N24.
+
+**Verification**: doc-only changes; no code modified, no tests run. Confirmed §1.1 row count (39 N-rows + 12 audit rows) matches the cumulative campaign tally.
 
 ### Cycle 23 (close N38 + N39 — uncovered mutation routes) — done
 Closes the two route-handler findings deferred from Cycle 22's Prompt 8 self-pass. Both fixes mirror the N12 chat_limiter pattern (per-user PerKeyRateLimiter + size cap with 413).
