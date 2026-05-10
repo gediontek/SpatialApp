@@ -1,10 +1,10 @@
 # SpatialApp v2 — Input package for next external audit
 
-**Status:** **READY for external audit submission.** 22 cycles closed; CI green; audit-4 returned **86/100** (N26-N30, all closed in Cycle 17). Prompt-validation cascade complete: drafted Prompts 7+8 (Cycle 18), Prompt 7 self-pass found N31+N32+N33+N34 (Cycles 19-21; 3 closed, 1 accepted-by-design), Prompt 8 self-pass found N35-N39 (Cycle 22; N35+N37 closed, N36 subsumed by N29, N38+N39 deferred to Cycle 23). Both new prompts are validated against real code AND have produced + closed real findings.
-**Last updated:** 2026-05-10 (post Cycle 22 — N35 + N37 closed via Config.validate hardening; N38 + N39 deferred to Cycle 23)
+**Status:** **READY for external audit submission.** 23 cycles closed; CI green; audit-4 returned **86/100** (N26-N30, all closed in Cycle 17). Prompt-validation cascade complete (Cycles 18→23): drafted Prompts 7+8 (18), Prompt 7 self-pass found N31-N34 (19-21; 3 closed, 1 accepted-by-design), Prompt 8 self-pass found N35-N39 (22-23; 4 closed, 1 subsumed by N29). Both new prompts validated against real code AND produced + closed 7 real findings between them. Net: 8 closed cycles + 1 accepted-by-design + 1 subsumed in 6 doc/code cycles.
+**Last updated:** 2026-05-10 (post Cycle 23 — N38 + N39 closed via rate-limit + size-cap on /display_table and /api/auto-classify)
 **Updated by:** autonomous /auto-solve cycle
 **Repo state:** branch `main`, working tree clean, synced with origin. **Next external auditor: new finding IDs MUST start at N40 — IDs N1-N39 are taken** (N25 consumed by the auditor at audit-4; N31-N34 from Cycle 19-21 P7 self-pass; N35-N39 from Cycle 22 P8 self-pass; status of each is in §1.1 / §3 cycle entries).
-**Verified at last update**: `make eval` green (6 workflow + 20 browser + 8 frontend-auth + **77** harness + 30 tool-selection in `--ci` strict mode); CI-mirror `pytest tests/ -k "not e2e"` = **1,590 passed / 10 skipped / 0 failed** (~96s).
+**Verified at last update**: `make eval` green (6 workflow + 20 browser + 8 frontend-auth + **81** harness + 30 tool-selection in `--ci` strict mode); CI-mirror `pytest tests/ -k "not e2e"` = **1,594 passed / 11 skipped / 0 failed** (~95s).
 **Audit history**: audit-1 (pre-cycles): 31/100 → audit-2 (post Cycle 13): 81/100 → audit-3 (post Cycle 14): 93/100 → audit-4 (post Cycles 15-16): **86/100** (5 fresh findings N26-N30, all closed in Cycle 17). Audit-5 awaits.
 **Audit-4 specifics**: N26 was a real user-facing break (raster upload returned a 404 URL); N27 was an auth break (annotation export buttons couldn't attach Bearer); N29 was a security gap (readiness could go green while paid chat was publicly open). Score dropped from 93 → 86 because audit-4 surfaced bugs the prior audits missed — exactly what fresh-eyes audits exist for.
 **Companion docs:**
@@ -192,6 +192,28 @@ Cycle 11 added `animate_layer` and `visualize_3d` as resilience-only tests (`tes
 - `animate_player.png` — slider+play+reset rendered under the tool step (also visible in the test DOM assertion).
 
 **Final coverage**: see header for current `make eval` and unit-suite numbers (kept fresh per-cycle).
+
+### Cycle 23 (close N38 + N39 — uncovered mutation routes) — done
+Closes the two route-handler findings deferred from Cycle 22's Prompt 8 self-pass. Both fixes mirror the N12 chat_limiter pattern (per-user PerKeyRateLimiter + size cap with 413).
+
+- ✅ **N38 (Medium) — `/display_table` accepts unbounded GeoJSON.** Pre-fix, POST a 100k-feature FeatureCollection → blew up memory + CPU via `gpd.GeoDataFrame.from_features` + `pandas.to_html` with no size check and no rate limit. **Fix**: new `display_table_limiter` (30/min per user) in `services/rate_limiter.py`; reject payloads `> 5,000 features` with HTTP 413 BEFORE the geopandas conversion. **3 regression tests** in `tests/harness/test_post_audit_findings.py` (oversized payload rejected, under-cap succeeds, 31st request throttles). `blueprints/annotations.py:443-498`.
+
+- ✅ **N39 (Low) — `/api/auto-classify` accepts unbounded bbox.** Pre-fix, POST with `bbox: globe-scale` → downloaded entire planet's landcover via Overpass + trained classifier with no rate limit and no bbox area cap. **Fix**: new `auto_classify_limiter` (5/hour per user); reject `bbox area > 100 sq deg` with HTTP 413. **Subtle bug caught while testing** — original ordering put the `OSM_AUTO_LABEL_AVAILABLE` 500-check BEFORE the rate gate, which means an attacker could spam past the rate limiter knowing it short-circuits to 500 first. Reordered: rate gate runs first now. **2 regression tests** (globe-scale bbox rejected when module available, 6th request throttles regardless of module availability). `blueprints/osm.py:366-419`.
+
+**Verification**: harness suite **77 → 81 passed** (+4, plus 1 conditional skip for OSM_AUTO_LABEL_AVAILABLE=False); `make eval` green; full unit suite **1,594 passed / 11 skipped / 0 failed**.
+
+**Why this matters — and what it closes**: this is the final cycle of the Cycles 18→23 prompt-validation cascade. Net cascade output:
+
+| Phase | Output |
+|---|---|
+| Cycle 18 | Drafted Prompts 7+8; archived plan-review prompts; refreshed P3 + P5 |
+| Cycle 19 | P7 surfaces 1-3 self-pass → N31 (deferred), N32+N33 (closed) |
+| Cycle 20 | N31 closed via real choropleth renderer + B20 regression test |
+| Cycle 21 | P7 surface 4 self-pass → N34 candidate analyzed, accepted-by-design |
+| Cycle 22 | P8 self-pass → N35 (closed), N36 (subsumed), N37 (closed), N38+N39 (deferred) |
+| Cycle 23 | N38+N39 closed — cascade complete |
+
+**Net**: 6 cycles, 9 candidate findings surfaced (N31-N39), **7 closed** with regression tests + 1 accepted-by-design + 1 subsumed by prior closure. The new prompts (P7, P8) are now load-tested AND have generated real audit value. Audit-5 (when run) will see a smaller surface area than audit-4 saw.
 
 ### Cycle 22 (Prompt 8 self-pass + N35/N37 closure) — done
 After Cycle 21 closed Prompt 7's loop, ran Prompt 8 (auth-mode parity sweep) against the actual codebase via the same Explore-agent flywheel. 5 candidate findings surfaced (N35-N39); triaged + shipped:
