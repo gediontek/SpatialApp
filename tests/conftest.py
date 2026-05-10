@@ -12,6 +12,17 @@ for _llm_key in ('ANTHROPIC_API_KEY', 'OPENAI_API_KEY',
                  'GEMINI_API_KEY', 'GOOGLE_API_KEY'):
     os.environ[_llm_key] = ''
 
+# N35 / N37: tests that boot the app in prod-mode (FLASK_DEBUG=false in a
+# subprocess — see tests/golden/conftest.py:296 live_app fixture) need a
+# real-looking SECURITY_CONTACT or Config.validate() refuses to start.
+# Set test-only defaults here so subprocesses inherit them. Tests
+# targeting the placeholder rejection itself monkeypatch
+# Config.SECURITY_CONTACT back to the placeholder explicitly (see
+# tests/harness/test_secret_validation.py).
+os.environ.setdefault(
+    'SECURITY_CONTACT', 'mailto:security@spatialapp-test.example'
+)
+
 # Audit M3: point RASTER_DIR at the committed test fixture before any
 # `from config import Config` import in test files. config.py:105 reads
 # RASTER_DIR from env at import time; setting it here makes the bundled

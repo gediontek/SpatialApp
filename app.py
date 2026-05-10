@@ -212,7 +212,10 @@ def create_app(testing=False):
     # ------------------------------------------------------------------
     @app.route('/.well-known/security.txt')
     def security_txt():
-        contact = os.environ.get('SECURITY_CONTACT', 'mailto:security@example.com')
+        # N35: read from Config so test monkeypatches + Config.validate's
+        # placeholder check both apply uniformly. Direct os.environ access
+        # bypassed both.
+        contact = Config.SECURITY_CONTACT
         # Expires field is RFC 9116 mandatory: 1 year out from request time.
         from datetime import datetime as _dt, timezone as _tz, timedelta as _td
         expires = (_dt.now(_tz.utc) + _td(days=365)).strftime('%Y-%m-%dT%H:%M:%S.000Z')

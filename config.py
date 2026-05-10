@@ -2,12 +2,26 @@
 
 import logging
 import os
+import tempfile
 from dotenv import load_dotenv
 
 # Load .env file if present
 load_dotenv()
 
 _config_logger = logging.getLogger(__name__)
+
+# N35: SECURITY_CONTACT values that are clearly the unconfigured default.
+# Refusing these in prod prevents shipping a security.txt that points
+# at a non-functional inbox — i.e., reports that vanish silently.
+_PLACEHOLDER_SECURITY_CONTACTS = {
+    "mailto:security@example.com",
+    "mailto:security@example.org",
+    "mailto:placeholder@example.com",
+    "mailto:test@example.com",
+    "",
+    "TODO",
+    "CHANGEME",
+}
 
 
 def _int_env(key: str, default: int) -> int:
@@ -44,11 +58,54 @@ class Config:
                 "SECRET_KEY must be set in production. "
                 "Set the SECRET_KEY environment variable to a random string."
             )
+        # N35: refuse to start in prod with a placeholder SECURITY_CONTACT.
+        # The /.well-known/security.txt route would otherwise advertise a
+        # non-functional inbox to any researcher trying to disclose a
+        # vulnerability — the highest-friction way to lose a report.
+        if not Config.DEBUG:
+            sc = (Config.SECURITY_CONTACT or "").strip()
+            if sc in _PLACEHOLDER_SECURITY_CONTACTS:
+                raise RuntimeError(
+                    "SECURITY_CONTACT must be set in production. "
+                    "Set the SECURITY_CONTACT environment variable to a real "
+                    "contact channel (e.g., 'mailto:security@yourdomain.com' "
+                    "or 'https://yourdomain.com/security'). The placeholder "
+                    "default would publish a dead inbox in /.well-known/security.txt."
+                )
+        # N37: probe-write each writable folder so a misconfigured prod
+        # deploy fails loud at startup instead of throwing 500s on the
+        # first user upload. Skipped in DEBUG so dev sandboxes that
+        # haven't materialized the folders yet don't block startup.
+        if not Config.DEBUG:
+            for folder_name in ("UPLOAD_FOLDER", "LABELS_FOLDER", "LOG_FOLDER"):
+                folder = getattr(Config, folder_name, None)
+                if not folder:
+                    continue
+                try:
+                    os.makedirs(folder, exist_ok=True)
+                    with tempfile.NamedTemporaryFile(
+                        dir=folder, prefix=".writeprobe_", delete=True
+                    ) as fh:
+                        fh.write(b"probe")
+                        fh.flush()
+                except OSError as exc:
+                    raise RuntimeError(
+                        f"{folder_name}={folder!r} is not writable: {exc.strerror or exc}. "
+                        f"Fix folder permissions or set {folder_name} to a "
+                        f"writable path. (Probe failed at startup; would have "
+                        f"surfaced as an opaque 500 on first upload.)"
+                    ) from exc
 
     # Folders
     UPLOAD_FOLDER = os.environ.get('UPLOAD_FOLDER', os.path.join('static', 'uploads'))
     LABELS_FOLDER = os.environ.get('LABELS_FOLDER', 'labels')
     LOG_FOLDER = os.environ.get('LOG_FOLDER', 'logs')
+
+    # Security disclosure (RFC 9116 — /.well-known/security.txt).
+    # Default is a placeholder that Config.validate() rejects in prod.
+    SECURITY_CONTACT = os.environ.get(
+        'SECURITY_CONTACT', 'mailto:security@example.com'
+    )
 
     # Upload limits
     MAX_CONTENT_LENGTH = _int_env('MAX_UPLOAD_SIZE', 50 * 1024 * 1024)  # 50 MB
