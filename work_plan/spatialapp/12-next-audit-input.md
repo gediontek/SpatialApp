@@ -80,42 +80,79 @@
 
 ## 2. What the auditor should focus on
 
-The previous audit explicitly self-reported ~85% surface coverage. The 29 closed findings teach what classes of bug to expect; this section names the surface still under-audited.
+After 4 audit rounds + 39 closed findings (12 audit + 27 self-discovered), the surface coverage of the test+harness suite is high. This section names the surfaces that remain genuinely under-audited and the areas the auditor can confidently skip.
 
-### 2.1 High-leverage areas for the next audit
+### 2.1 High-leverage areas for the next audit (refreshed for audit-5)
 
-1. **LLM tool-call arg validation.** Tool dispatch in `nl_gis/chat.py` accepts arg dicts from the model. If args reach SQL (database tools), file paths (raster/import tools), or shell (none currently), prompt-injection becomes RCE-adjacent. The defense surface has not been audited.
-2. **Provider symmetry.** Audit found M4 in OpenAI converter only. Anthropic + Gemini converters have not been audited for symmetric mixed-content / dropped-block bugs. (Cycle 1 of this session is starting here — see §3 for the live state.)
-3. **Database concurrency under load.** SQLite WAL with concurrent writes from Flask + WebSocket background tasks; `_migrate_add_column` runs at every startup; multi-process gunicorn would have init races. No load test exists.
-4. **Annotation backup race + leakage.** `backup_annotations()` in `blueprints/annotations.py` writes timestamped `annotations_backup_*.geojson` to `LABELS_FOLDER` with no per-user namespacing. C4-class.
-5. **Error handlers info-leak.** `app.py:200-206` 500 handler returns generic message but logs `str(e)` — verify no stack trace / path leaks in 4xx/5xx body or set-cookie.
-6. **Frontend Playwright e2e.** Backend property tests cover transport contracts; the Playwright harness for H1+M1+M2 (`test_frontend_auth.py`) is still TODO.
-7. **Raster upload size limit.** `secure_filename` blocks path traversal but no MAX_RASTER_BYTES guard — a 50MB Flask MAX_CONTENT_LENGTH applies, but a craftily-compressed GeoTIFF could OOM rasterio on read.
-8. **Public `/api/geocode` and `/api/category-colors`** — no auth. Verify they don't enable enumeration / abuse.
-9. **`/metrics` (Prometheus)** — unauthenticated by intent. Verify it doesn't leak per-user labels or secrets.
-10. **WebSocket `connect` flow** — auth happens in `handle_connect` via `request.args.get('token')`; verify the per-user vs shared-token branches don't allow privilege escalation.
+The items below survived the Cycles 18-23 prompt-validation cascade — meaning Prompts 7+8 self-passes did NOT clear them. Items the cascade resolved were removed from this list (see §3 cycle entries for evidence).
+
+1. **Database concurrency under load.** SQLite WAL with concurrent writes from Flask + WebSocket background tasks; `_migrate_add_column` runs at every startup; multi-process gunicorn would have init races. No load test exists. Closures so far: N1-N39 are all single-process / per-user functional contracts.
+2. **Annotation backup race + leakage.** `backup_annotations()` in `blueprints/annotations.py` writes timestamped backup files to `LABELS_FOLDER` ROOT (not per-user). Documented as filesystem-only exposure (not web-served), but a misconfigured operator who exposes `LABELS_FOLDER` over WebDAV / S3 sync would leak cross-user annotation data. C4-class.
+3. **Error handlers info-leak.** `app.py:200-206` 500 handler returns generic message but logs `str(e)` server-side — verify no stack trace / path leaks in 4xx/5xx response bodies under realistic exception types (e.g., file-not-found exposing absolute path; SQLAlchemy errors leaking schema; rasterio errors leaking geotransform internals).
+4. **Raster upload size limit.** `secure_filename` blocks path traversal but no MAX_RASTER_BYTES guard — a 50MB Flask MAX_CONTENT_LENGTH applies, but a craftily-compressed GeoTIFF (zip-bomb-style) could OOM rasterio on read.
+5. **Public `/api/geocode`** — no auth (intentional). Verify no enumeration / abuse vector beyond what Nominatim itself rate-limits.
+6. **WebSocket `connect` flow** — auth happens in `handle_connect` via `request.args.get('token')`; verify the per-user vs shared-token branches in handle_connect don't allow privilege escalation across the connect/disconnect lifecycle.
+7. **Multi-tool LLM chains.** Plan-execute mode (`/api/chat/execute-plan`) chains tool outputs into subsequent tool inputs. Has the data flow between tool 1 → tool 2 → tool 3 been audited for prompt-injection-via-data (e.g., a malicious OSM `name` tag containing a tool-call directive that the next tool's LLM call honors)?
+8. **Test infrastructure honesty.** Audit-2's N20 was "claimed Playwright coverage silently skipped in CI." Sweep for similar: is any test currently `pytest.skip(...)` in CI but expected by the audit-input doc to be running? `tests/test_app.py::test_n26...` and the new `test_n39_auto_classify_*` skip when fixtures aren't present — are these honest or hiding gaps?
+
+Items REMOVED from the prior version of this list (cleared by cycles 1-23):
+- ~~LLM tool-call arg validation~~ — swept clean Cycle 1; no SQL/shell/eval reachable from tool args.
+- ~~Provider symmetry (Anthropic/Gemini converters)~~ — swept clean Cycle 1.
+- ~~Frontend Playwright e2e~~ — completed Cycles 9-13 (B1-B20 paint + interaction tests).
+- ~~`/metrics` Prometheus leakage~~ — swept clean Cycle 21 (no per-user labels, no path labels, no secrets).
+- ~~SECURITY_CONTACT placeholder~~ — code-gated by N35 (Cycle 22) + readiness already gated CHAT_API_TOKEN (N29).
 
 ### 2.2 Areas the auditor can SKIP (already covered by harness)
 
-- CSRF enforcement on the 15 state-mutating routes (covered by `test_csrf_enforcement.py`)
-- 14 known sandbox-escape payloads (covered by `test_rce_sandbox.py`)
-- Cross-user reads/writes on layers + annotations + chat sessions via REST (covered by `test_multi_user_isolation.py`)
-- The 7 specific contracts named in §1.1's harness column
-
-### 2.3 Files most-changed since last audit (review priority)
-
-| File | Lines changed | Why |
+| Surface | Coverage | Test path |
 |---|---|---|
-| `services/code_executor.py` | +180 / −80 (full rewrite) | C1 AST sandbox |
-| `blueprints/websocket.py` | +85 | N2 + N3 + N4 + chat_abort plumbing |
-| `blueprints/annotations.py` | +60 | C4 + N9 |
-| `blueprints/layers.py` | +30 | C4 + N8 |
-| `blueprints/chat.py` | +20 | C3 + 403 propagation |
-| `blueprints/osm.py` | +25 | H4 + N7 |
-| `blueprints/collab.py` | +30 | N6 |
-| `nl_gis/llm_provider.py` | +15 | M4 |
-| `app.py` | +30 / -20 | C2 + H3 |
-| `state.py` | +5 | C4 (`layer_owners` map) |
+| CSRF enforcement on state-mutating routes | 15 routes property-tested | `tests/harness/test_csrf_enforcement.py` |
+| AST sandbox deny corpus | 14 payloads + 7 allow-corpus + 5 EXECUTE_CORPUS | `tests/harness/test_rce_sandbox.py` |
+| Cross-user layer/annotation/chat-session isolation (REST + WS) | 6 scenarios + Hypothesis state machine | `tests/harness/test_multi_user_isolation.py`, `test_isolation_state_machine.py` |
+| Per-user rate limits (chat / register / display_table / auto-classify / WS layer_style / WS chat_message) | 6 distinct limiters with regression tests | `tests/harness/test_register_rate_limit.py`, `test_post_audit_findings.py` (N12, N14, N16, N38, N39) |
+| Config.validate prod gates (SECRET_KEY, SECURITY_CONTACT, folder writability) | 15 tests covering all 3 gates | `tests/harness/test_secret_validation.py` |
+| /api/health + /api/health/ready contract (incl. CHAT_API_TOKEN gate) | 5 scenarios | `tests/test_auth.py::TestHealth*` |
+| Per-user namespacing on raster upload + classify_landcover (N7) | direct contract test | `tests/harness/test_post_audit_findings.py::test_n7_*` |
+| ZIP-bomb / zip-slip on shapefile import (N8) | 2 attack scenarios | `tests/harness/test_post_audit_findings.py::test_n8_*` |
+| Frontend tool_result rendering (chart, animate, 3D, choropleth, heatmap) | 20 browser-render tests (B1-B20) | `tests/golden/test_browser_render.py` |
+| Frontend auth contract (authedFetch, jQuery beforeSend, CSRF, Bearer) | 8 contract tests | `tests/golden/test_frontend_auth.py` |
+| LLM tool selection + chain accuracy under deterministic mocks | 80 prompts; 100% strict --ci pass | `tests/eval/run_eval.py --ci` |
+
+The 39 closed findings (§1.1) each have a regression guard. Re-flagging any closed finding is a signal to clarify the §1.1 evidence rather than re-fix.
+
+### 2.3 Files most-changed across all cycles (review priority)
+
+Refreshed to reflect cycles 0-23 cumulative impact, not the pre-cycle-13 snapshot.
+
+| File | Cumulative changes | Why (cycle / finding refs) |
+|---|---|---|
+| `services/code_executor.py` | full rewrite + EXECUTE_CORPUS | C1 AST sandbox + N18 env regression fix |
+| `blueprints/auth.py` | major | C2/H3 + N6 + N10 + N11 + N29 (readiness CHAT_API_TOKEN gate) |
+| `blueprints/annotations.py` | major | C4 + N9 + N38 (display_table cap + rate limit) |
+| `blueprints/osm.py` | major | H4 + N7 (per-user raster) + N26 (PNG-in-user-dir) + N39 (auto-classify cap + rate limit) |
+| `blueprints/websocket.py` | major | N2 + N3 + N4 + N14 (layer_style cap + throttle) + N16 (chat_message context cap) |
+| `blueprints/chat.py` | moderate | C3 + N12 (per-user chat throttle, shared bucket across endpoints) |
+| `blueprints/layers.py` | moderate | C4 + N8 (zip-bomb / zip-slip guards) |
+| `blueprints/collab.py` | moderate | N6 (REST endpoints require auth + owner) |
+| `services/rate_limiter.py` | major addition | new BL1 fix + 4 PerKeyRateLimiter instances (chat / register / display_table / auto-classify) |
+| `services/llm_cache.py` | minor | N13 user_id in cache key |
+| `nl_gis/llm_provider.py` | minor | M4 (OpenAI converter) |
+| `nl_gis/handlers/visualization.py` | major | choropleth + chart + animate + 3d_buildings emitters |
+| `nl_gis/tools.py` | major | N28 capability honesty in descriptions |
+| `nl_gis/chat.py` | moderate | N30 (system prompt registry deferral) + plan-execute event emitters |
+| `app.py` | moderate | C2 + H3 + N17 (security.txt) + N35 (Config-sourced contact) |
+| `config.py` | major addition | N29 + N35 + N37 (Config.validate prod gates) |
+| `state.py` | minor | C4 (`layer_owners` map) |
+| `static/js/auth.js` | major addition | H1 + M1 (authedFetch + authedAjaxBeforeSend) |
+| `static/js/main.js` | moderate | N27 (annotation export Blob download) |
+| `static/js/layers.js` | major | Cycle 12 wide-area render fixes + N22 cluster filter + N31 applyStyleMap |
+| `static/js/chat.js` | major | Cycle 11 chart hook + Cycle 13 animate/3D modals + N31 choropleth renderer + legend |
+| `templates/index.html` | moderate | Chart.js + deck.gl + Leaflet.heat CDN script tags |
+| `tests/golden/test_browser_render.py` | major addition | B1-B20 (20 browser-render tests) |
+| `tests/golden/test_frontend_auth.py` | new | A1-A7 (auth.js contracts) |
+| `tests/golden/test_user_workflows.py` | new | W1-W6 (server-side workflow eval) |
+| `tests/harness/*.py` | new directory | 81 tests across 9 files (CSRF, sandbox, isolation, secrets, post-audit) |
+| `Makefile` | new | `make eval` pre-audit ritual (--ci strict mode) |
 
 ## 3. Live state (this session)
 
@@ -265,7 +302,7 @@ After Cycle 18 shipped Prompts 7 (capability honesty) and 8 (auth-mode parity), 
 
 **Findings discovered by self-pass:**
 
-- ⏭ **N31 Medium — `choropleth_map` tool result is unrendered.** `nl_gis/handlers/visualization.py:264` returns `{"action": "choropleth", "styleMap": {idx: color}, "legendData": {entries: [...]}}`. `static/js/chat.js`'s `tool_result` block has specialized renderers for `chart` / `animate` / `3d_buildings` (Cycles 11+13) but **no `case 'choropleth':`** — the result falls through to `formatToolResult`'s default branch (JSON.stringify-truncated-100-char dump). `static/js/main.js:524` has a `buildLegend()` but it consumes a `colors` map (category→color) from `classify_landcover`, not the `legendData.entries` array choropleth produces. **User-visible symptom**: user asks "color the buildings layer by height with 5 classes," chat step shows JSON garbage, the layer is NOT recolored, no legend appears. Same N28-class pattern as `export_layer` Shapefile, but choropleth was missed by audit-4 because the tool description ("Returns class breaks, a per-feature color map, and legend metadata") sounds technically truthful — the handler DOES return those — it just nobody on the frontend consumes them. **Decision: deferred to a later code cycle, NOT closed in Cycle 19.** Two valid fix paths:
+- ✅ **N31 Medium — `choropleth_map` tool result is unrendered.** *Discovered Cycle 19, closed Cycle 20 (path B / real implementation; see Cycle 20 entry for the fix details).* `nl_gis/handlers/visualization.py:264` returns `{"action": "choropleth", "styleMap": {idx: color}, "legendData": {entries: [...]}}`. `static/js/chat.js`'s `tool_result` block had specialized renderers for `chart` / `animate` / `3d_buildings` (Cycles 11+13) but **no `case 'choropleth':`** — the result fell through to `formatToolResult`'s default branch (JSON.stringify-truncated-100-char dump). `static/js/main.js:524` has a `buildLegend()` but it consumes a `colors` map (category→color) from `classify_landcover`, not the `legendData.entries` array choropleth produces. **User-visible symptom**: user asked "color the buildings layer by height with 5 classes," chat step showed JSON garbage, the layer was NOT recolored, no legend appeared. Same N28-class pattern as `export_layer` Shapefile, but choropleth was missed by audit-4 because the tool description ("Returns class breaks, a per-feature color map, and legend metadata") sounded technically truthful — the handler DID return those — just nobody on the frontend consumed them. **Cycle 19 deferred between two valid fix paths** (full retrospective preserved below for the path-choice audit trail):
   - (A) Honest deferral (small): edit `tools.py:1769` description to say "Returns the spec; pair with `style_layer` to apply." Mirrors the N28 pattern; ~5 minutes; no frontend change.
   - (B) Real implementation (medium): add `case 'choropleth':` to `chat.js:344` tool_result handler that consumes `result.styleMap` to recolor layer features (need `LayerManager.styleByIndex(layerName, indexToStyle)`) and `result.legendData` to render a legend panel. Plus B19-class regression test. ~2-3 hours.
   - Recommendation for next code cycle: ship (B) — the description's promise is the right user-facing capability, so meeting it is more leverage-positive than walking it back.

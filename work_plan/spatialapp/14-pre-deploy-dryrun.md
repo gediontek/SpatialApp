@@ -35,7 +35,7 @@ DATABASE_PATH=/tmp/spatial-predeploy.db \
 
 | ID | Severity | Finding | Where | Fix path |
 |---|---|---|---|---|
-| F1 | Medium | `SECURITY_CONTACT` is the placeholder `security@example.com` | Default in `config.py`; surfaced in `/.well-known/security.txt` response | Set `SECURITY_CONTACT=security@<your-domain>` in deploy env. One env var; no code change. |
+| F1 | ✅ **closed (Cycle 22 / N35)** | `SECURITY_CONTACT` placeholder | `config.py` `Config.validate()` now raises `RuntimeError` when `DEBUG=False` AND `SECURITY_CONTACT` is in the placeholder set (`mailto:security@example.com`, `.org`, empty, `TODO`, `CHANGEME`). `/.well-known/security.txt` reads from `Config.SECURITY_CONTACT`, so test monkeypatches and the validate gate apply uniformly. **An operator literally cannot start the prod app with a placeholder** — the issue is now belt-and-suspenders (operator AND code). 6 regression tests in `tests/harness/test_secret_validation.py::test_n35_*`. |
 | F2 | Low | No `Strict-Transport-Security` (HSTS) header | App response | Only matters under HTTPS termination; add either at the TLS terminator (recommended — avoids HSTS-on-HTTP foot-gun) OR via `talisman` / a custom `after_request` once HTTPS is committed. |
 | F3 | Low | `WEB_CONCURRENCY` not pinned in deploy env | `gunicorn.conf.py:8` falls back to `cpu_count()*2+1`; locally produced 21 workers | Set `WEB_CONCURRENCY` in `.env` / k8s manifest / fly.toml etc. based on memory budget (each worker holds an in-memory `layer_store` cap of 100 + DB connections). Suggest start with 4. |
 | F4 | Low | `gthread` worker class falls back from WebSocket to long-polling | `gunicorn.conf.py:9` (intentional — eventlet/gevent fight with thread-local SQLite) | Document that WebSocket transport degrades to long-polling under gunicorn. Already correct — Socket.IO clients handle this transparently. |
@@ -44,15 +44,19 @@ DATABASE_PATH=/tmp/spatial-predeploy.db \
 
 ## Verdict
 
-**Deploy-ready modulo F1.** Every other finding is "tighten before scaling" — none of them block a single-instance deploy with a real `SECURITY_CONTACT` in the env file. The gunicorn boot itself is clean: no warnings, no missing config, no dependency errors, all health/metrics endpoints behave correctly, the CSP / security headers / security.txt all serve as designed.
+**Deploy-ready.** F1 was closed in Cycle 22 (N35) — `Config.validate()` now refuses to start the prod app with a placeholder `SECURITY_CONTACT`, so the operator can no longer accidentally ship past it. F2-F6 are all "tighten before scaling" and don't block a single-instance deploy. The gunicorn boot is clean: no warnings, no missing config, no dependency errors, all health/metrics endpoints behave correctly, the CSP / security headers / security.txt all serve as designed.
+
+Audit-4 also surfaced and closed N29 — readiness now refuses to go green when `CHAT_API_TOKEN` is unset in prod mode, so the load balancer cannot accidentally route paid traffic to an unauthenticated chat endpoint. Cycle 22's N37 added folder-writability probes at startup so misconfigured `UPLOAD_FOLDER` / `LABELS_FOLDER` / `LOG_FOLDER` permissions fail loud at boot rather than throwing opaque 500s on first user upload.
 
 ## Pre-deploy checklist (for the operator)
 
-1. ☐ `SECRET_KEY` — generated value (e.g. `openssl rand -hex 32`); MUST NOT use the dev default (`Config.validate` raises in non-DEBUG mode if it's still default — verified).
-2. ☐ `SECURITY_CONTACT` — real inbox you actually monitor.
+Items 1, 2, 4, 5 are ALSO enforced by code gates as of Cycle 22. The operator still has to set them, but the app refuses to start (or to mark itself ready) when they're missing — so misconfiguration becomes a loud boot failure instead of a quiet runtime bug.
+
+1. ☐ `SECRET_KEY` — generated value (e.g. `openssl rand -hex 32`). **Code-gated**: `Config.validate()` raises in non-DEBUG mode if default.
+2. ☐ `SECURITY_CONTACT` — real inbox you actually monitor. **Code-gated (N35, Cycle 22)**: `Config.validate()` raises in non-DEBUG mode if placeholder.
 3. ☐ `WEB_CONCURRENCY` — pinned (suggest 4 to start; tune via memory budget).
-4. ☐ `GEMINI_API_KEY` (or `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`) — without one, `/api/health/ready` returns 503 (load balancer correctly drains).
-5. ☐ `CHAT_API_TOKEN` — required for production (without it, `/api/chat` is open).
-6. ☐ `DATABASE_PATH` — persistent volume (Docker `app-data` volume per `docker-compose.yml`).
+4. ☐ `GEMINI_API_KEY` (or `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`) — **Readiness-gated (N29)**: `/api/health/ready` returns 503 without one (load balancer correctly drains).
+5. ☐ `CHAT_API_TOKEN` — required for production. **Readiness-gated (N29, Cycle 17)**: `/api/health/ready` returns 503 in non-DEBUG mode if unset.
+6. ☐ `DATABASE_PATH` — persistent volume (Docker `app-data` volume per `docker-compose.yml`). **Code-gated (N37, Cycle 22) for the writable folders** (`UPLOAD_FOLDER` / `LABELS_FOLDER` / `LOG_FOLDER`): `Config.validate()` probes write access at startup.
 7. ☐ HTTPS terminator in front (nginx / cloud LB) and configure HSTS there.
-8. ☐ First request after deploy: `curl https://<host>/api/health/ready` MUST return 200; if 503, investigate before routing traffic.
+8. ☐ First request after deploy: `curl https://<host>/api/health/ready` MUST return 200; if 503, the body's `checks` dict names which subsystem failed (database / llm / chat_auth).
