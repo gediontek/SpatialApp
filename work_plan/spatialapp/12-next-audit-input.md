@@ -1,10 +1,10 @@
 # SpatialApp v2 — Input package for next external audit
 
-**Status:** **READY for external audit submission.** 19 cycles closed; CI green; audit-4 returned **86/100** (N26-N30, all closed in Cycle 17). Audit prompts re-balanced + load-tested in Cycles 18-19 (one self-discovered Medium — N31 choropleth — documented as deferred; two doc-drift fixes shipped).
-**Last updated:** 2026-05-10 (post Cycle 19 — Prompt 7 self-pass found N31 + N32 + N33; N32/N33 closed, N31 deferred)
+**Status:** **READY for external audit submission.** 20 cycles closed; CI green; audit-4 returned **86/100** (N26-N30, all closed in Cycle 17). Cycles 18-19-20 were a prompt-validation cascade: drafted Prompts 7+8 (Cycle 18), self-passed Prompt 7 (Cycle 19) which surfaced N31+N32+N33, closed N32+N33 immediately (Cycle 19), shipped real fix for N31 with B20 regression test (Cycle 20).
+**Last updated:** 2026-05-10 (post Cycle 20 — N31 choropleth real fix shipped with B20 regression test)
 **Updated by:** autonomous /auto-solve cycle
-**Repo state:** branch `main`, working tree clean, synced with origin. **Next external auditor: new finding IDs MUST start at N34 — IDs N1-N33 are taken** (N25 was consumed by the auditor as already-fixed at the time of audit-4; N31-N33 were self-discovered during Cycle 19's Prompt 7 self-pass — N32+N33 closed in same cycle, N31 documented as deferred — see Cycle 19 below).
-**Verified at last update**: `make eval` green (6 workflow + 19 browser + 8 frontend-auth + 65 harness + 30 tool-selection in `--ci` strict mode); CI-mirror `pytest tests/ -k "not e2e"` = **1,577 passed / 10 skipped / 0 failed** (~95s).
+**Repo state:** branch `main`, working tree clean, synced with origin. **Next external auditor: new finding IDs MUST start at N34 — IDs N1-N33 are taken** (N25 was consumed by the auditor as already-fixed at the time of audit-4; N31-N33 were self-discovered during Cycle 19's Prompt 7 self-pass — all three are now CLOSED in Cycles 19-20, see those cycles below).
+**Verified at last update**: `make eval` green (6 workflow + **20** browser + 8 frontend-auth + 65 harness + 30 tool-selection in `--ci` strict mode); CI-mirror `pytest tests/ -k "not e2e"` = **1,578 passed / 10 skipped / 0 failed** (~104s).
 **Audit history**: audit-1 (pre-cycles): 31/100 → audit-2 (post Cycle 13): 81/100 → audit-3 (post Cycle 14): 93/100 → audit-4 (post Cycles 15-16): **86/100** (5 fresh findings N26-N30, all closed in Cycle 17). Audit-5 awaits.
 **Audit-4 specifics**: N26 was a real user-facing break (raster upload returned a 404 URL); N27 was an auth break (annotation export buttons couldn't attach Bearer); N29 was a security gap (readiness could go green while paid chat was publicly open). Score dropped from 93 → 86 because audit-4 surfaced bugs the prior audits missed — exactly what fresh-eyes audits exist for.
 **Companion docs:**
@@ -192,6 +192,17 @@ Cycle 11 added `animate_layer` and `visualize_3d` as resilience-only tests (`tes
 - `animate_player.png` — slider+play+reset rendered under the tool step (also visible in the test DOM assertion).
 
 **Final coverage**: see header for current `make eval` and unit-suite numbers (kept fresh per-cycle).
+
+### Cycle 20 (close N31 — choropleth real fix per Cycle 19 path B) — done
+Cycle 19 surfaced N31 (choropleth_map result unrendered) and recommended path B (real implementation over honest-deferral). Shipped:
+
+- ✅ **`static/js/layers.js`**: new `applyStyleMap(layerName, styleMap)` walks the GeoJSON layer in addLayer iteration order and calls `setStyle({fillColor: color, ...})` per feature. Handles JSON-stringified integer keys (`styleMap[0] || styleMap['0']`). Also paints cluster centroid markers when wide-area clustering is active. Exported on the `LayerManager` return block.
+- ✅ **`static/js/chat.js`**: new `case 'choropleth':` in the `tool_result` handler invokes `_layerManager.applyStyleMap(layer_name, styleMap)` then renders a legend panel via the new `renderChoroplethLegend(stepId, legendData)` helper. Legend shows one row per class break with color swatch + label + count.
+- ✅ **B20 regression test** `test_choropleth_tool_result_recolors_layer_and_renders_legend` in `tests/golden/test_browser_render.py`. Asserts (a) `LayerManager.applyStyleMap` is exported (catches a future regression where the export gets dropped), (b) the legend panel appears under the tool step with one row per class, (c) the styleMap palette appears on map paths after the recolor, (d) the default blue (`#3388ff`) is gone — proves the recolor actually replaced the default style, didn't just add legend chrome.
+
+**Verification**: B20 passed first run; `make eval` green; full unit suite **1,578 passed / 10 skipped / 0 failed** (+1 from B20, zero regressions). N31 closed.
+
+**Why this matters**: closes the only open code-side finding from Cycle 19's self-pass. The Cycle 18-19-20 cascade demonstrates the prompt-validation flywheel works: draft prompt → self-pass → finding → close → next audit's surface area is smaller. Audit-5 (when run) will not see N31 as a finding.
 
 ### Cycle 19 (load-test the new prompts on the codebase itself) — done
 After Cycle 18 shipped Prompts 7 (capability honesty) and 8 (auth-mode parity), self-passed Prompt 7 against the actual code as a smoke-test of the prompt's targeting. The prompt paid for itself: 3 candidate findings surfaced (1 Medium deferred, 2 Low closed in the same cycle). This is exactly the kind of pre-audit shake-out the audit-input doc exists to enable.
