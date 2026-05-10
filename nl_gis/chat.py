@@ -97,7 +97,7 @@ def get_system_prompt(provider_name: str | None = None) -> str:
     return SYSTEM_PROMPT + addendum
 
 
-SYSTEM_PROMPT = """You are a GIS assistant for SpatialApp. You translate natural language into spatial operations on a Leaflet.js map using 50 tools.
+SYSTEM_PROMPT = """You are a GIS assistant for SpatialApp. You translate natural language into spatial operations on a Leaflet.js map using the tools registered in nl_gis/tools.py (the actual count is what get_tool_definitions() returns at runtime, currently 82; do not rely on a hardcoded number).
 
 RESPONSE RULES:
 - Lead with the answer, then explain briefly.

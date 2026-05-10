@@ -259,14 +259,35 @@ def api_health():
 def api_health_ready():
     """Kubernetes-style readiness probe.
 
-    Returns 200 only when DB is initialized and the LLM provider key is
-    configured. Otherwise 503 — load balancer should not route traffic.
+    Returns 200 only when ALL of:
+      - DB is initialized
+      - LLM provider key is configured
+      - In production mode (not FLASK_DEBUG), CHAT_API_TOKEN is set
+
+    Audit N29: previously readiness checked only DB + LLM key, so the
+    load balancer would happily route traffic to an instance whose
+    /api/chat was unauthenticated (CHAT_API_TOKEN empty → require_api_token
+    falls through to 'open access'). With a paid LLM key configured,
+    that's an open invitation to run up the bill. Adding the chat-auth
+    gate here makes readiness mean "safe to take production traffic,"
+    not just "the process started."
     """
     db_ok = state.db is not None
     llm_ok = bool(Config.get_llm_api_key())
+    # Chat-auth gate is enforced only in production. In Config.DEBUG
+    # mode the dev server is expected to run without CHAT_API_TOKEN.
+    debug_mode = bool(getattr(Config, "DEBUG", False))
+    chat_auth_required = not debug_mode
+    chat_auth_ok = (not chat_auth_required) or bool(
+        getattr(Config, "CHAT_API_TOKEN", "")
+    )
     body = {
-        "ready": db_ok and llm_ok,
-        "checks": {"database": db_ok, "llm": llm_ok},
+        "ready": db_ok and llm_ok and chat_auth_ok,
+        "checks": {
+            "database": db_ok,
+            "llm": llm_ok,
+            "chat_auth": chat_auth_ok,
+        },
         "uptime_seconds": round(time.time() - _PROCESS_START_TIME, 1),
     }
     code = 200 if body["ready"] else 503

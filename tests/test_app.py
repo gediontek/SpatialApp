@@ -233,6 +233,48 @@ class TestUploadValidation:
         )
         assert response.status_code == 400
 
+    def test_n26_upload_returns_image_url_that_actually_resolves(self, client):
+        """Audit N26: /upload of a GeoTIFF returns image_url that points
+        at the generated PNG. The serve route is scoped to the per-user
+        upload subdir (N7 isolation). Pre-fix, render_overlay() wrote
+        the PNG to UPLOAD_FOLDER root and the URL 404'd. This test:
+        upload → 200 → GET image_url → 200, not 404.
+        """
+        import io
+        from pathlib import Path
+        fixture = (Path(__file__).parent / "fixtures" / "raster"
+                   / "geog_wgs84.tif")
+        if not fixture.exists():
+            import pytest
+            pytest.skip("raster fixture missing")
+
+        with open(fixture, "rb") as fh:
+            tif_bytes = fh.read()
+
+        upload_resp = client.post(
+            "/upload",
+            data={"file": (io.BytesIO(tif_bytes), "n26_smoke.tif")},
+            content_type="multipart/form-data",
+        )
+        assert upload_resp.status_code == 200, (
+            f"upload failed: {upload_resp.status_code} "
+            f"{upload_resp.get_data(as_text=True)[:200]}"
+        )
+        body = upload_resp.get_json()
+        image_url = body.get("image_url")
+        assert image_url, f"upload did not return image_url; body={body}"
+
+        # The URL the upload returned MUST resolve. Pre-fix, this was 404.
+        png_resp = client.get(image_url)
+        assert png_resp.status_code == 200, (
+            f"image_url {image_url!r} returned {png_resp.status_code}; "
+            f"the per-user serve route can't find the PNG. N26 regression."
+        )
+        # Cheap sanity: PNG magic bytes
+        assert png_resp.data[:8] == b"\x89PNG\r\n\x1a\n", (
+            f"served file is not a PNG; first bytes: {png_resp.data[:8]!r}"
+        )
+
 
 class TestDisplayTable:
     """Tests for display table route."""

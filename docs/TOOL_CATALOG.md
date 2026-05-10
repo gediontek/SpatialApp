@@ -1,6 +1,6 @@
 # SpatialApp Tool Catalog
 
-64 tools available to the NL-to-GIS chat engine. Claude selects and chains tools automatically based on user queries.
+82 tools available to the NL-to-GIS chat engine (verified at HEAD via `python -c "from nl_gis.tools import get_tool_definitions; print(len(get_tool_definitions()))"`). Claude/Gemini/OpenAI select and chain tools automatically based on user queries. The per-section counts below may lag the runtime registry — the registry is the source of truth.
 
 ---
 

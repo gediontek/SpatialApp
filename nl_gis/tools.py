@@ -627,7 +627,7 @@ def get_tool_definitions() -> list:
         },
         {
             "name": "export_layer",
-            "description": "Export an existing map layer to a file format. Returns GeoJSON as a string, or a file path for Shapefile/GeoPackage. Use when the user asks to download, export, or save layer data.",
+            "description": "Export an existing map layer as GeoJSON (returned inline as a string). For Shapefile or GeoPackage exports, use the dedicated annotation-export HTTP endpoint (/export_annotations/<format>) — the chat tool itself returns GeoJSON only. Use when the user asks to download, export, or save layer data as GeoJSON.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -637,7 +637,7 @@ def get_tool_definitions() -> list:
                     },
                     "format": {
                         "type": "string",
-                        "description": "Export format. Example: 'geojson' for web, 'shapefile' for ArcGIS/QGIS",
+                        "description": "Export format. Only 'geojson' is supported in the chat path; Shapefile and GeoPackage are kept in the schema for tool-selection compatibility but return an error pointing at the /export_annotations HTTP endpoint.",
                         "enum": ["geojson", "shapefile", "geopackage"],
                         "default": "geojson"
                     }
@@ -1729,7 +1729,7 @@ def get_tool_definitions() -> list:
         },
         {
             "name": "import_auto",
-            "description": "Import spatial data with automatic format detection. Detects GeoJSON (from '{'), CSV (lat/lon header), KML (<?xml/<kml), WKT (POINT/POLYGON...), Shapefile (base64 zip), GeoParquet (base64 PAR1). USE WHEN: user provides raw data without specifying the format.",
+            "description": "Import spatial data with automatic format detection. Detects GeoJSON (from '{'), CSV (lat/lon header), KML (<?xml/<kml), WKT (POINT/POLYGON...), GeoParquet (base64 PAR1). Shapefile (base64 zip) is detected but returns a clear 'not yet supported via this tool — unzip and use import_layer with the .shp's GeoJSON' message. USE WHEN: user provides raw data without specifying the format.",
             "input_schema": {
                 "type": "object",
                 "properties": {

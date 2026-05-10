@@ -1,11 +1,12 @@
 # SpatialApp v2 — Input package for next external audit
 
-**Status:** **READY for external audit submission.** 15 cycles closed; CI green; audit-3 returned **93/100** with only one Low-severity doc-hygiene finding (N24, now closed).
-**Last updated:** 2026-05-09 (post Cycle 15 — N24 from external audit-3 closed)
+**Status:** **READY for external audit submission.** 17 cycles closed; CI green; audit-4 returned **86/100** (1 High + 3 Medium + 1 Low — N26-N30, all closed in Cycle 17).
+**Last updated:** 2026-05-10 (post Cycle 17 — N26-N30 from external audit-4 closed)
 **Updated by:** autonomous /auto-solve cycle
-**Repo state:** branch `main`, working tree clean, synced with origin. **Next external auditor: new finding IDs MUST start at N25 — IDs N1-N24 are taken.** Latest commit: run `git log -1 --oneline` (Cycle 14 was at `79dc9cc`; Cycle 15 is later).
-**Verified at last update**: `make eval` green (6 workflow + 19 browser + 8 frontend-auth + 65 harness + 30 tool-selection in `--ci` strict mode); CI-mirror `pytest tests/ -k "not e2e"` = **1,573 passed / 10 skipped / 0 failed** (~96s).
-**Audit history**: audit-1 (pre-cycles): 31/100 → audit-2 (post Cycle 13): 81/100 (5 findings N19-N23) → audit-3 (post Cycle 14): **93/100** (1 finding N24, closed in Cycle 15).
+**Repo state:** branch `main`, working tree clean, synced with origin. **Next external auditor: new finding IDs MUST start at N31 — IDs N1-N30 are taken** (N25 was consumed by the auditor as already-fixed at the time of audit-4).
+**Verified at last update**: `make eval` green (6 workflow + 19 browser + 8 frontend-auth + 65 harness + 30 tool-selection in `--ci` strict mode); CI-mirror `pytest tests/ -k "not e2e"` = **1,577 passed / 10 skipped / 0 failed** (~95s).
+**Audit history**: audit-1 (pre-cycles): 31/100 → audit-2 (post Cycle 13): 81/100 → audit-3 (post Cycle 14): 93/100 → audit-4 (post Cycles 15-16): **86/100** (5 fresh findings N26-N30, all closed in Cycle 17). Audit-5 awaits.
+**Audit-4 specifics**: N26 was a real user-facing break (raster upload returned a 404 URL); N27 was an auth break (annotation export buttons couldn't attach Bearer); N29 was a security gap (readiness could go green while paid chat was publicly open). Score dropped from 93 → 86 because audit-4 surfaced bugs the prior audits missed — exactly what fresh-eyes audits exist for.
 **Companion docs:**
 - [`07-v2-audit-findings.md`](07-v2-audit-findings.md) — original external audit (12 findings)
 - [`08-v2-bugfree-plan.md`](08-v2-bugfree-plan.md) — Acceptance-First Hardening plan (v1.2)
@@ -191,6 +192,21 @@ Cycle 11 added `animate_layer` and `visualize_3d` as resilience-only tests (`tes
 - `animate_player.png` — slider+play+reset rendered under the tool step (also visible in the test DOM assertion).
 
 **Final coverage**: see header for current `make eval` and unit-suite numbers (kept fresh per-cycle).
+
+### Cycle 17 (external audit-4 close-out — N26-N30) — done
+External LLM audit-4 returned **86/100** (down from audit-3's 93/100) — a fresh-eyes pass that surfaced bugs prior audits missed. 5 findings, all closed:
+
+- ✅ **N26 High — Raster upload returned a 404 URL.** `render_overlay()` wrote the generated PNG to `UPLOAD_FOLDER` root, but the `/static/uploads/<name>` serve route is scoped to the requesting user's subdir per N7 isolation. The browser's `L.imageOverlay(data.image_url, ...)` got a dead URL → broken image in the map. **Fix**: write the PNG into `os.path.dirname(image_path)` (the per-user TIFF dir) so the serve route resolves it. **Regression test**: `test_n26_upload_returns_image_url_that_actually_resolves` uploads the bundled fixture TIFF, asserts the returned `image_url` actually resolves to a valid PNG (magic bytes check). `blueprints/osm.py:108-115`.
+
+- ✅ **N27 Medium — Annotation export broke under auth.** `static/js/main.js` used `window.location.href = '/export_annotations/<format>'`, which can't attach the Bearer header that `@require_api_token` requires. With `CHAT_API_TOKEN` set in prod, the export endpoint returned 401. **Fix**: switched to `authedFetch` + Blob download via temporary `<a>` element with `URL.createObjectURL` so the Bearer goes with the request. Filename derived from `Content-Disposition` header. `static/js/main.js:301-345`.
+
+- ✅ **N28 Medium — Capability-claim honesty.** `export_layer` advertised Shapefile/GeoPackage but returned an error; `import_auto` advertised Shapefile detection but returned "not yet supported." False-positive capability gates: tool-selection eval still passed, but the actual operation didn't work. **Fix**: tool descriptions in `nl_gis/tools.py` now admit the chat tool is GeoJSON-only and direct callers to the `/export_annotations` HTTP endpoint for Shapefile/GeoPackage; `import_auto` description now explicitly notes that shapefile detection surfaces a clear error message rather than silently failing. (Implementing real shapefile import in the chat path is a feature for later, not an audit closure.)
+
+- ✅ **N29 Medium — Readiness could go green while paid chat was publicly open.** `Config.validate()` blocked default SECRET_KEY but not missing CHAT_API_TOKEN; `require_api_token` falls through to "open access" when CHAT_API_TOKEN is empty; `/api/health/ready` checked only DB + LLM key. With LLM key configured and no chat token, an instance could be marked ready and start serving unauthenticated chat traffic that burns LLM tokens. **Fix**: `/api/health/ready` now requires `CHAT_API_TOKEN` to be set when `Config.DEBUG=False`. Dev mode is unaffected. **3 regression tests**: `test_n29_prod_mode_requires_chat_auth_token` (must 503 without token), `test_n29_prod_mode_with_chat_auth_token_returns_200`, `test_n29_debug_mode_does_not_require_chat_auth`. `blueprints/auth.py:258-298`.
+
+- ✅ **N30 Low — Stale tool counts.** `docs/TOOL_CATALOG.md` said 64 tools, the system prompt in `nl_gis/chat.py` said 50, the actual registry returns 82. **Fix**: both updated to point at `get_tool_definitions()` as the runtime source of truth (registry-authoritative, doc-advisory). Section counts in TOOL_CATALOG.md noted as "may lag the runtime registry."
+
+**Verification**: `make eval` green; full unit suite **1,577 passed / 10 skipped / 0 failed** (~95s, +4 tests from N26+N29 regression suite). Repo verified clean after Cycle 17.
 
 ### Cycle 15 (external audit-3 close-out — N24) — done
 External LLM audit-3 returned 93/100 (up from 81/100 in audit-2). Only one finding:

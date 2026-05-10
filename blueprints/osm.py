@@ -105,9 +105,14 @@ def render_overlay(image_path):
             center_lat = (min_lat + max_lat) / 2
             center_lon = (min_lon + max_lon) / 2
 
-            # Convert GeoTIFF to PNG (browsers cannot render .tif)
+            # Convert GeoTIFF to PNG (browsers cannot render .tif).
+            # Audit N26: write the PNG INTO the per-user upload subdir
+            # (same dir as the source TIFF). The /static/uploads/<name>
+            # serve route is scoped to the requesting user's subdir per
+            # N7; if we write to UPLOAD_FOLDER root the route 404s and
+            # the browser's L.imageOverlay shows a broken image.
             png_filename = os.path.splitext(os.path.basename(image_path))[0] + '.png'
-            png_path = os.path.join(current_app.config['UPLOAD_FOLDER'], png_filename)
+            png_path = os.path.join(os.path.dirname(image_path), png_filename)
 
             band_count = src.count
 

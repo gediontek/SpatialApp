@@ -359,3 +359,63 @@ class TestHealthReady:
         assert body["ready"] is True
         assert body["checks"]["database"] is True
         assert body["checks"]["llm"] is True
+
+    def test_n29_prod_mode_requires_chat_auth_token(self, client, monkeypatch):
+        """Audit N29: in prod mode (DEBUG=False) readiness MUST also
+        check CHAT_API_TOKEN. Otherwise a load balancer happily routes
+        traffic to an instance whose /api/chat is unauthenticated and
+        runs up the LLM bill.
+        """
+        if state.db is None:
+            pytest.skip("DB unavailable for ready check")
+        monkeypatch.setattr(Config, "get_llm_api_key",
+                            staticmethod(lambda: "test-key"))
+        monkeypatch.setattr(Config, "DEBUG", False)
+        monkeypatch.setattr(Config, "CHAT_API_TOKEN", "")
+
+        r = client.get("/api/health/ready")
+        assert r.status_code == 503
+        body = r.get_json()
+        assert body["ready"] is False
+        assert body["checks"]["chat_auth"] is False
+        # DB + LLM should still report green so the operator can see
+        # exactly which gate failed.
+        assert body["checks"]["database"] is True
+        assert body["checks"]["llm"] is True
+
+    def test_n29_prod_mode_with_chat_auth_token_returns_200(
+        self, client, monkeypatch,
+    ):
+        """The other half of N29: setting CHAT_API_TOKEN in prod mode
+        unblocks readiness."""
+        if state.db is None:
+            pytest.skip("DB unavailable for ready check")
+        monkeypatch.setattr(Config, "get_llm_api_key",
+                            staticmethod(lambda: "test-key"))
+        monkeypatch.setattr(Config, "DEBUG", False)
+        monkeypatch.setattr(Config, "CHAT_API_TOKEN", "prod-secret-token")
+
+        r = client.get("/api/health/ready")
+        assert r.status_code == 200
+        body = r.get_json()
+        assert body["ready"] is True
+        assert body["checks"]["chat_auth"] is True
+
+    def test_n29_debug_mode_does_not_require_chat_auth(
+        self, client, monkeypatch,
+    ):
+        """The dev-friendliness half of N29: in DEBUG mode, missing
+        CHAT_API_TOKEN must not block readiness — devs run the dev
+        server without it all the time."""
+        if state.db is None:
+            pytest.skip("DB unavailable for ready check")
+        monkeypatch.setattr(Config, "get_llm_api_key",
+                            staticmethod(lambda: "test-key"))
+        monkeypatch.setattr(Config, "DEBUG", True)
+        monkeypatch.setattr(Config, "CHAT_API_TOKEN", "")
+
+        r = client.get("/api/health/ready")
+        assert r.status_code == 200
+        body = r.get_json()
+        assert body["ready"] is True
+        assert body["checks"]["chat_auth"] is True

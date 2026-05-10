@@ -298,14 +298,50 @@ $(document).ready(function() {
         });
     });
 
-    // Export functions
+    // Export functions.
+    // Audit N27: previously used `window.location.href = ...` which can't
+    // attach the Bearer header that `@require_api_token` checks. With
+    // CHAT_API_TOKEN set in prod, the export endpoint returns 401 and
+    // the user sees nothing. Switch to authedFetch + blob download so
+    // the Bearer goes with the request.
     function exportAnnotations(format) {
         showLoading('Exporting as ' + format + '...');
-        window.location.href = '/export_annotations/' + format;
-        setTimeout(function() {
-            hideLoading();
-            showToast('Export started. Check your downloads.', 'info');
-        }, 1000);
+        (window.authedFetch || fetch)('/export_annotations/' + format)
+            .then(function(response) {
+                if (!response.ok) {
+                    return response.text().then(function(text) {
+                        throw new Error('Export failed: HTTP '
+                            + response.status + ' — ' + text.substring(0, 120));
+                    });
+                }
+                var filename = 'annotations.' + format;
+                var cd = response.headers.get('Content-Disposition') || '';
+                var m = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+                if (m) filename = decodeURIComponent(m[1]);
+                return response.blob().then(function(blob) {
+                    return { blob: blob, filename: filename };
+                });
+            })
+            .then(function(r) {
+                var url = URL.createObjectURL(r.blob);
+                var a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = url;
+                a.download = r.filename;
+                document.body.appendChild(a);
+                a.click();
+                setTimeout(function() {
+                    URL.revokeObjectURL(url);
+                    a.remove();
+                }, 100);
+                hideLoading();
+                showToast('Exported as ' + format, 'success');
+            })
+            .catch(function(err) {
+                hideLoading();
+                showToast(err.message || 'Export failed', 'error');
+                console.error('Annotation export failed:', err);
+            });
     }
 
     $('#exportGeoJsonBtn').on('click', function() {
