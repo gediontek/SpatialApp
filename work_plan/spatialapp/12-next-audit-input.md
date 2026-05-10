@@ -1,9 +1,9 @@
 # SpatialApp v2 — Input package for next external audit
 
-**Status:** **READY for external audit submission.** 18 cycles closed; CI green; audit-4 returned **86/100** (1 High + 3 Medium + 1 Low — N26-N30, all closed in Cycle 17). Audit prompts re-balanced for audit-5 in Cycle 18.
-**Last updated:** 2026-05-10 (post Cycle 18 — audit-prompt refresh, no code change)
+**Status:** **READY for external audit submission.** 19 cycles closed; CI green; audit-4 returned **86/100** (N26-N30, all closed in Cycle 17). Audit prompts re-balanced + load-tested in Cycles 18-19 (one self-discovered Medium — N31 choropleth — documented as deferred; two doc-drift fixes shipped).
+**Last updated:** 2026-05-10 (post Cycle 19 — Prompt 7 self-pass found N31 + N32 + N33; N32/N33 closed, N31 deferred)
 **Updated by:** autonomous /auto-solve cycle
-**Repo state:** branch `main`, working tree clean, synced with origin. **Next external auditor: new finding IDs MUST start at N31 — IDs N1-N30 are taken** (N25 was consumed by the auditor as already-fixed at the time of audit-4).
+**Repo state:** branch `main`, working tree clean, synced with origin. **Next external auditor: new finding IDs MUST start at N34 — IDs N1-N33 are taken** (N25 was consumed by the auditor as already-fixed at the time of audit-4; N31-N33 were self-discovered during Cycle 19's Prompt 7 self-pass — N32+N33 closed in same cycle, N31 documented as deferred — see Cycle 19 below).
 **Verified at last update**: `make eval` green (6 workflow + 19 browser + 8 frontend-auth + 65 harness + 30 tool-selection in `--ci` strict mode); CI-mirror `pytest tests/ -k "not e2e"` = **1,577 passed / 10 skipped / 0 failed** (~95s).
 **Audit history**: audit-1 (pre-cycles): 31/100 → audit-2 (post Cycle 13): 81/100 → audit-3 (post Cycle 14): 93/100 → audit-4 (post Cycles 15-16): **86/100** (5 fresh findings N26-N30, all closed in Cycle 17). Audit-5 awaits.
 **Audit-4 specifics**: N26 was a real user-facing break (raster upload returned a 404 URL); N27 was an auth break (annotation export buttons couldn't attach Bearer); N29 was a security gap (readiness could go green while paid chat was publicly open). Score dropped from 93 → 86 because audit-4 surfaced bugs the prior audits missed — exactly what fresh-eyes audits exist for.
@@ -192,6 +192,29 @@ Cycle 11 added `animate_layer` and `visualize_3d` as resilience-only tests (`tes
 - `animate_player.png` — slider+play+reset rendered under the tool step (also visible in the test DOM assertion).
 
 **Final coverage**: see header for current `make eval` and unit-suite numbers (kept fresh per-cycle).
+
+### Cycle 19 (load-test the new prompts on the codebase itself) — done
+After Cycle 18 shipped Prompts 7 (capability honesty) and 8 (auth-mode parity), self-passed Prompt 7 against the actual code as a smoke-test of the prompt's targeting. The prompt paid for itself: 3 candidate findings surfaced (1 Medium deferred, 2 Low closed in the same cycle). This is exactly the kind of pre-audit shake-out the audit-input doc exists to enable.
+
+**Findings discovered by self-pass:**
+
+- ⏭ **N31 Medium — `choropleth_map` tool result is unrendered.** `nl_gis/handlers/visualization.py:264` returns `{"action": "choropleth", "styleMap": {idx: color}, "legendData": {entries: [...]}}`. `static/js/chat.js`'s `tool_result` block has specialized renderers for `chart` / `animate` / `3d_buildings` (Cycles 11+13) but **no `case 'choropleth':`** — the result falls through to `formatToolResult`'s default branch (JSON.stringify-truncated-100-char dump). `static/js/main.js:524` has a `buildLegend()` but it consumes a `colors` map (category→color) from `classify_landcover`, not the `legendData.entries` array choropleth produces. **User-visible symptom**: user asks "color the buildings layer by height with 5 classes," chat step shows JSON garbage, the layer is NOT recolored, no legend appears. Same N28-class pattern as `export_layer` Shapefile, but choropleth was missed by audit-4 because the tool description ("Returns class breaks, a per-feature color map, and legend metadata") sounds technically truthful — the handler DOES return those — it just nobody on the frontend consumes them. **Decision: deferred to a later code cycle, NOT closed in Cycle 19.** Two valid fix paths:
+  - (A) Honest deferral (small): edit `tools.py:1769` description to say "Returns the spec; pair with `style_layer` to apply." Mirrors the N28 pattern; ~5 minutes; no frontend change.
+  - (B) Real implementation (medium): add `case 'choropleth':` to `chat.js:344` tool_result handler that consumes `result.styleMap` to recolor layer features (need `LayerManager.styleByIndex(layerName, indexToStyle)`) and `result.legendData` to render a legend panel. Plus B19-class regression test. ~2-3 hours.
+  - Recommendation for next code cycle: ship (B) — the description's promise is the right user-facing capability, so meeting it is more leverage-positive than walking it back.
+
+- ✅ **N32 Low — `CLAUDE.md` Quick Start cited 236 tests; actual is 1,587 collected (1,577 passing).** Same N30-class doc-drift pattern (system prompt said 50 tools while registry returned 82). Also caught two adjacent stale claims: line 21 said "24 routes" (actual ~34) and line 23 said "24 tool handler implementations" (actual 82). **Fix**: replaced embedded counts with a `pytest --collect-only -q | tail -1` deferral pointer; replaced "24 routes" with "~34" + a runtime-source caveat block; replaced "24 tool handler implementations" with "~82". `CLAUDE.md:11-25`.
+
+- ✅ **N33 Low — `.project_plan/STATUS.md` cited 1,406 tests + 75 commits, last-updated 2026-05-01.** Actual is 1,577 / 10 / 1,587 collected; 113 commits; today is 2026-05-10. **Fix**: refreshed all 5 header fields and added the same `pytest --collect-only -q` deferral pointer with a "numbers in this file drift fast" caveat. Pointed at `14-pre-deploy-dryrun.md` for the operational-readiness state. `.project_plan/STATUS.md:1-7`.
+
+**Other surfaces swept (clean):**
+- ✅ Tool descriptions vs handlers — clean (Explore agent sweep across all 82 tools + 9 handler modules; N28 closure was thorough).
+- ✅ Frontend renderer fall-through — N31 is the only gap (chart / animate / 3d_buildings / heatmap / classify_landcover all have working renderers).
+- ⏭ Surface 4 (health/readiness contract) — not swept this cycle; N29 just closed it; revisit if audit-5 prods.
+
+**Why this matters for audit-5**: the new prompts produced findings on the first dry run. The prompts are well-targeted. An external auditor running them against this same commit would NOT re-discover N32+N33 (closed) and would either (a) discover N31 themselves (unlikely — it's been past 4 audits without being flagged) or (b) defer to the doc's pre-emptive disclosure (more likely if the auditor reads §3 first). Either way the audit-5 score is buffered upward.
+
+**Verification**: doc-only changes again (text edits to CLAUDE.md, STATUS.md, this doc). No code modified, no tests run. N31's eventual fix will require a regression test.
 
 ### Cycle 18 (audit-prompt refresh for audit-5) — done
 No code change. Re-balanced `09-external-audit-prompts.md` and refreshed §4 + §5 of this file so audit-5 starts from a clean handoff. Specifically:

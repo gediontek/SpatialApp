@@ -11,17 +11,20 @@ Always check `.project_plan/STATUS.md` for current project status, architecture,
 ```bash
 source venv/bin/activate
 python3 app.py              # Runs on port 5000 (or PORT env var)
-pytest tests/ -v             # 236 tests
+pytest tests/ -v             # current count: `pytest --collect-only -q | tail -1`
+make eval                    # pre-audit ritual: golden + harness + tool-selection
 ```
 
 ## Key Files
 
+(Counts in this table drift fast. Treat them as approximate; the runtime is the source of truth — see `app.url_map` for routes and `nl_gis.tools.get_tool_definitions()` for tool count.)
+
 | File | Purpose |
 |------|---------|
-| `app.py` | Flask app, 24 routes, session/layer management |
-| `nl_gis/chat.py` | Claude API integration, tool dispatch loop |
-| `nl_gis/tool_handlers.py` | 24 tool handler implementations |
-| `nl_gis/tools.py` | Tool schemas (JSON Schema for Claude) |
+| `app.py` | Flask app, ~34 routes, session/layer management |
+| `nl_gis/chat.py` | LLM provider integration (Anthropic / OpenAI / Gemini), tool dispatch loop |
+| `nl_gis/tool_handlers.py` | Tool handler dispatch (~82 tools) |
+| `nl_gis/tools.py` | Tool schemas (JSON Schema for the LLM) |
 | `nl_gis/geo_utils.py` | ValidatedPoint, projections, spatial ops |
 | `services/database.py` | SQLite CRUD, migrations, metrics |
 | `services/valhalla_client.py` | Routing + isochrone via Valhalla |

@@ -1,10 +1,10 @@
 # SpatialApp Project Status
 
-**Last updated**: 2026-05-01
-**Current version**: v2.0 + v2.1 complete (all 13 plans rescoped + shipped)
-**Tests**: 1,406 passing across 45 test files (30 e2e skipped — Playwright browser not installed)
-**Commits**: 75 on main
-**Health**: All systems operational
+**Last updated**: 2026-05-10 (post Cycle 18 — audit-prompt refresh)
+**Current version**: v2.0 + v2.1 complete (all 13 plans rescoped + shipped); v2 audit campaign at audit-4 close-out (4 external audits run; 86/100; 30 closed findings)
+**Tests**: 1,577 passing / 10 skipped (1,587 collected, 25 e2e deselected). Run `pytest --collect-only -q | tail -1` for current count; numbers in this file drift fast.
+**Commits**: 113 on main
+**Health**: All systems operational; CI green; pre-deploy dry-run completed (see `work_plan/spatialapp/14-pre-deploy-dryrun.md`)
 
 **Navigation:** [Shipped history → `docs/v1/`](../docs/v1/) · [Active plans → `docs/v2/`](../docs/v2/) · [Roadmap](ROADMAP.md) · [Architecture](ARCHITECTURE.md) · [Capability map](CAPABILITY_MAP.md)
 
