@@ -359,6 +359,21 @@ var ChatPanel = (function() {
                         && window.deck) {
                     renderShow3DButton(_lastToolStepId, data.result);
                 }
+                // N31: choropleth_map handler returns a per-feature
+                // styleMap + legendData. Apply the colors to the named
+                // layer and render the legend under the tool step.
+                // Pre-fix this fell through to the JSON-dump default
+                // renderer and the layer was not recolored.
+                if (data.result && data.result.action === 'choropleth'
+                        && _layerManager) {
+                    var painted = _layerManager.applyStyleMap(
+                        data.result.layer_name,
+                        data.result.styleMap || {}
+                    );
+                    if (painted && data.result.legendData) {
+                        renderChoroplethLegend(_lastToolStepId, data.result.legendData);
+                    }
+                }
                 break;
 
             case 'layer_add':
@@ -958,6 +973,40 @@ var ChatPanel = (function() {
         } catch (e) {
             console.warn('Chart render failed:', e);
         }
+    }
+
+    function renderChoroplethLegend(stepId, legendData) {
+        // N31: legendData = {type, title, entries: [{color, min, max, count, label}]}
+        // The handler always emits entries; defensive checks below guard
+        // against an upstream change to the contract rather than runtime
+        // breakage.
+        if (!stepId || !legendData || !legendData.entries) return;
+        var hostStep = document.getElementById(stepId);
+        if (!hostStep) return;
+        var legend = document.createElement('div');
+        legend.className = 'choropleth-legend';
+        legend.style.cssText = 'margin-top:8px;padding:8px;background:#f4f4f4;'
+            + 'border-radius:4px;font-size:11px;line-height:1.4;'
+            + 'max-width:280px;';
+        var html = '';
+        if (legendData.title) {
+            html += '<div style="font-weight:600;margin-bottom:4px;">'
+                  + escapeHtml(legendData.title) + '</div>';
+        }
+        legendData.entries.forEach(function(entry) {
+            html += '<div class="choropleth-legend-row" '
+                  + 'style="display:flex;align-items:center;margin:2px 0;">'
+                  + '<span style="display:inline-block;width:14px;height:14px;'
+                  + 'background:' + escapeHtml(String(entry.color || '#ccc'))
+                  + ';margin-right:6px;border:1px solid #999;flex-shrink:0;">'
+                  + '</span>'
+                  + '<span>' + escapeHtml(String(entry.label || ''))
+                  + ' <span style="color:#666;">(' + (entry.count || 0)
+                  + ')</span></span>'
+                  + '</div>';
+        });
+        legend.innerHTML = html;
+        hostStep.appendChild(legend);
     }
 
     function showTyping() {

@@ -1280,6 +1280,145 @@ def test_chart_tool_result_renders_chartjs_canvas(live_app, chromium):
     )
 
 
+def _choropleth_tool_result_sse(layer_name: str = "tracts"):
+    """N31 regression SSE: a `choropleth_map` tool result. Backend handler
+    at nl_gis/handlers/visualization.py:264 returns
+    {action: 'choropleth', styleMap: {idx: '#hex'}, legendData: {...}}.
+    Pre-N31 the frontend had no `case 'choropleth':` and the result fell
+    through to formatToolResult's JSON-dump default branch — the layer
+    was NOT recolored and no legend appeared.
+    """
+    feats = [_polygon_feature(0.001 * i, 0) for i in range(4)]
+    add = {"type": "layer_add", "name": layer_name,
+           "geojson": {"type": "FeatureCollection", "features": feats},
+           "style": None}
+    tool_start = {"type": "tool_start", "tool": "choropleth_map",
+                  "input": {"layer_name": layer_name,
+                            "attribute": "pop",
+                            "num_classes": 4}}
+    # styleMap keys serialize to JSON as strings; the renderer must look up
+    # both the numeric and string forms.
+    tool_result = {
+        "type": "tool_result", "tool": "choropleth_map",
+        "result": {
+            "action": "choropleth",
+            "layer_name": layer_name,
+            "attribute": "pop",
+            "method": "quantile",
+            "breaks": [0.0, 25.0, 50.0, 75.0, 100.0],
+            "colors": ["#fef0d9", "#fdcc8a", "#fc8d59", "#d7301f"],
+            "styleMap": {"0": "#fef0d9", "1": "#fdcc8a",
+                         "2": "#fc8d59", "3": "#d7301f"},
+            "missing_count": 0,
+            "feature_count": 4,
+            "legendData": {
+                "type": "choropleth",
+                "title": "tracts — pop",
+                "entries": [
+                    {"color": "#fef0d9", "min": 0.0, "max": 25.0,
+                     "count": 1, "label": "0.00 – 25.00"},
+                    {"color": "#fdcc8a", "min": 25.0, "max": 50.0,
+                     "count": 1, "label": "25.00 – 50.00"},
+                    {"color": "#fc8d59", "min": 50.0, "max": 75.0,
+                     "count": 1, "label": "50.00 – 75.00"},
+                    {"color": "#d7301f", "min": 75.0, "max": 100.0,
+                     "count": 1, "label": "75.00 – 100.00"},
+                ],
+            },
+        },
+    }
+    final = {"type": "message", "text": "choropleth rendered", "done": True}
+    return (
+        f"event: layer_add\ndata: {json.dumps(add)}\n\n"
+        f"event: tool_start\ndata: {json.dumps(tool_start)}\n\n"
+        f"event: tool_result\ndata: {json.dumps(tool_result)}\n\n"
+        f"event: message\ndata: {json.dumps(final)}\n\n"
+    )
+
+
+@pytest.mark.golden
+def test_choropleth_tool_result_recolors_layer_and_renders_legend(
+    live_app, chromium,
+):
+    """N31 regression: a choropleth_map tool result MUST (a) recolor the
+    layer features per styleMap, (b) render a legend panel under the tool
+    step. Pre-fix, both silently no-op'd because chat.js had no
+    `case 'choropleth':` in the tool_result handler — the layer kept its
+    default blue and the user saw a JSON dump in the chat.
+    """
+    errors = []
+    chromium.on("pageerror", lambda e: errors.append(str(e)))
+
+    _block_socketio(chromium)
+    chromium.goto(live_app + "/", wait_until="networkidle", timeout=20_000)
+
+    # Sanity: applyStyleMap was added to LayerManager in this fix.
+    assert chromium.evaluate(
+        "typeof window.LayerManager.applyStyleMap === 'function'"
+    ), (
+        "LayerManager.applyStyleMap is not exported. "
+        "static/js/layers.js return block must list applyStyleMap."
+    )
+
+    _send_chat(chromium, _choropleth_tool_result_sse(), "color tracts by pop")
+
+    # Wait for the legend panel to appear under the tool step.
+    deadline = time.time() + 8
+    legend_present = False
+    while time.time() < deadline:
+        legend_count = chromium.evaluate(
+            "document.querySelectorAll("
+            "'.chat-tool-step .choropleth-legend').length"
+        )
+        if legend_count >= 1:
+            legend_present = True
+            break
+        time.sleep(0.15)
+
+    assert legend_present, (
+        "choropleth tool result did not render a legend panel under the "
+        "tool step. renderChoroplethLegend hook may not be wired. "
+        f"errors: {errors}"
+    )
+
+    # Legend should have one row per class (4).
+    row_count = chromium.evaluate(
+        "document.querySelectorAll("
+        "'.chat-tool-step .choropleth-legend .choropleth-legend-row').length"
+    )
+    assert row_count == 4, (
+        f"expected 4 legend rows (one per class break); got {row_count}. "
+        f"legendData.entries may not be iterated correctly."
+    )
+
+    # The first feature path on the map should now have the styleMap[0]
+    # color, not the default blue (#3388ff). Leaflet renders polygon
+    # features as <path> elements with a `fill` attribute.
+    fill_colors = chromium.evaluate(
+        "Array.from(document.querySelectorAll('.leaflet-overlay-pane path'))"
+        ".map(function(p) { return p.getAttribute('fill'); })"
+    )
+    assert fill_colors, (
+        "no <path> elements rendered on the map; layer_add may have failed "
+        f"upstream. errors: {errors}"
+    )
+    # styleMap was {0:#fef0d9, 1:#fdcc8a, 2:#fc8d59, 3:#d7301f}; default
+    # blue is #3388ff. After the recolor, the choropleth palette should
+    # appear at least once and the default blue should NOT.
+    palette = {"#fef0d9", "#fdcc8a", "#fc8d59", "#d7301f"}
+    fills_lower = {(c or "").lower() for c in fill_colors}
+    palette_lower = {c.lower() for c in palette}
+    assert fills_lower & palette_lower, (
+        f"choropleth palette did not appear on any path; fills={fill_colors}. "
+        f"applyStyleMap may not be iterating features in the same order as "
+        f"the handler indexed them."
+    )
+    assert "#3388ff" not in fills_lower, (
+        f"default blue still present after choropleth — the recolor missed "
+        f"some features. fills={fill_colors}"
+    )
+
+
 def _animate_layer_tool_result_sse(layer_name: str = "permits"):
     """SSE for an animate_layer tool result. The handler returns a
     time_steps list; the frontend should render a slider+play UI."""

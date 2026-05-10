@@ -555,6 +555,55 @@ var LayerManager = (function() {
         }
     }
 
+    /**
+     * N31: paint a per-feature color map onto an existing layer. Used by
+     * the choropleth_map tool: handler returns styleMap keyed by feature
+     * index (idx → "#hexcolor"); we walk the layer in the same iteration
+     * order addLayer produced and call setStyle per feature. JSON-on-the-
+     * wire stringifies integer keys, so look up both numeric and string.
+     * Returns true if the layer was found, false otherwise — callers use
+     * this to decide whether to render the legend.
+     */
+    function applyStyleMap(layerName, styleMap) {
+        if (!layers[layerName] || !layers[layerName].leafletLayer) return false;
+        if (!styleMap) return false;
+        var entry = layers[layerName];
+        var idx = 0;
+        eachFeatureLayer(entry.leafletLayer, function(featureLayer) {
+            if (typeof featureLayer.setStyle !== 'function') { idx++; return; }
+            var color = styleMap[idx];
+            if (color === undefined) color = styleMap[String(idx)];
+            if (color) {
+                featureLayer.setStyle({
+                    fillColor: color,
+                    color: '#333',
+                    weight: 1,
+                    fillOpacity: 0.7
+                });
+            }
+            idx++;
+        });
+        // Also paint cluster centroid markers (wide-area choropleth case).
+        if (entry.clusterLayer) {
+            var cidx = 0;
+            eachFeatureLayer(entry.clusterLayer, function(fl) {
+                if (typeof fl.setStyle !== 'function') { cidx++; return; }
+                var c = styleMap[cidx];
+                if (c === undefined) c = styleMap[String(cidx)];
+                if (c) {
+                    fl.setStyle({
+                        fillColor: c,
+                        color: '#333',
+                        weight: 1,
+                        fillOpacity: 0.8
+                    });
+                }
+                cidx++;
+            });
+        }
+        return true;
+    }
+
     function highlightFeatures(layerName, attribute, value, color) {
         if (!layers[layerName]) return;
 
@@ -642,6 +691,7 @@ var LayerManager = (function() {
         highlightFeatures: highlightFeatures,
         styleLayer: styleLayer,
         filterToIndices: filterToIndices,
-        clearFilter: clearFilter
+        clearFilter: clearFilter,
+        applyStyleMap: applyStyleMap
     };
 })();
