@@ -115,6 +115,108 @@ class TestWebSocketConnect:
             )
             client.disconnect()
 
+    # -----------------------------------------------------------------
+    # N44 — token revocation must force-disconnect existing WS sessions
+    #
+    # Pre-fix, _sid_user_map cached the user_id at connect time. When
+    # an operator revoked the user's bearer token in the DB, the
+    # existing WS connection kept operating under the cached identity
+    # until the user voluntarily disconnected (which the attacker
+    # wouldn't). The fix is the helper revoke_user_websocket_sessions
+    # that operators MUST call alongside any DB-level revocation.
+    # -----------------------------------------------------------------
+
+    def test_n44_revoke_disconnects_user_sessions(self):
+        """revoke_user_websocket_sessions(user_id) must force-disconnect
+        every active SID for that user. Pre-fix, the helper didn't exist
+        and the SIDs survived token revocation indefinitely."""
+        pytest.importorskip("flask_socketio")
+        if state.socketio is None:
+            pytest.skip("SocketIO not initialized")
+
+        from blueprints.websocket import (
+            _sid_user_map, _sid_user_lock,
+            revoke_user_websocket_sessions,
+        )
+        # Connect a client. In open-access mode (no CHAT_API_TOKEN),
+        # _sid_user_map[sid] = 'anonymous'.
+        client = state.socketio.test_client(app)
+        assert client.is_connected(), "test fixture failed to connect"
+
+        # Force a known user_id into the map so we can revoke it.
+        # (In production, this is set by handle_connect after token
+        # validation; here we synthesize the post-connect state.)
+        with _sid_user_lock:
+            sid_for_test = next(iter(_sid_user_map))
+            _sid_user_map[sid_for_test] = "user-to-revoke"
+
+        revoked = revoke_user_websocket_sessions("user-to-revoke")
+        assert revoked == 1, (
+            f"N44 regression: expected 1 SID revoked; got {revoked}. "
+            f"helper failed to find or disconnect the user's SID."
+        )
+        # The disconnect handler at handle_disconnect should clean
+        # _sid_user_map; client.is_connected() should now be False.
+        assert not client.is_connected(), (
+            "N44 regression: SID was not actually disconnected after "
+            "revoke_user_websocket_sessions returned a positive count."
+        )
+
+    def test_n44_revoke_unknown_user_returns_zero(self):
+        """Defensive: revoking a user with no active SIDs returns 0
+        without raising."""
+        pytest.importorskip("flask_socketio")
+        if state.socketio is None:
+            pytest.skip("SocketIO not initialized")
+        from blueprints.websocket import revoke_user_websocket_sessions
+        revoked = revoke_user_websocket_sessions("nonexistent-user-id-xyz")
+        assert revoked == 0
+
+    def test_n44_revoke_empty_user_id_is_noop(self):
+        """Defensive: empty user_id must not match every anonymous SID."""
+        from blueprints.websocket import revoke_user_websocket_sessions
+        # Even with an active anonymous client, empty user_id must not
+        # accidentally match (could mass-disconnect every anonymous user).
+        revoked = revoke_user_websocket_sessions("")
+        assert revoked == 0, (
+            f"N44 regression: empty user_id returned {revoked}; "
+            f"could accidentally mass-disconnect anonymous users."
+        )
+
+    def test_n44_revoke_only_targets_named_user(self):
+        """A revoke for user A must NOT disconnect user B's SIDs."""
+        pytest.importorskip("flask_socketio")
+        if state.socketio is None:
+            pytest.skip("SocketIO not initialized")
+
+        from blueprints.websocket import (
+            _sid_user_map, _sid_user_lock,
+            revoke_user_websocket_sessions,
+        )
+        client_a = state.socketio.test_client(app)
+        client_b = state.socketio.test_client(app)
+        assert client_a.is_connected() and client_b.is_connected()
+
+        with _sid_user_lock:
+            sids = list(_sid_user_map.keys())
+            # Pick two SIDs and assign distinct user_ids
+            sid_a, sid_b = sids[-2], sids[-1]
+            _sid_user_map[sid_a] = "user-a"
+            _sid_user_map[sid_b] = "user-b"
+
+        revoked = revoke_user_websocket_sessions("user-a")
+        assert revoked == 1, (
+            f"N44: expected to revoke 1 SID for user-a; got {revoked}"
+        )
+        # user-b's SID should still be in the map (not disconnected).
+        with _sid_user_lock:
+            assert _sid_user_map.get(sid_b) == "user-b", (
+                "N44 regression: revoke for user-a accidentally "
+                "disconnected user-b's SID. revoke must be name-scoped."
+            )
+        if client_b.is_connected():
+            client_b.disconnect()
+
     @patch.object(state, 'db', None)
     def test_n43_connect_auth_dict_takes_precedence_over_query(self):
         """If both are present, auth dict wins (it's the safer one).

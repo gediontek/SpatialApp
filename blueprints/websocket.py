@@ -54,6 +54,61 @@ def _check_and_clear_chat_abort(session_id: str) -> bool:
         return _chat_abort_flags.pop(session_id, False)
 
 
+def revoke_user_websocket_sessions(user_id: str) -> int:
+    """N44: force-disconnect every active WebSocket SID owned by user_id.
+
+    Operators MUST call this when revoking a user's bearer token in the
+    DB — otherwise the user's existing WS connection keeps operating
+    under the cached identity in `_sid_user_map` until they voluntarily
+    disconnect (which they won't, if they're the attacker).
+
+    Returns the number of SIDs disconnected. Safe to call when no SIDs
+    match (returns 0). Thread-safe — holds `_sid_user_lock` while
+    enumerating, then releases before calling `socketio.disconnect()`
+    so the disconnect handler can re-acquire the lock to remove the SID.
+    """
+    if not user_id:
+        return 0
+    # 1. Snapshot the SIDs to revoke under the lock so we don't iterate
+    #    a dict that disconnect callbacks are mutating concurrently.
+    with _sid_user_lock:
+        sids_to_revoke = [
+            sid for sid, uid in _sid_user_map.items() if uid == user_id
+        ]
+    if not sids_to_revoke:
+        return 0
+
+    # 2. Disconnect outside the lock so the per-SID disconnect handler
+    #    can re-acquire it to clean up `_sid_user_map`. The handler
+    #    runs synchronously under flask_socketio's test_client and as
+    #    a background event under eventlet — both pathways tolerate
+    #    the lock-then-disconnect ordering.
+    import state
+    if state.socketio is None:
+        logger.warning(
+            "revoke_user_websocket_sessions: socketio not initialized; "
+            "cannot disconnect SIDs %s for user %s",
+            sids_to_revoke, user_id,
+        )
+        return 0
+
+    revoked = 0
+    for sid in sids_to_revoke:
+        try:
+            state.socketio.server.disconnect(sid, namespace='/')
+            revoked += 1
+        except Exception:
+            logger.warning(
+                "revoke_user_websocket_sessions: disconnect(sid=%s) failed",
+                sid, exc_info=True,
+            )
+    logger.info(
+        "revoke_user_websocket_sessions: revoked %d/%d sid(s) for user=%s",
+        revoked, len(sids_to_revoke), user_id,
+    )
+    return revoked
+
+
 def register_websocket_events(socketio):
     """Register all Socket.IO event handlers on the given socketio instance.
 
