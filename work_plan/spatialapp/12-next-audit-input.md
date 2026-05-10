@@ -1,7 +1,7 @@
 # SpatialApp v2 — Input package for next external audit
 
-**Status:** **READY for external audit submission.** 20 cycles closed; CI green; audit-4 returned **86/100** (N26-N30, all closed in Cycle 17). Cycles 18-19-20 were a prompt-validation cascade: drafted Prompts 7+8 (Cycle 18), self-passed Prompt 7 (Cycle 19) which surfaced N31+N32+N33, closed N32+N33 immediately (Cycle 19), shipped real fix for N31 with B20 regression test (Cycle 20).
-**Last updated:** 2026-05-10 (post Cycle 20 — N31 choropleth real fix shipped with B20 regression test)
+**Status:** **READY for external audit submission.** 21 cycles closed; CI green; audit-4 returned **86/100** (N26-N30, all closed in Cycle 17). Cycles 18→19→20→21 are a prompt-validation cascade: drafted Prompts 7+8 (18), self-passed Prompt 7 surfaces 1-3 (19) which found N31+N32+N33, closed N32/N33 immediately (19), shipped real fix for N31 with B20 regression test (20), swept surface 4 (21) which surfaced N34 candidate that closer inspection identified as intentional N29 behavior (accepted-by-design, not a fix).
+**Last updated:** 2026-05-10 (post Cycle 21 — Prompt 7 surface 4 swept clean; N34 candidate analyzed and accepted-by-design)
 **Updated by:** autonomous /auto-solve cycle
 **Repo state:** branch `main`, working tree clean, synced with origin. **Next external auditor: new finding IDs MUST start at N34 — IDs N1-N33 are taken** (N25 was consumed by the auditor as already-fixed at the time of audit-4; N31-N33 were self-discovered during Cycle 19's Prompt 7 self-pass — all three are now CLOSED in Cycles 19-20, see those cycles below).
 **Verified at last update**: `make eval` green (6 workflow + **20** browser + 8 frontend-auth + 65 harness + 30 tool-selection in `--ci` strict mode); CI-mirror `pytest tests/ -k "not e2e"` = **1,578 passed / 10 skipped / 0 failed** (~104s).
@@ -192,6 +192,21 @@ Cycle 11 added `animate_layer` and `visualize_3d` as resilience-only tests (`tes
 - `animate_player.png` — slider+play+reset rendered under the tool step (also visible in the test DOM assertion).
 
 **Final coverage**: see header for current `make eval` and unit-suite numbers (kept fresh per-cycle).
+
+### Cycle 21 (Prompt 7 surface 4 sweep — health/readiness contract) — done
+After Cycle 20 closed the only open code finding (N31), continued the prompt-validation flywheel by sweeping surface 4 of Prompt 7: the health/readiness contract. Read-only investigation; one candidate finding examined and resolved as accepted-by-design.
+
+**N34 candidate (Low) — analyzed, NOT a finding.** `/api/health/ready` returns a `{checks: {database, llm, chat_auth}}` dict to unauthenticated callers (status code already conveys ready/not-ready). At first pass this looked like a reconnaissance leak — an attacker could probe and learn pre-deployment that `chat_auth: false` (CHAT_API_TOKEN unset) before `/api/chat` opens up. Closer inspection: this is the intentional N29 behavior. The whole point of N29 was to tell the deploy operator EXACTLY which gate failed. Removing the `checks` dict would (a) break 6 existing tests including the 3 that pin the N29 contract, (b) remove the operational signal that N29 was added to provide, (c) leave the operator with only "503" and no debugging info during deployment. The pre-deployment reconnaissance window is also operationally bounded — `14-pre-deploy-dryrun.md`'s F1 already requires `SECURITY_CONTACT` + secrets to be set before exposing the readiness endpoint externally. Marking as **accepted-by-design**.
+
+**Other surface-4 spot-checks (clean):**
+- ✅ `/api/health` unauth payload is bare (status + timestamp + uptime + version) — no leakage.
+- ✅ `/api/health` authed: per-user counts (annotation_count, layer_count, session_count) — N10 closure verified intact, no cross-user enumeration.
+- ✅ `/api/health` DB exception path: logs `exc_info=True` server-side, returns generic `{"status": "error"}` — no `str(e)` leak. N10 closure verified.
+- ✅ `/metrics` (Prometheus): only emits `active_sessions` + `active_layers` (global aggregates) + `http_requests_total{method,status}`. NO per-user labels, NO path labels (so URL paths don't leak to scrapers), NO secrets in label values. By design unauthenticated for Prometheus scrapers.
+
+**Net Cycle 21 output**: surface 4 fully swept. Zero new findings to close. The Prompt 7 self-pass cascade (Cycles 19→20→21) found 4 candidate issues across all 4 surfaces: 3 closed (N31 code, N32+N33 doc), 1 accepted-by-design (N34). The new prompts are well-targeted enough to surface real signals AND clear enough about the contract to let me reason about whether each signal is a real bug. Both halves of "good prompt" validated.
+
+**Verification**: doc-only change (this file). No code modified. Surface 4 was read-only investigation.
 
 ### Cycle 20 (close N31 — choropleth real fix per Cycle 19 path B) — done
 Cycle 19 surfaced N31 (choropleth_map result unrendered) and recommended path B (real implementation over honest-deferral). Shipped:
