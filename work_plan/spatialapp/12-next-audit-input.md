@@ -1,10 +1,10 @@
 # SpatialApp v2 — Input package for next external audit
 
-**Status:** **READY for external audit submission.** 21 cycles closed; CI green; audit-4 returned **86/100** (N26-N30, all closed in Cycle 17). Cycles 18→19→20→21 are a prompt-validation cascade: drafted Prompts 7+8 (18), self-passed Prompt 7 surfaces 1-3 (19) which found N31+N32+N33, closed N32/N33 immediately (19), shipped real fix for N31 with B20 regression test (20), swept surface 4 (21) which surfaced N34 candidate that closer inspection identified as intentional N29 behavior (accepted-by-design, not a fix).
-**Last updated:** 2026-05-10 (post Cycle 21 — Prompt 7 surface 4 swept clean; N34 candidate analyzed and accepted-by-design)
+**Status:** **READY for external audit submission.** 22 cycles closed; CI green; audit-4 returned **86/100** (N26-N30, all closed in Cycle 17). Prompt-validation cascade complete: drafted Prompts 7+8 (Cycle 18), Prompt 7 self-pass found N31+N32+N33+N34 (Cycles 19-21; 3 closed, 1 accepted-by-design), Prompt 8 self-pass found N35-N39 (Cycle 22; N35+N37 closed, N36 subsumed by N29, N38+N39 deferred to Cycle 23). Both new prompts are validated against real code AND have produced + closed real findings.
+**Last updated:** 2026-05-10 (post Cycle 22 — N35 + N37 closed via Config.validate hardening; N38 + N39 deferred to Cycle 23)
 **Updated by:** autonomous /auto-solve cycle
-**Repo state:** branch `main`, working tree clean, synced with origin. **Next external auditor: new finding IDs MUST start at N34 — IDs N1-N33 are taken** (N25 was consumed by the auditor as already-fixed at the time of audit-4; N31-N33 were self-discovered during Cycle 19's Prompt 7 self-pass — all three are now CLOSED in Cycles 19-20, see those cycles below).
-**Verified at last update**: `make eval` green (6 workflow + **20** browser + 8 frontend-auth + 65 harness + 30 tool-selection in `--ci` strict mode); CI-mirror `pytest tests/ -k "not e2e"` = **1,578 passed / 10 skipped / 0 failed** (~104s).
+**Repo state:** branch `main`, working tree clean, synced with origin. **Next external auditor: new finding IDs MUST start at N40 — IDs N1-N39 are taken** (N25 consumed by the auditor at audit-4; N31-N34 from Cycle 19-21 P7 self-pass; N35-N39 from Cycle 22 P8 self-pass; status of each is in §1.1 / §3 cycle entries).
+**Verified at last update**: `make eval` green (6 workflow + 20 browser + 8 frontend-auth + **77** harness + 30 tool-selection in `--ci` strict mode); CI-mirror `pytest tests/ -k "not e2e"` = **1,590 passed / 10 skipped / 0 failed** (~96s).
 **Audit history**: audit-1 (pre-cycles): 31/100 → audit-2 (post Cycle 13): 81/100 → audit-3 (post Cycle 14): 93/100 → audit-4 (post Cycles 15-16): **86/100** (5 fresh findings N26-N30, all closed in Cycle 17). Audit-5 awaits.
 **Audit-4 specifics**: N26 was a real user-facing break (raster upload returned a 404 URL); N27 was an auth break (annotation export buttons couldn't attach Bearer); N29 was a security gap (readiness could go green while paid chat was publicly open). Score dropped from 93 → 86 because audit-4 surfaced bugs the prior audits missed — exactly what fresh-eyes audits exist for.
 **Companion docs:**
@@ -192,6 +192,25 @@ Cycle 11 added `animate_layer` and `visualize_3d` as resilience-only tests (`tes
 - `animate_player.png` — slider+play+reset rendered under the tool step (also visible in the test DOM assertion).
 
 **Final coverage**: see header for current `make eval` and unit-suite numbers (kept fresh per-cycle).
+
+### Cycle 22 (Prompt 8 self-pass + N35/N37 closure) — done
+After Cycle 21 closed Prompt 7's loop, ran Prompt 8 (auth-mode parity sweep) against the actual codebase via the same Explore-agent flywheel. 5 candidate findings surfaced (N35-N39); triaged + shipped:
+
+- ✅ **N35 (High) — Closed.** SECURITY_CONTACT placeholder not rejected in prod. `/.well-known/security.txt` would otherwise advertise the unconfigured `mailto:security@example.com` default, causing vuln reports to vanish — the highest-friction way to lose a disclosure. The pre-deploy doc's F1 already named this as deploy-blocking; N35 makes it a code gate. **Fix**: new `Config.SECURITY_CONTACT` attribute + `_PLACEHOLDER_SECURITY_CONTACTS` set; `Config.validate()` raises in prod when SECURITY_CONTACT is in the placeholder set; debug mode unaffected; `app.py` security.txt route now reads from `Config` instead of `os.environ.get` so test monkeypatches and the validate gate apply uniformly. **6 regression tests** in `tests/harness/test_secret_validation.py` (parametrized over the 6 known placeholders + real-contact pass + debug-mode skip). `config.py:40-95`, `app.py:215`.
+
+- ⏭ **N36 (Medium) — Subsumed by N29.** Sweep flagged "LLM provider key absence not validated in prod" as a silent capability downgrade (chat falls back to rule-based). Closer inspection: `/api/health/ready` already returns 503 when `llm_ok=false` (added by N29 in Cycle 17). Any deploy automation using readiness probes already blocks. Deployments NOT using readiness probes are responsible for their own LLM key check — that's a deploy choice, not a code bug. Marked **subsumed**, no fix.
+
+- ✅ **N37 (Medium) — Closed.** Folder writability not checked at startup. Prod deploy with bad permissions on UPLOAD_FOLDER / LABELS_FOLDER / LOG_FOLDER previously started cleanly but threw opaque 500s on the first user upload, leaving the operator no startup signal. **Fix**: `Config.validate()` now probe-writes a tempfile in each of the three folders when DEBUG=False; OSError raises a RuntimeError that names the misconfigured folder and the underlying errno message. Skipped in DEBUG so dev sandboxes with unmaterialized folders don't block startup. **3 regression tests** in `tests/harness/test_secret_validation.py` (writable_folders fixture passes; `/proc/...` probe path raises; debug mode skips). `config.py:64-88`.
+
+- ⏭ **N38 (Medium) — Deferred to Cycle 23.** `/display_table` POST accepts unbounded GeoJSON with no rate limit. POST a 100k-feature FeatureCollection → memory bloat / CPU spike on `gpd.GeoDataFrame.from_features` + HTML rendering. Same DoS class as N12 (chat rate limit). Fix: cap features at ~10k or 10MB payload + add `@rate_limit_per_user`. Deferred because it's a route-handler change in a different surface from the Config gates shipped here.
+
+- ⏭ **N39 (Low) — Deferred to Cycle 23.** `/api/auto-classify` POST accepts unbounded bbox with no rate limit. Globe-scale bbox → unbounded Overpass quota / compute. Same surface as N38; will batch with it.
+
+**Test-infrastructure fix shipped alongside**: `tests/conftest.py` now sets `SECURITY_CONTACT` to a real-looking test-only value via `setdefault` so subprocess fixtures (`live_app`, gunicorn dry-run, future Cycle 22+ subprocess spawners) inherit it. Without this, the new N35 gate would block every prod-mode subprocess in the test suite. Tests that explicitly target the placeholder rejection monkeypatch back to the placeholder.
+
+**Verification**: harness suite **65 → 77 passed** (+12 from N35+N37 tests, 3 skipped); `make eval` green; full unit suite **1,590 passed / 10 skipped / 0 failed** (+12, ~96s, zero regressions).
+
+**Why this matters**: closes the highest-severity finding from the Prompt 8 sweep (N35 High) at code-gate level, which means the operator-side F1 from `14-pre-deploy-dryrun.md` is now ALSO enforced by code (belt + suspenders). The pre-deploy operator can no longer accidentally ship past the placeholder.
 
 ### Cycle 21 (Prompt 7 surface 4 sweep — health/readiness contract) — done
 After Cycle 20 closed the only open code finding (N31), continued the prompt-validation flywheel by sweeping surface 4 of Prompt 7: the health/readiness contract. Read-only investigation; one candidate finding examined and resolved as accepted-by-design.
