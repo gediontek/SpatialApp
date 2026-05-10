@@ -65,12 +65,26 @@ def register_websocket_events(socketio):
     def handle_connect(auth=None):
         """Handle new WebSocket connection.
 
-        Validates bearer token from query params if CHAT_API_TOKEN is set.
-        Sets user_id in the per-SID map for downstream use.
+        Validates bearer token from the Socket.IO `auth` handshake dict
+        (preferred — kept out of URL/access logs) OR the legacy `?token=`
+        query parameter (kept for backward compat). Sets user_id in the
+        per-SID map for downstream use.
+
+        N43: query-param tokens appear in proxy / nginx access logs and
+        in any middleware that captures URLs. The handshake `auth` dict
+        is sent in the WebSocket envelope and never lands in URL logs.
+        Server accepts both; clients should prefer `auth.token`.
         """
         import hmac
 
-        token = request.args.get('token', '')
+        # N43: prefer auth dict (out-of-URL); fall back to query string.
+        token = ""
+        if isinstance(auth, dict):
+            t = auth.get("token")
+            if isinstance(t, str):
+                token = t
+        if not token:
+            token = request.args.get('token', '')
         user_id = 'anonymous'
 
         if token:

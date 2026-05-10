@@ -56,8 +56,12 @@ var ChatPanel = (function() {
 
         try {
             var token = localStorage.getItem('api_token') || '';
+            // N43: send token via the Socket.IO `auth` handshake dict
+            // (kept out of URL / access logs) instead of the legacy
+            // `query` string. Server accepts both for backward compat;
+            // new clients should always use `auth`.
             _socket = io({
-                query: { token: token },
+                auth: { token: token },
                 transports: ['websocket', 'polling'],
                 reconnection: true,
                 reconnectionAttempts: 5,

@@ -67,6 +67,77 @@ class TestWebSocketConnect:
             # so the client should not be connected.
             assert not client.is_connected()
 
+    # -----------------------------------------------------------------
+    # N43 — token via Socket.IO `auth` handshake dict (out-of-URL)
+    #
+    # Pre-fix, the handshake `auth` dict was ignored and the server
+    # only read `?token=...` from the query string. Query strings
+    # appear in proxy / nginx / middleware access logs in plaintext,
+    # leaking tokens. The fix: server reads `auth.token` first, falls
+    # back to query string for backward compat.
+    # -----------------------------------------------------------------
+
+    @patch.object(state, 'db', None)
+    def test_n43_connect_accepts_token_via_auth_dict(self):
+        """Token via `auth` handshake dict must authenticate (was
+        ignored pre-fix)."""
+        pytest.importorskip("flask_socketio")
+        if state.socketio is None:
+            pytest.skip("SocketIO not initialized")
+        from config import Config
+        with patch.object(Config, 'CHAT_API_TOKEN', 'auth-dict-test-token'):
+            client = state.socketio.test_client(
+                app, auth={'token': 'auth-dict-test-token'}
+            )
+            assert client.is_connected(), (
+                "N43 regression: token via `auth` dict was rejected — "
+                "the handshake auth path is not wired."
+            )
+            client.disconnect()
+
+    @patch.object(state, 'db', None)
+    def test_n43_connect_still_accepts_token_via_query_legacy(self):
+        """Backward compat: clients still in the wild send `?token=...`
+        as a query parameter; that path must keep working until they
+        upgrade. Only after every client uses `auth` can the legacy
+        path be removed."""
+        pytest.importorskip("flask_socketio")
+        if state.socketio is None:
+            pytest.skip("SocketIO not initialized")
+        from config import Config
+        with patch.object(Config, 'CHAT_API_TOKEN', 'legacy-query-token'):
+            client = state.socketio.test_client(
+                app, query_string='token=legacy-query-token'
+            )
+            assert client.is_connected(), (
+                "N43 regression: legacy ?token=... query path stopped "
+                "working — backward compat broken."
+            )
+            client.disconnect()
+
+    @patch.object(state, 'db', None)
+    def test_n43_connect_auth_dict_takes_precedence_over_query(self):
+        """If both are present, auth dict wins (it's the safer one).
+        Catches a future regression where someone re-adds query-first
+        ordering and silently leaks tokens to proxy logs again."""
+        pytest.importorskip("flask_socketio")
+        if state.socketio is None:
+            pytest.skip("SocketIO not initialized")
+        from config import Config
+        with patch.object(Config, 'CHAT_API_TOKEN', 'good-token'):
+            # auth dict has the right token; query has a wrong token.
+            # If auth wins (correct), connection succeeds.
+            client = state.socketio.test_client(
+                app,
+                auth={'token': 'good-token'},
+                query_string='token=wrong-token',
+            )
+            assert client.is_connected(), (
+                "N43 regression: query-first ordering re-introduced. "
+                "auth dict (the safer source) must take precedence."
+            )
+            client.disconnect()
+
 
 class TestJoinSession:
     """Tests for join_session event."""
