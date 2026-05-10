@@ -1,10 +1,10 @@
 # SpatialApp v2 — Input package for next external audit
 
-**Status:** **READY for external audit submission.** 27 cycles closed; CI green; audit-4 returned **86/100** (N26-N30, all closed in Cycle 17). Prompt-validation + §2.1-sweep cascade (Cycles 18→27) shipped: drafted Prompts 7+8 + load-tested P3/P7/P8 against real code + closed §2.1 items 4 (raster decompression) + 7 (crypto/auth hygiene, partial). Net: **11 findings closed with regression tests** (N31-N33, N35, N37, N38, N39, N40, N42, N43 + doc pairs) + 1 accepted-by-design (N34) + 1 subsumed (N36) + 1 documented operational (N41) + 1 deferred-to-Cycle-28 (N44, scoped).
-**Last updated:** 2026-05-10 (post Cycle 27 — N43 WS token-via-auth-dict shipped; N44 scoped for Cycle 28)
+**Status:** **READY for external audit submission.** 28 cycles closed; CI green; audit-4 returned **86/100** (N26-N30, all closed in Cycle 17). Prompt-validation + §2.1-sweep cascade (Cycles 18→28) shipped: drafted Prompts 7+8 + load-tested P3/P7/P8 against real code + closed §2.1 items 4 (raster decompression) + 7 (crypto/auth hygiene, FULL). Net: **12 findings closed with regression tests** (N31-N33, N35, N37, N38, N39, N40, N42, N43, N44 + doc pairs) + 1 accepted-by-design (N34) + 1 subsumed (N36) + 1 documented operational (N41).
+**Last updated:** 2026-05-10 (post Cycle 28 — N44 WS revocation helper shipped; §2.1 item 7 fully closed)
 **Updated by:** autonomous /auto-solve cycle
-**Repo state:** branch `main`, working tree clean, synced with origin. **Next external auditor: new finding IDs MUST start at N45 — IDs N1-N44 are taken** (N25 consumed by auditor at audit-4; N31-N34 from Cycle 19-21 P7 self-pass; N35-N39 from Cycle 22-23 P8 self-pass; N40+N41 from Cycle 25 P3 self-pass; N42 from Cycle 26 §2.1 item 4 sweep; N43+N44 from Cycle 27 crypto/auth sweep — N43 closed, N44 scoped for Cycle 28; status of each in §1.1 / §3 cycle entries).
-**Verified at last update**: `make eval` green (6 workflow + 20 browser + 8 frontend-auth + 90 harness + 30 tool-selection in `--ci` strict mode); CI-mirror `pytest tests/ -k "not e2e"` = **1,606 passed / 11 skipped / 0 failed** (~103s).
+**Repo state:** branch `main`, working tree clean, synced with origin. **Next external auditor: new finding IDs MUST start at N45 — IDs N1-N44 are taken** (N25 consumed by auditor at audit-4; N31-N34 from Cycle 19-21 P7 self-pass; N35-N39 from Cycle 22-23 P8 self-pass; N40+N41 from Cycle 25 P3 self-pass; N42 from Cycle 26 §2.1 item 4 sweep; N43+N44 from Cycle 27-28 crypto/auth sweep, both closed; status of each in §1.1 / §3 cycle entries).
+**Verified at last update**: `make eval` green (6 workflow + 20 browser + 8 frontend-auth + 90 harness + 30 tool-selection in `--ci` strict mode); CI-mirror `pytest tests/ -k "not e2e"` = **1,610 passed / 11 skipped / 0 failed** (~105s).
 **Audit history**: audit-1 (pre-cycles): 31/100 → audit-2 (post Cycle 13): 81/100 → audit-3 (post Cycle 14): 93/100 → audit-4 (post Cycles 15-16): **86/100** (5 fresh findings N26-N30, all closed in Cycle 17). Audit-5 awaits.
 **Audit-4 specifics**: N26 was a real user-facing break (raster upload returned a 404 URL); N27 was an auth break (annotation export buttons couldn't attach Bearer); N29 was a security gap (readiness could go green while paid chat was publicly open). Score dropped from 93 → 86 because audit-4 surfaced bugs the prior audits missed — exactly what fresh-eyes audits exist for.
 **Companion docs:**
@@ -75,9 +75,9 @@
 | N41 | — | `_migrate_add_column` race under multi-worker boot — both workers see the column missing, both attempt ALTER, second logs a warning. **Outcome is idempotent** (column exists either way), only side-effect is one noisy warning per worker boot. Documented as accepted operational quirk; can be hardened later by wrapping the read-check + ALTER in an explicit transaction. | (no fix; documented) |
 | N42 | Medium | Raster upload decompression-bomb — 50 MB MAX_CONTENT_LENGTH catches the file on the wire, but a craftily-compressed GeoTIFF (e.g. 10000×10000×3 bands compressed to a few MB) materializes ~10 GB on rasterio.read() and OOMs the worker before the upload route returns. **Fix**: new `MAX_RASTER_PIXELS` (100 megapixels) + `MAX_RASTER_BANDS` (16) Config attributes; `render_overlay()` checks both against `src.width × src.height` + `src.count` BEFORE the band reads, rejects with HTTP 413. 3 regression tests. | `5c65735` |
 | N43 | High | WebSocket bearer token sent as `?token=...` query parameter on the handshake. Query strings appear in proxy / nginx / middleware access logs in plaintext (Authorization headers are typically redacted; query params aren't), leaking per-user tokens. **Fix**: `handle_connect` now reads `auth.token` from the Socket.IO handshake dict first (out-of-URL), falls back to `?token=` for backward compat. JS client switched from `query:` to `auth:` so new UI connections never put the token in a URL. 3 regression tests in `tests/test_websocket.py::TestWebSocketConnect::test_n43_*`. | `988530f` |
-| N44 | High (deferred) | WebSocket caches user identity in `_sid_user_map` at connect time. Token revocation in the DB does NOT force-disconnect the existing WS connection — the revoked user keeps operating under their cached identity until they disconnect voluntarily. Exploitation requires DB-write access (operator-driven), but the gap is real. **Fix scope (Cycle 28)**: helper `revoke_user_websocket_sessions(user_id)` that finds all SIDs in `_sid_user_map` for that user and force-disconnects them, plus an admin endpoint or hook that operators call when revoking. | (deferred) |
+| N44 | High | WebSocket cached user identity in `_sid_user_map` at connect time → token revocation in the DB did NOT force-disconnect the existing WS connection. **Fix**: new `revoke_user_websocket_sessions(user_id)` helper in `blueprints/websocket.py` snapshots SIDs under `_sid_user_lock`, then calls `state.socketio.server.disconnect(sid, namespace='/')` outside the lock so the disconnect handler can re-acquire it. Returns count of SIDs disconnected; defensive against empty user_id (returns 0 — must not mass-disconnect anonymous users). Operators MUST call this helper alongside any DB-level token revocation. 4 regression tests covering the happy path + defensive cases (empty user_id, unknown user_id, only-named-user-targeted). | `418b23e` |
 
-**Total: 42 closed findings** (12 audit + 30 self-discovered) + N15 verified clean + N25 consumed-by-auditor + N34 accepted-by-design + N36 subsumed by N29 + N41 documented operational quirk + N44 deferred-to-Cycle-28.
+**Total: 43 closed findings** (12 audit + 31 self-discovered) + N15 verified clean + N25 consumed-by-auditor + N34 accepted-by-design + N36 subsumed by N29 + N41 documented operational quirk.
 
 ### 1.2 Test infrastructure added
 
@@ -119,8 +119,7 @@ The items below survived the Cycles 18-23 prompt-validation cascade — meaning 
 4. **Public `/api/geocode`** — no auth (intentional). Verify no enumeration / abuse vector beyond what Nominatim itself rate-limits.
 5. **WebSocket `connect` flow** — auth happens in `handle_connect` via `request.args.get('token')`; verify the per-user vs shared-token branches in handle_connect don't allow privilege escalation across the connect/disconnect lifecycle.
 6. **Test infrastructure honesty.** Audit-2's N20 was "claimed Playwright coverage silently skipped in CI." Sweep for similar: is any test currently `pytest.skip(...)` in CI but expected by the audit-input doc to be running? `tests/test_app.py::test_n26...` and the new `test_n39_auto_classify_*` skip when fixtures aren't present — are these honest or hiding gaps?
-7. **Crypto / auth hygiene** (P3 focus area 4). Token storage scheme in `services/database.py` (plaintext vs hashed); session timeout enforcement on per-user tokens; CSRF secret separation from SECRET_KEY; behavior on token revocation. Not yet swept by self-pass.
-8. **Supply chain** (P3 focus area 5). Dependency CVE sweep is in CI via `pip-audit` (gap 3 in §3 Cycle 5). Dockerfile base image age, root user, secret leakage in build layers. GitHub Actions workflow injection through PR title/body. Not yet self-passed beyond the CI integration.
+7. **Supply chain** (P3 focus area 5). Dependency CVE sweep is in CI via `pip-audit` (gap 3 in §3 Cycle 5). Dockerfile base image age, root user, secret leakage in build layers. GitHub Actions workflow injection through PR title/body. Not yet self-passed beyond the CI integration.
 
 Items REMOVED from the prior version of this list (cleared by cycles 1-25):
 - ~~LLM tool-call arg validation~~ — swept clean Cycle 1; no SQL/shell/eval reachable from tool args.
@@ -130,6 +129,7 @@ Items REMOVED from the prior version of this list (cleared by cycles 1-25):
 - ~~SECURITY_CONTACT placeholder~~ — code-gated by N35 (Cycle 22).
 - ~~Multi-tool LLM chains for prompt-injection-via-data~~ — closed by N40 sanitizer + defensive headers (Cycle 25).
 - ~~Raster upload size limit (decompression bomb)~~ — closed by N42 pixel-count + band-count caps in `render_overlay()` (Cycle 26).
+- ~~Crypto / auth hygiene (P3 focus area 4)~~ — sub-surfaces 1, 2, 3, 5 verified clean by Cycle 27 sweep (token storage SHA-256 hashed, session timeout via `_cleanup_expired_sessions`, CSRF shares SECRET_KEY which is gated, token-only auth). Sub-surface 4 (token revocation) closed: N43 (Cycle 27, WS auth via handshake `auth` dict instead of `?token=` query) + N44 (Cycle 28, `revoke_user_websocket_sessions` helper).
 
 ### 2.2 Areas the auditor can SKIP (already covered by harness)
 
@@ -258,6 +258,17 @@ Cycle 11 added `animate_layer` and `visualize_3d` as resilience-only tests (`tes
 - `animate_player.png` — slider+play+reset rendered under the tool step (also visible in the test DOM assertion).
 
 **Final coverage**: see header for current `make eval` and unit-suite numbers (kept fresh per-cycle).
+
+### Cycle 28 (close N44 — WS revocation helper) — done
+Direct continuation of Cycle 27. N44 was scoped + deferred there to keep that cycle's diff focused on the cleaner N43 fix; this cycle ships the revocation helper + tests.
+
+- ✅ **N44 (High) — Token revocation now force-disconnects WS.** Pre-fix, `_sid_user_map` cached user identity at connect time and the existing WS connection survived DB-level token revocation indefinitely (the revoked user kept operating under their cached identity). **Fix**: new module-level helper `revoke_user_websocket_sessions(user_id)` in `blueprints/websocket.py`. Snapshots SIDs under `_sid_user_lock`, then calls `state.socketio.server.disconnect(sid, namespace='/')` outside the lock so the disconnect handler can re-acquire it to clean up `_sid_user_map`. Returns count of SIDs disconnected. Defensive against empty user_id (returns 0 — must NOT mass-disconnect anonymous users; this case is asserted by `test_n44_revoke_empty_user_id_is_noop`). **4 regression tests** in `tests/test_websocket.py::TestWebSocketConnect::test_n44_*`: happy path, unknown user_id returns 0, empty user_id is noop, revoke for user A doesn't disconnect user B's SIDs. `blueprints/websocket.py:46-110`.
+
+**Operator workflow**: this is a helper, not an automatic hook (there's no admin UI / token-rotation endpoint to hook into yet). Operators MUST call `revoke_user_websocket_sessions(user_id)` alongside any DB-level token revocation. If/when an admin endpoint is added, it should call this helper first.
+
+**Verification**: `make eval` green; full unit suite **1,610 passed / 11 skipped / 0 failed** (+4 from N44 tests, ~105s, zero regressions).
+
+**§2.1 item 7 fully closed**: WebSocket auth surface now hardened to the same level as REST auth (token in handshake `auth` dict instead of URL → no proxy-log leak; revocation actually disconnects → no zombie sessions). Combined with audit-1's H1 (frontend authedFetch) + N6 (collab REST endpoints require auth + owner) + N29 (readiness gates CHAT_API_TOKEN in prod), the auth surface is now uniformly defended.
 
 ### Cycle 27 (crypto/auth hygiene self-pass — §2.1 item 7) — done
 After Cycle 26 closed item 4, swept item 7 (crypto/auth hygiene = P3 focus area 4) via Explore agent. Agent verified token storage (SHA-256 hashed at rest), session timeout (`_cleanup_expired_sessions` runs every 5 min, honors SESSION_TTL_SECONDS), CSRF secret separation (shares SECRET_KEY but defensible — most Flask apps share, and SECRET_KEY is gated by `Config.validate` in prod), and password policy (token-only, no passwords) — all clean. Found 2 real findings on the WebSocket auth surface:
