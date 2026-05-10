@@ -8,7 +8,7 @@ import sys
 import urllib.parse
 import urllib.request
 
-from flask import Blueprint, jsonify, request, send_from_directory, render_template
+from flask import Blueprint, jsonify, request, send_from_directory, render_template, g
 import numpy as np
 import rasterio
 from pyproj import Transformer
@@ -366,8 +366,27 @@ def api_geocode():
 @osm_bp.route('/api/auto-classify', methods=['POST'])
 @require_api_token
 def api_auto_classify():
-    """Download OSM data and classify landcover."""
+    """Download OSM data and classify landcover.
+
+    Audit N39: per-user rate limit (5/hour) + bbox-area cap. Each call
+    fetches Overpass data over the bbox, trains a classifier, and
+    writes artifacts to disk — all expensive. Pre-fix, a globe-scale
+    bbox would have consumed unbounded API quota and CPU with no
+    rate gate.
+    """
     from flask import current_app
+    from services.rate_limiter import auto_classify_limiter
+
+    # N39: rate-limit BEFORE the OSM_AUTO_LABEL_AVAILABLE check so the
+    # gate is honored even in deployments where the optional module is
+    # missing (otherwise an attacker can spam this endpoint past the
+    # rate limiter, knowing it short-circuits to 500 first).
+    user_id = getattr(g, 'user_id', 'anonymous')
+    if not auto_classify_limiter.allow(user_id):
+        return jsonify(
+            error='Auto-classify rate limit exceeded (5 requests/hour). Try again later.'
+        ), 429
+
     if not OSM_AUTO_LABEL_AVAILABLE:
         return jsonify(error='OSM auto-label module not available. Please install dependencies.'), 500
 
@@ -382,6 +401,24 @@ def api_auto_classify():
     # Validate input: need either place or bbox
     if not place and not bbox:
         return jsonify(error='Please provide a place name or use current map extent'), 400
+
+    # N39: bbox area cap. A globe-scale bbox would download the whole
+    # planet's landcover via Overpass — quota / compute / memory DoS.
+    # 100 sq deg is generous (covers a ~1000km × 1000km region).
+    AUTO_CLASSIFY_MAX_BBOX_SQ_DEG = 100.0
+    if bbox:
+        try:
+            n, s = float(bbox.get('north')), float(bbox.get('south'))
+            e, w = float(bbox.get('east')), float(bbox.get('west'))
+        except (TypeError, ValueError):
+            return jsonify(error='Invalid bbox: north/south/east/west must be numbers'), 400
+        area_sq_deg = abs(n - s) * abs(e - w)
+        if area_sq_deg > AUTO_CLASSIFY_MAX_BBOX_SQ_DEG:
+            return jsonify(
+                error=(f'bbox area {area_sq_deg:.1f} sq deg exceeds max '
+                       f'({AUTO_CLASSIFY_MAX_BBOX_SQ_DEG} sq deg). '
+                       f'Narrow the area or use the place-name flow.')
+            ), 413
 
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 

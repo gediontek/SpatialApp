@@ -166,3 +166,19 @@ register_limiter = PerKeyRateLimiter("register", max_requests=5, window_seconds=
 # typing rate but caps automated bursts that would otherwise burn provider
 # tokens. Audit N12.
 chat_limiter = PerKeyRateLimiter("chat", max_requests=60, window_seconds=60)
+
+# Audit N38: /display_table renders potentially-large GeoJSON to HTML
+# via geopandas + pandas. 30 requests per minute per user is generous for
+# normal table-render UX (each click of "show as table" is one request)
+# while capping automated 100k-feature DoS bursts.
+display_table_limiter = PerKeyRateLimiter(
+    "display_table", max_requests=30, window_seconds=60
+)
+
+# Audit N39: /api/auto-classify downloads OSM data over a bbox and
+# trains a classifier on it. Each request is expensive (Overpass quota +
+# CPU). 5 per hour per user is enough for iterative use, blocks
+# unattended bbox-spam loops.
+auto_classify_limiter = PerKeyRateLimiter(
+    "auto_classify", max_requests=5, window_seconds=3600
+)

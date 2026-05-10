@@ -431,3 +431,153 @@ def test_n17_security_txt_served():
     assert r.headers.get("Content-Type", "").startswith("text/plain"), (
         f"wrong content-type: {r.headers.get('Content-Type')!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# N38 — /display_table per-user rate limit + payload feature cap
+# ---------------------------------------------------------------------------
+
+
+def _polygon_feature_for_table(idx: int) -> dict:
+    return {
+        "type": "Feature",
+        "properties": {"category_name": f"cat_{idx}", "id": idx},
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [[[0, 0], [0, 0.001], [0.001, 0.001],
+                             [0.001, 0], [0, 0]]],
+        },
+    }
+
+
+def test_n38_display_table_rejects_oversized_payload():
+    """N38 regression: /display_table must reject payloads with more
+    features than the cap (5000), with HTTP 413, before passing them to
+    geopandas. Pre-fix, a 100k-feature POST blew up memory + CPU."""
+    from app import app
+    app.config["TESTING"] = True
+    app.config["WTF_CSRF_ENABLED"] = False
+    big_payload = {
+        "type": "FeatureCollection",
+        "features": [_polygon_feature_for_table(i) for i in range(5001)],
+    }
+    with app.test_client() as client:
+        r = client.post(
+            "/display_table",
+            data=json.dumps(big_payload),
+            content_type="application/json",
+        )
+    assert r.status_code == 413, (
+        f"N38 regression: oversized payload was not rejected; got {r.status_code}. "
+        f"The feature cap on /display_table is missing or set too high."
+    )
+    body = r.get_data(as_text=True)
+    assert "Too many features" in body or "5000" in body, (
+        f"413 body should name the cap; got {body!r}"
+    )
+
+
+def test_n38_display_table_under_cap_succeeds():
+    """Sanity: a payload UNDER the cap must still render normally."""
+    from app import app
+    app.config["TESTING"] = True
+    app.config["WTF_CSRF_ENABLED"] = False
+    payload = {
+        "type": "FeatureCollection",
+        "features": [_polygon_feature_for_table(i) for i in range(5)],
+    }
+    with app.test_client() as client:
+        r = client.post(
+            "/display_table",
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+    assert r.status_code == 200, (
+        f"N38: under-cap payload should render; got {r.status_code}. "
+        f"Cap may be too aggressive."
+    )
+
+
+def test_n38_display_table_rate_limited_after_burst():
+    """N38: 31st request in a 60s window per user must 429."""
+    from app import app
+    from services.rate_limiter import display_table_limiter
+    app.config["TESTING"] = True
+    app.config["WTF_CSRF_ENABLED"] = False
+    # Per-user identity in TESTING + no auth = 'anonymous' user_id.
+    display_table_limiter.reset("anonymous")
+    payload = {
+        "type": "FeatureCollection",
+        "features": [_polygon_feature_for_table(0)],
+    }
+    with app.test_client() as client:
+        # Burn the cap (30 calls).
+        for i in range(30):
+            client.post(
+                "/display_table",
+                data=json.dumps(payload),
+                content_type="application/json",
+            )
+        # 31st must 429.
+        r = client.post(
+            "/display_table",
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+    assert r.status_code == 429, (
+        f"N38 regression: 31st /display_table call did not throttle; "
+        f"got {r.status_code}. display_table_limiter may not be wired."
+    )
+    display_table_limiter.reset("anonymous")
+
+
+# ---------------------------------------------------------------------------
+# N39 — /api/auto-classify per-user rate limit + bbox-area cap
+# ---------------------------------------------------------------------------
+
+
+def test_n39_auto_classify_rejects_globe_scale_bbox(two_users):
+    """N39 regression: a globe-scale bbox must be rejected with 413
+    BEFORE any Overpass quota / classifier compute is consumed."""
+    client, tok_a, _tok_b = two_users
+    r = client.post(
+        "/api/auto-classify",
+        json={"bbox": {"north": 90, "south": -90, "east": 180, "west": -180}},
+        headers=_auth(tok_a),
+    )
+    # Either OSM_AUTO_LABEL_AVAILABLE=False short-circuits to 500 (fine —
+    # the cap test is the rate-limiter test below), or the bbox cap fires.
+    if r.status_code == 500:
+        pytest.skip("OSM auto-label module not available in this env; "
+                    "bbox cap path is unreachable")
+    assert r.status_code == 413, (
+        f"N39 regression: globe-scale bbox was not rejected; "
+        f"got {r.status_code}. The bbox area cap on /api/auto-classify "
+        f"is missing or set too high."
+    )
+
+
+def test_n39_auto_classify_rate_limited_after_burst(two_users):
+    """N39: 6th request in a 1-hour window per user must 429."""
+    from services.rate_limiter import auto_classify_limiter
+    client, tok_a, _tok_b = two_users
+    uid_a = state.db.get_user_by_token(tok_a)["user_id"]
+    auto_classify_limiter.reset(uid_a)
+    # Burn the cap (5 calls). Each will likely fail upstream (no OSM
+    # module / no real bbox), but the rate-limit check runs first.
+    for i in range(5):
+        client.post(
+            "/api/auto-classify",
+            json={"place": f"nowhere_{i}"},
+            headers=_auth(tok_a),
+        )
+    r = client.post(
+        "/api/auto-classify",
+        json={"place": "anywhere"},
+        headers=_auth(tok_a),
+    )
+    assert r.status_code == 429, (
+        f"N39 regression: 6th /api/auto-classify call did not throttle; "
+        f"got {r.status_code}. auto_classify_limiter may not be wired."
+    )
+    auto_classify_limiter.reset(uid_a)

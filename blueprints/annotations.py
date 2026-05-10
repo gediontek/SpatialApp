@@ -6,7 +6,7 @@ import logging
 import os
 import shutil
 
-from flask import Blueprint, jsonify, request, render_template, send_file, after_this_request
+from flask import Blueprint, jsonify, request, render_template, send_file, after_this_request, g
 import geopandas as gpd
 
 from config import Config
@@ -442,8 +442,21 @@ def export_annotations(format_type):
 
 @annotation_bp.route('/display_table', methods=['POST'])
 def display_table():
-    """Convert GeoJSON to HTML table with essential columns only."""
+    """Convert GeoJSON to HTML table with essential columns only.
+
+    Audit N38: per-user rate limit + payload feature cap. The handler
+    routes user-supplied GeoJSON through GeoDataFrame.from_features +
+    pandas.to_html — both unbounded in feature count pre-fix. A
+    100k-feature POST blew up memory + CPU.
+    """
     from flask import current_app
+    from services.rate_limiter import display_table_limiter
+
+    user_id = getattr(g, 'user_id', 'anonymous')
+    if not display_table_limiter.allow(user_id):
+        return ('<p class="error">Rate limit exceeded '
+                '(30 table renders/min). Slow down.</p>', 429)
+
     try:
         geojson_data = request.json
         if not geojson_data or 'features' not in geojson_data:
@@ -451,6 +464,20 @@ def display_table():
 
         if not geojson_data['features']:
             return '<p>No annotations to display.</p>'
+
+        # N38: cap features before geopandas/pandas conversion. The
+        # rendered HTML is human-readable; >5k rows is unusable in a
+        # browser anyway. Reject loud rather than truncating silently
+        # so callers know their data didn't all render.
+        feature_count = len(geojson_data['features'])
+        DISPLAY_TABLE_MAX_FEATURES = 5000
+        if feature_count > DISPLAY_TABLE_MAX_FEATURES:
+            return (
+                f'<p class="error">Too many features ({feature_count}) '
+                f'for table display (max {DISPLAY_TABLE_MAX_FEATURES}). '
+                f'Filter the layer first or export to GeoJSON.</p>',
+                413,  # Payload Too Large
+            )
 
         gdf = gpd.GeoDataFrame.from_features(geojson_data["features"])
 
